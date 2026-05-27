@@ -6,7 +6,7 @@ A tool for managing Canvas LMS course content through Markdown files stored in a
 
 ## Workflow
 
-```
+```text
 // Setup:
 GitHub repo (Markdown + assets)
 git clone (local)
@@ -20,6 +20,7 @@ git clone (local)
        a. snippet preprocessing: replace any [text](snippets/...) links with snippet file contents
        b. convert Markdown → HTML via Pandoc
        c. for each <img> and <a href> that points to a local file:
+            - if local file does not exist → print error, remove the tag, skip (do NOT stub)
             - if in manifest → rewrite tag to Canvas URL
             - if NOT in manifest → create empty stub in Canvas (unpublished, title only)
                                    → add to manifest dict AND flush to disk
@@ -35,7 +36,7 @@ git clone (local)
 
 Asset traversal is depth-first with files before subdirectories, both sorted alphabetically:
 
-```
+```text
 assets/fig.png          ← files at this level first, alphabetically
 assets/logo.png
 assets/images/          ← then subdirectories, alphabetically
@@ -70,7 +71,7 @@ The manifest is flushed to disk immediately after every write (stub creation, as
 
 The tool prints a line for each action, for example:
 
-```
+```text
 Uploading asset: assets/images/fig.png
 Uploading asset: assets/slides/week1.pdf
 Processing: assignments/week1.md
@@ -85,12 +86,12 @@ Syncing module: modules/week-1.md
 
 - **Source of truth**: GitHub repo containing `.md` files and supporting assets (images, etc.)
 - **Conversion**: Pandoc for Markdown → HTML conversion (produces clean HTML fragments suitable for Canvas)
-- **Delivery**: Python-based tool, likely packaged as a `uv` tool for easy installation and running
+- **Delivery**: Command-line tool, packaged as a `uv` tool for easy installation and running via `uvx`
 - **Canvas content types**: Pages, Assignments, Discussion Forums, Modules
 
 ## Repository Structure (Proposed)
 
-```
+```text
 course-repo/           ← the user's course content repo (separate from this tool)
 ├── pages/
 │   └── syllabus.md
@@ -139,7 +140,7 @@ The API token should be passed via the `CANVAS_API_TOKEN` environment variable r
 
 Content type is determined by **directory convention** — no explicit config needed for the common case:
 
-```
+```text
 pages/          → Canvas Pages
 assignments/    → Canvas Assignments
 discussions/    → Canvas Discussion Topics
@@ -328,6 +329,10 @@ How it would work:
 - Populate `.canvas-manifest.toml` with the Canvas IDs of all downloaded items
 
 Useful for bootstrapping a repo from a course that was originally built directly in Canvas, or for creating a local backup.
+
+**Implementation note — consider .imscc export instead of API scraping:**
+
+Rather than fetching each item individually via the Canvas API (slow, many round-trips), it may be more practical to ask the user to export their course from Canvas first (Course Settings → Export Course Content → Common Cartridge). Canvas produces an `.imscc` file, which is a ZIP archive in IMS Common Cartridge format containing all content as HTML files plus a manifest. The tool would then parse the `.imscc` locally — no API calls needed for the download step. This is faster, works offline after the export, and avoids rate-limiting. The tradeoff is an extra manual step (triggering the export in the Canvas UI) before running the tool.
 
 ### Snippets (`snippets/` directory — reusable Markdown fragments)
 
