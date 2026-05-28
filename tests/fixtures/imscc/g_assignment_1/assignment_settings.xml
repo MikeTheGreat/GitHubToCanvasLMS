@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<assignment identifier="g_assignment_1"
+            xmlns="http://canvas.instructure.com/xsd/cccv1p0"
+            xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+  <title>My Test Assignment</title>
+  <due_at>2025-10-01T23:59:00</due_at>
+  <lock_at>2025-10-08T23:59:00</lock_at>
+  <unlock_at>2025-09-15T00:00:00</unlock_at>
+  <points_possible>50.0</points_possible>
+  <grading_type>points</grading_type>
+  <submission_types>online_upload</submission_types>
+  <workflow_state>published</workflow_state>
+  <assignment_group_identifierref>g_default_group</assignment_group_identifierref>
+  <omit_from_final_grade>false</omit_from_final_grade>
+</assignment>

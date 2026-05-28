@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<quiz identifier="g_quiz_1"
+      xmlns="http://canvas.instructure.com/xsd/cccv1p0"
+      xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+  <title>A Quiz</title>
+  <workflow_state>published</workflow_state>
+  <quiz_type>survey</quiz_type>
+  <points_possible>0.0</points_possible>
+</quiz>

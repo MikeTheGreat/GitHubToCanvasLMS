@@ -1,0 +1,105 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<manifest identifier="g_course_1"
+  xmlns="http://www.imsglobal.org/xsd/imsccv1p1/imscp_v1p1"
+  xmlns:lom="http://ltsc.ieee.org/xsd/imsccv1p1/LOM/resource"
+  xmlns:lomimscc="http://ltsc.ieee.org/xsd/imsccv1p1/LOM/manifest"
+  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+  <metadata>
+    <schema>IMS Common Cartridge</schema>
+    <schemaversion>1.1.0</schemaversion>
+    <lomimscc:lom>
+      <lomimscc:general>
+        <lomimscc:title>
+          <lomimscc:string>Test Course</lomimscc:string>
+        </lomimscc:title>
+      </lomimscc:general>
+    </lomimscc:lom>
+  </metadata>
+  <organizations>
+    <organization identifier="org_1" structure="rooted-hierarchy">
+      <item identifier="LearningModules">
+        <item identifier="g_module_1">
+          <title>Week 1</title>
+          <item identifier="g_item_sub1">
+            <title>Readings</title>
+          </item>
+          <item identifier="g_item_1" identifierref="g_page_1">
+            <title>My Page</title>
+          </item>
+          <item identifier="g_item_sub2">
+            <title>Work</title>
+          </item>
+          <item identifier="g_item_2" identifierref="g_assignment_1">
+            <title>My Test Assignment</title>
+          </item>
+          <item identifier="g_item_3" identifierref="g_discussion_1">
+            <title>Week 01 Forum</title>
+          </item>
+          <item identifier="g_item_4" identifierref="g_exturl_1">
+            <title>External Resource</title>
+          </item>
+          <item identifier="g_item_5" identifierref="g_quiz_1">
+            <title>A Quiz</title>
+          </item>
+        </item>
+      </item>
+    </organization>
+  </organizations>
+  <resources>
+    <!-- Course settings -->
+    <resource identifier="g_course_1_syllabus"
+              type="associatedcontent/imscc_xmlv1p1/learning-application-resource"
+              href="course_settings/syllabus.html"
+              intendeduse="syllabus">
+      <file href="course_settings/syllabus.html"/>
+    </resource>
+    <resource identifier="g_course_1"
+              type="associatedcontent/imscc_xmlv1p1/learning-application-resource"
+              href="course_settings/canvas_export.txt">
+      <file href="course_settings/course_settings.xml"/>
+    </resource>
+
+    <!-- Page -->
+    <resource identifier="g_page_1" type="webcontent" href="wiki_content/my-page.html">
+      <file href="wiki_content/my-page.html"/>
+    </resource>
+
+    <!-- Assignment -->
+    <resource identifier="g_assignment_1"
+              type="associatedcontent/imscc_xmlv1p1/learning-application-resource"
+              href="g_assignment_1/my-assignment.html">
+      <file href="g_assignment_1/assignment_settings.xml"/>
+      <file href="g_assignment_1/my-assignment.html"/>
+    </resource>
+
+    <!-- Discussion topic body (imsdt) -->
+    <resource identifier="g_discussion_1" type="imsdt_xmlv1p1" href="g_discussion_1.xml">
+      <file href="g_discussion_1.xml"/>
+      <dependency identifierref="g_discussion_1_meta"/>
+    </resource>
+
+    <!-- Discussion topicMeta (dependency of g_discussion_1, not a primary resource) -->
+    <resource identifier="g_discussion_1_meta"
+              type="associatedcontent/imscc_xmlv1p1/learning-application-resource"
+              href="g_discussion_1_meta.xml">
+      <file href="g_discussion_1_meta.xml"/>
+    </resource>
+
+    <!-- Quiz (to be warned + skipped) -->
+    <resource identifier="g_quiz_1"
+              type="imsqti_xmlv1p2/imscc_xmlv1p1/assessment"
+              href="g_quiz_1/assessment_meta.xml">
+      <file href="g_quiz_1/assessment_meta.xml"/>
+    </resource>
+
+    <!-- External URL -->
+    <resource identifier="g_exturl_1" type="imswl_xmlv1p1" href="g_exturl_1.xml">
+      <file href="g_exturl_1.xml"/>
+    </resource>
+
+    <!-- Asset -->
+    <resource identifier="g_asset_1" type="webcontent" href="web_resources/images/logo.png">
+      <file href="web_resources/images/logo.png"/>
+    </resource>
+  </resources>
+</manifest>

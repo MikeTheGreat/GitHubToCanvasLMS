@@ -1,3 +1,4 @@
+Test_Import/**
 TestCourseRepo/**
 it-cs142-imscc-unzipped/**
 
@@ -40,4 +41,3 @@ canvas.toml.local
 
 # Claude conversations
 .claude-conversations/
-TestCourseRepo

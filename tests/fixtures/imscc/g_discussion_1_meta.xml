@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<topicMeta identifier="g_discussion_1_meta"
+           xmlns="http://canvas.instructure.com/xsd/cccv1p0"
+           xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+  <topic_id>g_discussion_1</topic_id>
+  <title>Week 01 Forum</title>
+  <position>1</position>
+  <type>topic</type>
+  <discussion_type>threaded</discussion_type>
+  <workflow_state>active</workflow_state>
+  <has_group_category>false</has_group_category>
+  <require_initial_post>true</require_initial_post>
+  <allow_rating>false</allow_rating>
+  <assignment identifier="g_discussion_1_assignment">
+    <title>Week 01 Forum</title>
+    <due_at>2025-09-10T23:59:00</due_at>
+    <lock_at/>
+    <unlock_at/>
+    <points_possible>10.0</points_possible>
+    <grading_type>points</grading_type>
+    <submission_types>discussion_topic</submission_types>
+    <workflow_state>published</workflow_state>
+  </assignment>
+</topicMeta>

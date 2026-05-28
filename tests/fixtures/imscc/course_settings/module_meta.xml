@@ -1,0 +1,75 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<modules xmlns="http://canvas.instructure.com/xsd/cccv1p0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+  <module identifier="g_module_1">
+    <title>Week 1</title>
+    <workflow_state>active</workflow_state>
+    <position>1</position>
+    <require_sequential_progress>false</require_sequential_progress>
+    <locked>false</locked>
+    <items>
+      <item identifier="g_item_sub1">
+        <content_type>ContextModuleSubHeader</content_type>
+        <workflow_state>active</workflow_state>
+        <title>Readings</title>
+        <position>1</position>
+        <new_tab>false</new_tab>
+        <indent>0</indent>
+      </item>
+      <item identifier="g_item_1">
+        <content_type>WikiPage</content_type>
+        <workflow_state>active</workflow_state>
+        <title>My Page</title>
+        <identifierref>g_page_1</identifierref>
+        <position>2</position>
+        <new_tab>false</new_tab>
+        <indent>0</indent>
+      </item>
+      <item identifier="g_item_sub2">
+        <content_type>ContextModuleSubHeader</content_type>
+        <workflow_state>active</workflow_state>
+        <title>Work</title>
+        <position>3</position>
+        <new_tab>false</new_tab>
+        <indent>0</indent>
+      </item>
+      <item identifier="g_item_2">
+        <content_type>Assignment</content_type>
+        <workflow_state>active</workflow_state>
+        <title>My Test Assignment</title>
+        <identifierref>g_assignment_1</identifierref>
+        <position>4</position>
+        <new_tab>false</new_tab>
+        <indent>0</indent>
+      </item>
+      <item identifier="g_item_3">
+        <content_type>Discussion</content_type>
+        <workflow_state>active</workflow_state>
+        <title>Week 01 Forum</title>
+        <identifierref>g_discussion_1</identifierref>
+        <position>5</position>
+        <new_tab>false</new_tab>
+        <indent>0</indent>
+      </item>
+      <item identifier="g_item_4">
+        <content_type>ExternalUrl</content_type>
+        <workflow_state>active</workflow_state>
+        <title>External Resource</title>
+        <identifierref>g_item_4</identifierref>
+        <url>https://example.com/resource</url>
+        <position>6</position>
+        <new_tab>true</new_tab>
+        <indent>0</indent>
+      </item>
+      <item identifier="g_item_5">
+        <content_type>Quizzes::Quiz</content_type>
+        <workflow_state>active</workflow_state>
+        <title>A Quiz</title>
+        <identifierref>g_quiz_1</identifierref>
+        <position>7</position>
+        <new_tab>false</new_tab>
+        <indent>0</indent>
+      </item>
+    </items>
+  </module>
+</modules>
