@@ -1,4 +1,5 @@
 import sys
+import tomllib
 from pathlib import Path
 
 import click
@@ -8,6 +9,14 @@ load_dotenv()
 
 from .config import load as load_config
 from .sync import run_sync
+
+
+# TODO: all commands must use die() for user-facing errors — no tracebacks, no raw exceptions.
+
+
+def die(msg: str) -> None:
+    click.secho(f"Error: {msg}", fg="red", err=True)
+    sys.exit(1)
 
 
 @click.group()
@@ -22,5 +31,14 @@ def update(repo: Path, config: Path | None) -> None:
     """Sync a Markdown course repo to Canvas LMS."""
     if config is None:
         config = repo / "canvas.toml"
-    cfg = load_config(config)
-    run_sync(cfg, repo)
+    try:
+        cfg = load_config(config)
+        run_sync(cfg, repo)
+    except FileNotFoundError as e:
+        die(f"Config file not found: {e.filename}")
+    except tomllib.TOMLDecodeError as e:
+        die(f"Invalid canvas.toml: {e}")
+    except (ValueError, KeyError) as e:
+        die(str(e))
+    except Exception as e:
+        die(str(e))

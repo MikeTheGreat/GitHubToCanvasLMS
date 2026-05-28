@@ -1,5 +1,5 @@
 TestCourseRepo/**
-
+it-cs142-imscc-unzipped/**
 
 # Python
 __pycache__/
@@ -40,3 +40,4 @@ canvas.toml.local
 
 # Claude conversations
 .claude-conversations/
+TestCourseRepo

@@ -389,9 +389,9 @@ How it would work:
 
 This is a recovery/diagnostic tool, not part of the normal sync flow.
 
-### `--download`: download Canvas course to local Markdown structure
+### `download` subcommand: download Canvas course to local Markdown structurez
 
-A `--download` flag would do the reverse of the main sync: pull content from an existing Canvas course and write it out as a local Markdown repo, suitable for then being managed by this tool.
+A `download` subcommand would do the reverse of the main sync: pull content from an existing Canvas course and write it out as a local Markdown repo, suitable for then being managed by this tool.
 
 How it would work:
 
