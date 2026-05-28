@@ -278,6 +278,32 @@ canvas_item_ids = {"pages/syllabus.md" = 201, "assignments/week1.md" = 202}
 
 Source Markdown files stay clean — no tool-written fields mixed in with author-written frontmatter. On first publish the tool creates the item, records the Canvas ID in the manifest, and writes the updated manifest back to disk. On subsequent runs it looks up the Canvas ID from the manifest and updates the existing item.
 
+## Snippets (`snippets/` directory — reusable Markdown fragments)
+
+A `snippets/` directory at the repo root holds reusable Markdown fragments. Content files include a snippet using a **normal Markdown link** whose target path resolves into `snippets/`. The preprocessor detects these links and replaces the entire `[text](path)` token with the raw Markdown content of the snippet file, before Pandoc ever runs. Students see the rendered content inline — not a hyperlink.
+
+Example use case: `snippets/office-hours.md` contains your current office hours. Reference it from a dozen pages; update once, re-sync, and the change propagates everywhere.
+
+**Include syntax — standard Markdown links:**
+
+```markdown
+[My Office Hours](../snippets/office-hours.md)
+```
+
+Any link whose resolved path falls inside the `snippets/` directory triggers inclusion. The link text is discarded and replaced by the snippet's Markdown content.
+
+A snippet containing a single sentence or phrase pastes in cleanly mid-sentence — Markdown treats a single embedded newline as a space. A snippet containing block-level elements (headings, blank lines between paragraphs, lists, code blocks) will break out of any surrounding sentence, so those should be placed as standalone blocks in the including file. The snippet's content determines where it can sensibly be used.
+
+Markdown editors render the include as a normal clickable link, making it easy to navigate to the snippet source to see what will be inlined.
+
+**Behaviour:**
+
+- Substitution happens before Pandoc, so snippet Markdown (headings, lists, etc.) renders naturally as HTML
+- Snippet files contain only Markdown body content — no frontmatter
+- Snippets are never uploaded to Canvas and have no manifest entries
+- **Nested includes are not supported.** If a snippet contains a link to another snippet, the tool prints an error message and leaves the inner link as a plain hyperlink (it is not expanded). This also prevents circular includes.
+- Links inside a snippet that point to content files (pages, assignments, etc.) are treated normally by the post-Pandoc link-rewriting step — they will be rewritten to Canvas URLs just like any other link
+
 ## Canvas API Notes
 
 - Use the [`canvasapi`](https://github.com/ucfopen/canvasapi) Python library rather than raw HTTP calls
@@ -382,32 +408,6 @@ Useful for bootstrapping a repo from a course that was originally built directly
 
 Rather than fetching each item individually via the Canvas API (slow, many round-trips), it may be more practical to ask the user to export their course from Canvas first (Course Settings → Export Course Content → Common Cartridge). Canvas produces an `.imscc` file, which is a ZIP archive in IMS Common Cartridge format containing all content as HTML files plus a manifest. The tool would then parse the `.imscc` locally — no API calls needed for the download step. This is faster, works offline after the export, and avoids rate-limiting. The tradeoff is an extra manual step (triggering the export in the Canvas UI) before running the tool.
 
-### Snippets (`snippets/` directory — reusable Markdown fragments)
-
-A `snippets/` directory at the repo root holds reusable Markdown fragments. Content files include a snippet using a **normal Markdown link** whose target path resolves into `snippets/`. The preprocessor detects these links and replaces the entire `[text](path)` token with the raw Markdown content of the snippet file, before Pandoc ever runs. Students see the rendered content inline — not a hyperlink.
-
-Example use case: `snippets/office-hours.md` contains your current office hours. Reference it from a dozen pages; update once, re-sync, and the change propagates everywhere.
-
-**Include syntax — standard Markdown links:**
-
-```markdown
-[My Office Hours](../snippets/office-hours.md)
-```
-
-Any link whose resolved path falls inside the `snippets/` directory triggers inclusion. The link text is discarded and replaced by the snippet's Markdown content.
-
-A snippet containing a single sentence or phrase pastes in cleanly mid-sentence — Markdown treats a single embedded newline as a space. A snippet containing block-level elements (headings, blank lines between paragraphs, lists, code blocks) will break out of any surrounding sentence, so those should be placed as standalone blocks in the including file. The snippet's content determines where it can sensibly be used.
-
-Markdown editors render the include as a normal clickable link, making it easy to navigate to the snippet source to see what will be inlined.
-
-**Behaviour:**
-
-- Substitution happens before Pandoc, so snippet Markdown (headings, lists, etc.) renders naturally as HTML
-- Snippet files contain only Markdown body content — no frontmatter
-- Snippets are never uploaded to Canvas and have no manifest entries
-- **Nested includes are not supported.** If a snippet contains a link to another snippet, the tool prints an error message and leaves the inner link as a plain hyperlink (it is not expanded). This also prevents circular includes.
-- Links inside a snippet that point to content files (pages, assignments, etc.) are treated normally by the post-Pandoc link-rewriting step — they will be rewritten to Canvas URLs just like any other link
-
 ### End-to-end tests against a live Canvas sandbox
 
 An optional smoke-test suite that runs the full tool against a real Canvas sandbox course and then queries Canvas via the API to verify that content landed correctly (HTML body, published state, module item order, etc.).
@@ -421,3 +421,6 @@ When implemented, the suggested approach:
 - Run the tool against `tests/fixtures/` pointed at the sandbox
 - Use `canvasapi` directly in the test assertions to fetch each uploaded item and verify its content, metadata, and published state
 - Run this suite manually or in a separate CI job gated on `CANVAS_API_TOKEN` being present — not on every push
+
+### Only upload files when the local last-modified timestamp is later than the last_synced key in the manifest
+Unless the --force-uploads is set as an optional CLI param
