@@ -11,6 +11,7 @@ dependencies = [
     "canvasapi>=3.3",
     "click>=8.1",
     "pypandoc>=1.13",
+    "pyyaml>=6.0",
     "tomli-w>=1.0",   # for writing TOML (tomllib reads only in stdlib)
 ]
 

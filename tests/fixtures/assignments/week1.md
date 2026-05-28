@@ -6,8 +6,8 @@ submission_types: ["online_upload"]
 published: true
 ---
 
-# Week 1 Assignment
+## Week 1 Assignment
 
-Submit your work by the deadline.
+Submit your work by the deadline. See the [Syllabus](../pages/syllabus.md) for policies.
 
 [My Office Hours](../snippets/office-hours.md)
