@@ -58,7 +58,7 @@ def update(repo: Path, config: Path | None) -> None:
     """Sync a Markdown course repo to Canvas LMS."""
     if config is None:
         config = repo / "canvas.toml"
-        # try:
+    # try:
     cfg = load_config(config)
     run_sync(cfg, repo)
     # except FileNotFoundError as e:

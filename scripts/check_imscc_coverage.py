@@ -106,13 +106,53 @@ def _strip_html(html_str: str) -> str:
 
 
 def _normalize(text: str) -> str:
-    """Decode entities, flatten typographic chars, collapse whitespace."""
+    """Normalize text from both IMSCC source and Pandoc Markdown for comparison.
+
+    Strips Pandoc output artifacts so content present in the Markdown is not
+    reported as missing just because of formatting differences.
+    """
+    # Decode HTML entities.
     text = html_mod.unescape(text)
-    # Flatten smart quotes and dashes so Pandoc's --smart doesn't cause misses.
+
+    # Flatten typographic substitutions Pandoc --smart may have introduced.
     text = text.replace("‘", "'").replace("’", "'")
     text = text.replace("“", '"').replace("”", '"')
     text = text.replace("–", "-").replace("—", "--")
-    text = text.replace(" ", " ")   # non-breaking space
+    text = text.replace(" ", " ")  # non-breaking space
+
+    # Strip Markdown link syntax [text](url){attrs} -> text.
+    # Run before the standalone {..} strip so link-attached attrs go together.
+    text = re.sub(r"\[([^\]]*)\]\([^)]*\)(?:\{[^}]*\})*", r"\1", text)
+
+    # Strip [text]{attrs} span syntax (no URL) -> text.
+    text = re.sub(r"\[([^\]]*)\](?:\{[^}]*\})+", r"\1", text)
+
+    # Strip remaining standalone {..} attribute/anchor blocks.
+    text = re.sub(r"\{[^}]*\}", " ", text)
+
+    # Strip Pandoc hard line-break markers (backslash at end of line).
+    text = re.sub(r"\\\s*\n", "\n", text)
+
+    # Strip Pandoc backslash escape sequences.
+    text = re.sub(r"\\(['\"><|[\]\\*_#!`~@+\-.()^])", r"\1", text)
+
+    # Strip Markdown heading markers (## Heading -> Heading).
+    text = re.sub(r"(?m)^#{1,6}[ \t]+", "", text)
+
+    # Strip Markdown bold/italic markers (before list markers so **1. item
+    # is recognised as a numbered list item after ** removal).
+    text = re.sub(r"\*{1,3}", "", text)
+    text = re.sub(r"(?<!\w)_{1,3}(?!\w)", "", text)
+
+    # Strip Markdown list markers at start of lines (-, *, 1., A. etc.).
+    # The (+) at the end handles nested lists like "-   -   item".
+    text = re.sub(r"(?m)^[ \t]*(?:(?:[-*+]|\d+\.|[A-Z]\.)[ \t]+)+", " ", text)
+
+    # Strip leftover bare [text] (from nested Pandoc spans whose attrs were
+    # already removed, leaving bare brackets around content).
+    text = re.sub(r"\[([^\]]*)\]", r"\1", text)
+
+    # Collapse all whitespace.
     text = re.sub(r"\s+", " ", text).strip()
     return text
 
