@@ -274,6 +274,63 @@ If the manifest is lost you can re-run the tool against a fresh Canvas course, o
 
 ---
 
+## IMSCC import
+
+Import an existing Canvas course export (`.imscc` file) into a local Markdown repo:
+
+```bash
+github-to-canvas import course-export.imscc ./my-course-repo
+```
+
+This converts pages, assignments, and discussions to Markdown files and writes a `canvas.toml` skeleton. Quizzes are skipped.
+
+### Verifying the import
+
+After importing, run the coverage checker to spot-check that content from the IMSCC made it into the Markdown repo.  This script is **not** part of the automated test suite — run it manually after an import:
+
+```bash
+python scripts/check_imscc_coverage.py course-export.imscc ./my-course-repo
+```
+
+Options:
+
+| Flag | Default | Description |
+| --- | --- | --- |
+| `--min-words N` | 10 | Minimum fragment length; increase to reduce coincidental matches |
+| `--seed N` | 42 | Random seed — change to sample different fragments |
+| `--categories LIST` | `assignment,discussion,page,syllabus` | Comma-separated types to check |
+
+Example output:
+
+```text
+Parsing IMSCC manifest...
+Building Markdown corpus from: ./my-course-repo
+
+Checking 47 resources...
+
+  [ OK ] assignment: 'Week 1 Problem Set'
+  [ OK ] page: 'Syllabus'
+  [MISS] discussion: 'Introduce Yourself'
+  [SKIP] syllabus: 'Syllabus'  (< 10 words)
+  ...
+
+============================================================
+Results: 44 OK  |  1 MISSING  |  2 skipped (too short)  |  47 total checked
+============================================================
+
+1 MISSING fragment(s):
+
+  Type:    discussion
+  Title:   Introduce Yourself
+  Source:  g_discussion_1.xml
+  Output:  discussions/introduce-yourself.md
+  Context: ...Tell us your >>>>name, your background, and what you hope<<<< to get from...
+```
+
+Exit code 0 means all sampled fragments were found. Exit code 1 means at least one was missing.
+
+---
+
 ## Requirements
 
 - Python 3.11+
