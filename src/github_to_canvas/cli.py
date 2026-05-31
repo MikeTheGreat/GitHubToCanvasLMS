@@ -9,7 +9,7 @@ load_dotenv()
 
 from .config import load as load_config
 from .imscc_import import run_import
-from .sync import run_sync
+from .sync import run_sync, run_targeted_sync
 
 # TODO: all commands must use die() for user-facing errors — no tracebacks, no raw exceptions.
 
@@ -54,13 +54,56 @@ def import_cmd(imscc_path: Path, output_dir: Path) -> None:
     type=click.Path(path_type=Path),
     help="Path to canvas.toml (default: <repo>/canvas.toml)",
 )
-def update(repo: Path, config: Path | None) -> None:
+@click.option(
+    "--force-uploads",
+    is_flag=True,
+    default=False,
+    help="Re-upload all files even if unchanged since last sync.",
+)
+@click.option(
+    "--target-recursively", "-t",
+    default=None,
+    metavar="FILE[,FILE...]",
+    help=(
+        "Comma-separated files to sync. Each file and all resources it transitively "
+        "references are synced (BFS). Skips the full course sync."
+    ),
+)
+@click.option(
+    "--single-target", "-s",
+    default=None,
+    metavar="FILE[,FILE...]",
+    help=(
+        "Comma-separated files to sync without traversing their references. "
+        "Runs after --target-recursively; manifest timestamps updated by -t prevent "
+        "redundant re-uploads. Skips the full course sync."
+    ),
+)
+def update(
+    repo: Path,
+    config: Path | None,
+    force_uploads: bool,
+    target_recursively: str | None,
+    single_target: str | None,
+) -> None:
     """Sync a Markdown course repo to Canvas LMS."""
     if config is None:
         config = repo / "canvas.toml"
     # try:
     cfg = load_config(config)
-    run_sync(cfg, repo)
+
+    if target_recursively or single_target:
+        recursive_list = (
+            [p.strip() for p in target_recursively.split(",") if p.strip()]
+            if target_recursively else []
+        )
+        single_list = (
+            [p.strip() for p in single_target.split(",") if p.strip()]
+            if single_target else []
+        )
+        run_targeted_sync(cfg, repo, recursive_list, single_list, force_uploads)
+    else:
+        run_sync(cfg, repo, force_uploads=force_uploads)
     # except FileNotFoundError as e:
     #     die(f"Config file not found: {e.filename}")
     # except tomllib.TOMLDecodeError as e:

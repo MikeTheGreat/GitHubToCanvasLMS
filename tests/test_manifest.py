@@ -1,12 +1,13 @@
 """Unit tests: manifest read/write/flush."""
 from __future__ import annotations
 
+import os
 import tomllib
 from pathlib import Path
 
 import pytest
 
-from github_to_canvas.manifest import flush, load, record
+from github_to_canvas.manifest import flush, load, needs_sync, record
 
 
 def test_load_missing_file(tmp_path: Path) -> None:
@@ -108,3 +109,45 @@ def test_create_vs_update_lookup(tmp_path: Path) -> None:
     assert "pages/new.md" not in manifest  # → create path
     record(manifest, manifest_path, "pages/new.md", 42, "page")
     assert "pages/new.md" in manifest       # → update path on next run
+
+
+# ---------------------------------------------------------------------------
+# needs_sync
+# ---------------------------------------------------------------------------
+
+
+def _make_file(tmp_path: Path, mtime: float) -> Path:
+    f = tmp_path / "a.md"
+    f.write_text("")
+    os.utime(f, (mtime, mtime))
+    return f
+
+
+_OLD_ENTRY = {"canvas_id": 1, "canvas_type": "page", "last_synced": "2020-01-01T00:00:00+00:00"}
+_FUTURE_ENTRY = {"canvas_id": 1, "canvas_type": "page", "last_synced": "2999-12-31T00:00:00+00:00"}
+
+
+def test_needs_sync_not_in_manifest(tmp_path: Path) -> None:
+    f = _make_file(tmp_path, 0.0)
+    assert needs_sync({}, "pages/a.md", f) is True
+
+
+def test_needs_sync_no_last_synced(tmp_path: Path) -> None:
+    f = _make_file(tmp_path, 0.0)
+    entry = {"canvas_id": 1, "canvas_type": "page"}
+    assert needs_sync({"pages/a.md": entry}, "pages/a.md", f) is True
+
+
+def test_needs_sync_file_newer_than_last_synced(tmp_path: Path) -> None:
+    f = _make_file(tmp_path, 1_700_000_000.0)  # Nov 2023
+    assert needs_sync({"pages/a.md": _OLD_ENTRY}, "pages/a.md", f) is True
+
+
+def test_needs_sync_file_older_than_last_synced(tmp_path: Path) -> None:
+    f = _make_file(tmp_path, 0.0)  # Unix epoch
+    assert needs_sync({"pages/a.md": _FUTURE_ENTRY}, "pages/a.md", f) is False
+
+
+def test_needs_sync_force_overrides_up_to_date(tmp_path: Path) -> None:
+    f = _make_file(tmp_path, 0.0)
+    assert needs_sync({"pages/a.md": _FUTURE_ENTRY}, "pages/a.md", f, force=True) is True

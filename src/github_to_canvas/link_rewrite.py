@@ -49,6 +49,24 @@ def _to_local_key(href: str, source_file: Path, course_root: Path) -> str | None
         return None
 
 
+def extract_local_refs(html: str, source_file: Path, course_root: Path) -> set[str]:
+    """Return local course-root-relative keys for all local <img src>/<a href> refs in html."""
+    keys: set[str] = set()
+    for m in _IMG_RE.finditer(html):
+        src_m = _SRC_ATTR_RE.search(m.group(0))
+        if src_m:
+            key = _to_local_key(src_m.group(1), source_file, course_root)
+            if key:
+                keys.add(key)
+    for m in _A_RE.finditer(html):
+        href_m = _HREF_ATTR_RE.search(m.group(0))
+        if href_m:
+            key = _to_local_key(href_m.group(1), source_file, course_root)
+            if key:
+                keys.add(key)
+    return keys
+
+
 def rewrite_links(
     html: str,
     source_file: Path,

@@ -15,19 +15,22 @@ git clone (local)
 1. git pull                             (ensure local copy is up-to-date)
 2. load .canvas-manifest.toml           (into in-memory dict; single source of truth during the run)
 3. upload assets/                       (see processing order below)
+     → skip any file whose mtime ≤ manifest last_synced (unless --force-uploads)
 4. for each content folder in alphabetical order (excludes assets/ and modules/):
      for each .md file in that folder, alphabetically:
-       a. snippet preprocessing: replace any [text](snippets/...) links with snippet file contents
-       b. convert Markdown → HTML via Pandoc
-       c. for each <img> and <a href> that points to a local file:
+       a. skip if mtime ≤ manifest last_synced (unless --force-uploads); print "Skipping (up-to-date)"
+       b. snippet preprocessing: replace any [text](snippets/...) links with snippet file contents
+       c. convert Markdown → HTML via Pandoc
+       d. for each <img> and <a href> that points to a local file:
             - if local file does not exist → print error, remove the tag, skip (do NOT stub)
             - if in manifest → rewrite tag to Canvas URL
             - if NOT in manifest → create empty stub in Canvas (unpublished, title only)
                                    → add to manifest dict AND flush to disk
                                    → rewrite tag to Canvas URL
-       d. upload the fully-resolved HTML to Canvas (create or update via manifest)
-       e. update manifest dict and flush to disk
+       e. upload the fully-resolved HTML to Canvas (create or update via manifest)
+       f. update manifest dict and flush to disk
 5. sync modules/ alphabetically         (all content IDs now guaranteed in manifest)
+     → skip any module whose mtime ≤ manifest last_synced (unless --force-uploads)
 ```
 
 **Processing order:**
@@ -73,13 +76,135 @@ The tool prints a line for each action, for example:
 
 ```text
 Uploading asset: assets/images/fig.png
-Uploading asset: assets/slides/week1.pdf
+Skipping (up-to-date): assets/slides/week1.pdf
 Processing: assignments/week1.md
   Stub-creating: pages/syllabus.md (referenced but not yet synced)
   Uploading: assignments/week1.md
+Skipping (up-to-date): discussions/week1-intro.md
 Processing: pages/syllabus.md
   Uploading: pages/syllabus.md
 Syncing module: modules/week-1.md
+```
+
+## `update` Subcommand: CLI Options
+
+### `--force-uploads`
+
+Re-uploads every file regardless of its mtime vs `last_synced`. Bypasses the timestamp check for all file types (assets, content, modules).
+
+### `--target-recursively / -t` (BFS selective sync)
+
+Accepts a comma-separated list of local file paths. For each target, the tool:
+
+1. Converts and uploads the file (subject to timestamp check, overridden by `--force-uploads`)
+2. Extracts all locally-referenced files from its content:
+   - Content files: local `<img src>` and `<a href>` targets found in the Pandoc-converted HTML
+   - Module files: all items listed in the module body
+3. Adds any unvisited referenced files to a BFS queue
+4. Repeats until the queue is empty
+
+Modules encountered during BFS are deferred until all other content in the BFS wave has been processed and has manifest entries, because `add_module_item` requires canvas IDs for all referenced content. This matches the ordering guarantee of the full sync.
+
+The full course sync is skipped when `-t` or `-s` is present.
+
+### `--single-target / -s` (non-recursive selective sync)
+
+Accepts a comma-separated list of local file paths. Each file is converted and uploaded (subject to timestamp check) with no BFS traversal of its references. The full course sync is skipped.
+
+### Combining `-t` and `-s`
+
+`-t` runs first (full BFS). `-s` runs afterwards, independently — it does not consult `-t`'s visited set. Instead, the manifest `last_synced` timestamps written by `-t` prevent `-s` from re-uploading anything that `-t` just processed, because `needs_sync` compares file mtime against the freshly written `last_synced`.
+
+This ordering means: run `-t` on a module to recursively re-sync everything it references, then run `-s` on a few additional targeted files without worrying about overlap.
+
+### Target path resolution
+
+Paths passed to `-t` and `-s` are resolved as follows:
+
+- Absolute paths: used directly, then made relative to `--repo`
+- Relative paths: resolved relative to the current working directory, then made relative to `--repo`
+
+Paths that resolve outside the repo root print a warning and are skipped.
+
+## `import` Subcommand
+
+Converts an exported Canvas course (`.imscc` file) into a local Markdown repo ready for use with this tool.
+
+```text
+github-to-canvas import <imscc_path> <output_dir>
+```
+
+- `<imscc_path>`: `.imscc` zip file **or** a pre-extracted directory (auto-detected)
+- `<output_dir>`: where the course repo is written (fails if non-empty)
+
+**Implementation:** `src/github_to_canvas/imscc_import.py`
+
+### IMSCC resource classification
+
+| IMSCC type | href location | → category |
+| --- | --- | --- |
+| `webcontent` | `wiki_content/` | `page` |
+| `webcontent` | `web_resources/` | `asset` |
+| `imsdt_xmlv1p1` | `gXXX.xml` | `discussion` |
+| `associatedcontent/...` | `gXXX/` dir | `assignment` |
+| `imswl_xmlv1p1` | `gXXX.xml` | `external_url` |
+| `imsqti_xmlv1p2/...` | any | `quiz` (warn + skip) |
+| `imsbasiclti_xmlv1p3` | any | `lti` (warn + skip) |
+
+The `_syllabus` resource (`course_settings/syllabus.html`) → `course_settings/syllabus.md`.
+
+### Processing phases
+
+1. Extract zip to a temp dir if needed; pass directory through unchanged
+2. Parse `imsmanifest.xml` → build in-memory resource map (`gXXX → {category, local_path, title, ...}`)
+3. Copy `web_resources/` → `assets/`, preserving subdirectory structure
+4. **Pages:** strip `<html>/<head>/<body>` wrapper, rewrite internal links, Pandoc HTML→Markdown, write `pages/{stem}.md` with `title` and `published: true` frontmatter
+5. **Assignments:** read `gXXX/assignment_settings.xml` for title, points_possible, due_at, lock_at, unlock_at, submission_types, grading_type, workflow_state; convert HTML body; write `assignments/{stem}.md`
+6. **Discussions:** parse topic XML body and paired topicMeta for title, published, require_initial_post; skip announcements with warning; write `discussions/{slugify(title)}.md`
+7. **Modules:** read `course_settings/module_meta.xml`; emit items in position order (see below); write `modules/{slugify(title)}.md`
+8. Write `course_settings/syllabus.md`, `course_settings/course_settings.md`, and `canvas.toml` skeleton in repo root
+
+### Internal link rewriting
+
+Applied to raw HTML before calling Pandoc (phases 4–6):
+
+| Source link | Rewritten to |
+| --- | --- |
+| `$CANVAS_OBJECT_REFERENCE$/assignments/gXXX` | `../assignments/foo.md` |
+| `$CANVAS_OBJECT_REFERENCE$/pages/gXXX` | `../pages/foo.md` |
+| `$CANVAS_OBJECT_REFERENCE$/discussion_topics/gXXX` | `../discussions/foo.md` |
+| `$CANVAS_OBJECT_REFERENCE$/modules/gXXX` | warn + leave as plain text (no href) |
+| `$IMS-CC-FILEBASE$/path/to/file` | `../assets/path/to/file` |
+| `https://...` | unchanged |
+
+Unknown `gXXX` not in resource map → warn and remove href, keep link text.
+
+### Module file generation
+
+- `ContextModuleSubHeader` → `## Title` heading
+- Page / Assignment / Discussion → `- [display_title](../type/file.md)`
+- `ExternalUrl` → `- [display_title](https://url)`
+- `Attachment` (Canvas File) → `- [title](../assets/file.pdf)`
+- `Quizzes::Quiz`, `LTI` → commented warning line in file + printed warning
+
+### Key behaviours
+
+- **No `.canvas-manifest.toml` written** — IMSCC `gXXX` identifiers are not real Canvas numeric IDs; the first `sync` run creates all items and populates the manifest with real IDs.
+- **`course_settings/` directory** — syllabus and course settings land here rather than in `pages/`.
+- **Graded discussion metadata captured** — `points_possible`, `due_at`, etc. written to frontmatter even if not currently used by sync.
+
+### Console output style
+
+```text
+Extracting: course.imscc → /tmp/...
+Copying asset: assets/Images/logo.png
+Converting page: pages/syllabus.md
+Converting assignment: assignments/week-1-problem-set.md
+Converting discussion: discussions/week-01-forum.md
+  WARNING: Skipping announcement: "Coding Exercises 07 has been graded"
+  WARNING: Skipping quiz: "How would you like to be graded?" (gXXX) — appears in module "Getting Started"
+Generating module: modules/getting-started.md
+Done. Wrote course repo to: ./my-course/
 ```
 
 ## Key Design Decisions
@@ -115,7 +240,8 @@ github-to-canvas/      ← this tool repo
 │       ├── cli.py           # entry point / argument parsing
 │       ├── convert.py       # Markdown → HTML via Pandoc
 │       ├── canvas_api.py    # Canvas upload logic via canvasapi library
-│       └── config.py        # config file handling (API token, base URL, course ID)
+│       ├── config.py        # config file handling (API token, base URL, course ID)
+│       └── imscc_import.py  # import subcommand: .imscc → local Markdown repo
 └── tests/
     ├── fixtures/            ← mini course repo covering all test cases
     │   ├── pages/
@@ -123,11 +249,14 @@ github-to-canvas/      ← this tool repo
     │   ├── discussions/
     │   ├── modules/
     │   ├── snippets/
-    │   └── assets/
+    │   ├── assets/
+    │   └── imscc/           ← synthetic IMSCC fixture for import tests
     ├── test_convert.py      # unit tests: snippet preprocessing, Pandoc output
     ├── test_link_rewrite.py # unit tests: HTML link/img rewriting logic
     ├── test_manifest.py     # unit tests: manifest read/write/flush
-    └── test_sync.py         # integration tests: full pipeline with mocked canvasapi
+    ├── test_sync.py         # integration tests: full pipeline with mocked canvasapi
+    ├── test_imscc_import.py # integration tests: full import pipeline
+    └── test_imscc_convert.py # unit tests: IMSCC XML parsing, link rewriting, slugification
 ```
 
 ## Configuration
@@ -347,7 +476,7 @@ Test individual functions in isolation, with no network or Canvas dependency. Ea
 
 - **Snippet preprocessor** (`test_convert.py`): given Markdown text with `[text](../snippets/...)` links, assert the correct substitution; test nested-include error behaviour.
 - **Link rewriter** (`test_link_rewrite.py`): given an HTML fragment and a manifest dict, assert that `<img src>` and `<a href>` are rewritten to the correct Canvas URLs; test each link type (page, assignment, discussion, asset, external, anchor).
-- **Manifest** (`test_manifest.py`): TOML round-trips, flush-on-every-write behaviour, create-vs-update lookup logic.
+- **Manifest** (`test_manifest.py`): TOML round-trips, flush-on-every-write behaviour, create-vs-update lookup logic, `needs_sync` timestamp comparisons.
 - **Processing order**: asset-first, module-last, alphabetical sorting of folders and files within folders.
 - **Frontmatter parsing**: all content types and their specific fields.
 
@@ -361,6 +490,10 @@ Mock the `canvasapi` library with `pytest-mock`. Run the full sync pipeline agai
 - Interrupted sync: pre-populated partial manifest causes only the remaining items to be synced
 - Missing local file: tool prints an error, removes the tag, and continues (no stub, no crash)
 - Module sync: module items created in the correct order; SubHeader items interleaved correctly
+- Timestamp skip: a file whose mtime is older than `last_synced` is skipped; `--force-uploads` overrides
+- `--target-recursively`: BFS from a module reaches all referenced content; module deferred until content is in manifest
+- `--single-target`: only specified files processed; no BFS
+- Combined `-t` + `-s`: `-t` uploads first, `-s` skips anything already uploaded via `needs_sync`
 
 ### Layer 3 — Test fixtures (`tests/fixtures/`)
 
@@ -404,10 +537,6 @@ How it would work:
 
 Useful for bootstrapping a repo from a course that was originally built directly in Canvas, or for creating a local backup.
 
-**Implementation note — consider .imscc export instead of API scraping:**
-
-Rather than fetching each item individually via the Canvas API (slow, many round-trips), it may be more practical to ask the user to export their course from Canvas first (Course Settings → Export Course Content → Common Cartridge). Canvas produces an `.imscc` file, which is a ZIP archive in IMS Common Cartridge format containing all content as HTML files plus a manifest. The tool would then parse the `.imscc` locally — no API calls needed for the download step. This is faster, works offline after the export, and avoids rate-limiting. The tradeoff is an extra manual step (triggering the export in the Canvas UI) before running the tool.
-
 ### End-to-end tests against a live Canvas sandbox
 
 An optional smoke-test suite that runs the full tool against a real Canvas sandbox course and then queries Canvas via the API to verify that content landed correctly (HTML body, published state, module item order, etc.).
@@ -421,6 +550,3 @@ When implemented, the suggested approach:
 - Run the tool against `tests/fixtures/` pointed at the sandbox
 - Use `canvasapi` directly in the test assertions to fetch each uploaded item and verify its content, metadata, and published state
 - Run this suite manually or in a separate CI job gated on `CANVAS_API_TOKEN` being present — not on every push
-
-### Only upload files when the local last-modified timestamp is later than the last_synced key in the manifest
-Unless the --force-uploads is set as an optional CLI param

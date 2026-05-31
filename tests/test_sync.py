@@ -1,6 +1,7 @@
 """Integration tests: full sync pipeline with mocked canvasapi."""
 from __future__ import annotations
 
+import os
 import shutil
 from pathlib import Path
 from unittest.mock import MagicMock, call
@@ -8,10 +9,16 @@ from unittest.mock import MagicMock, call
 import pytest
 
 from github_to_canvas.config import Config
-from github_to_canvas.sync import parse_frontmatter, parse_module_body, run_sync
+from github_to_canvas.sync import parse_frontmatter, parse_module_body, run_sync, run_targeted_sync
 
 FIXTURES = Path(__file__).parent / "fixtures"
 COURSE_ID = 999
+_FUTURE_SYNCED = "2999-12-31T00:00:00+00:00"
+
+
+def _make_old(path: Path) -> None:
+    """Set a file's mtime to epoch so it appears older than any manifest last_synced."""
+    os.utime(path, (0.0, 0.0))
 
 
 # ---------------------------------------------------------------------------
@@ -211,6 +218,8 @@ def test_first_sync_assignment_frontmatter_passed_to_canvas(mock_course, course_
 
 
 def test_second_sync_updates_not_creates(mock_course, course_root, mocker) -> None:
+    # Asset mtime set to epoch so it appears unchanged since last_synced
+    _make_old(course_root / "assets" / "images" / "fig.png")
     preloaded = {
         "assets/images/fig.png": {
             "canvas_id": 77777, "canvas_type": "file",
@@ -270,6 +279,8 @@ def test_second_sync_updates_not_creates(mock_course, course_root, mocker) -> No
 
 def test_interrupted_sync_skips_completed_asset(mock_course, course_root, mocker) -> None:
     """Asset in manifest is not re-uploaded; missing content still created."""
+    # Asset mtime set to epoch so needs_sync returns False (file unchanged since last_synced)
+    _make_old(course_root / "assets" / "images" / "fig.png")
     partial = {
         "assets/images/fig.png": {
             "canvas_id": 77777, "canvas_type": "file",
@@ -324,6 +335,8 @@ def test_missing_local_file_tag_removed_sync_continues(
 
 def test_module_sync_item_order(mock_course, course_root, mocker) -> None:
     """Module items are created in Markdown order; SubHeaders interleaved correctly."""
+    # Asset mtime set to epoch so it is skipped (already synced, unchanged)
+    _make_old(course_root / "assets" / "images" / "fig.png")
     preloaded = {
         "assets/images/fig.png": {
             "canvas_id": 77777, "canvas_type": "file",
@@ -368,3 +381,201 @@ def test_module_sync_item_order(mock_course, course_root, mocker) -> None:
     assert item_calls[2][1]["module_item"]["title"] == "Work"
     assert item_calls[3][1]["module_item"]["content_id"] == 98765
     assert item_calls[4][1]["module_item"]["content_id"] == 55555
+
+
+# ---------------------------------------------------------------------------
+# Scenario 6: Timestamp skip — up-to-date content file is skipped
+# ---------------------------------------------------------------------------
+
+
+def test_up_to_date_content_file_is_skipped(mock_course, course_root, mocker, capsys) -> None:
+    """A content file whose mtime predates last_synced is not re-uploaded."""
+    _make_old(course_root / "assets" / "images" / "fig.png")
+    _make_old(course_root / "assignments" / "week1.md")
+    preloaded = {
+        "assets/images/fig.png": {
+            "canvas_id": 77777, "canvas_type": "file",
+            "canvas_url": "https://school.instructure.com/files/77777/download",
+            "last_synced": "2025-01-01T00:00:00+00:00",
+        },
+        "assignments/week1.md": {
+            "canvas_id": 98765, "canvas_type": "assignment",
+            "last_synced": "2025-01-01T00:00:00+00:00",
+        },
+    }
+    mocker.patch("github_to_canvas.manifest.load", return_value=preloaded)
+    mocker.patch("github_to_canvas.manifest.flush")
+
+    mock_course.create_discussion_topic.return_value = _mock_discussion(55555)
+    mock_course.create_page.return_value = _mock_page(11111, "syllabus")
+    module = _mock_module(66666)
+    mock_course.create_module.return_value = module
+    module.create_module_item.side_effect = [_mock_item(i) for i in range(201, 210)]
+
+    run_sync(_config(), course_root)
+
+    mock_course.create_assignment.assert_not_called()
+    mock_course.get_assignment.assert_not_called()
+    out = capsys.readouterr().out
+    assert "Skipping (up-to-date): assignments/week1.md" in out
+
+
+def test_force_uploads_re_uploads_up_to_date_file(mock_course, course_root, mocker) -> None:
+    """--force-uploads causes all files to be re-uploaded regardless of mtime."""
+    _make_old(course_root / "assets" / "images" / "fig.png")
+    preloaded = {
+        "assets/images/fig.png": {
+            "canvas_id": 77777, "canvas_type": "file",
+            "canvas_url": "https://school.instructure.com/files/77777/download",
+            "last_synced": _FUTURE_SYNCED,
+        },
+    }
+    mocker.patch("github_to_canvas.manifest.load", return_value=preloaded)
+    mocker.patch("github_to_canvas.manifest.flush")
+    mock_course.upload.return_value = (
+        True,
+        {"id": 77777, "url": "https://school.instructure.com/files/77777/download"},
+    )
+    mock_course.create_page.return_value = _mock_page(11111, "syllabus")
+    mock_course.create_assignment.return_value = _mock_assignment(98765)
+    mock_course.create_discussion_topic.return_value = _mock_discussion(55555)
+    module = _mock_module(66666)
+    mock_course.create_module.return_value = module
+    module.create_module_item.side_effect = [_mock_item(i) for i in range(201, 210)]
+
+    run_sync(_config(), course_root, force_uploads=True)
+
+    mock_course.upload.assert_called_once()  # asset re-uploaded despite old mtime
+
+
+# ---------------------------------------------------------------------------
+# Scenario 7: run_targeted_sync — single target
+# ---------------------------------------------------------------------------
+
+
+def test_single_target_syncs_only_specified_file(mock_course, course_root, mocker) -> None:
+    """--single-target syncs the given file and nothing else."""
+    mocker.patch("github_to_canvas.manifest.flush")
+    mock_course.create_assignment.return_value = _mock_assignment(98765)
+    mock_course.create_page.return_value = _mock_page(99999, "syllabus-stub")
+
+    run_targeted_sync(
+        _config(), course_root,
+        recursive_targets=[],
+        single_targets=[str(course_root / "assignments" / "week1.md")],
+    )
+
+    mock_course.create_assignment.assert_called_once()
+    mock_course.create_discussion_topic.assert_not_called()
+    mock_course.upload.assert_not_called()
+    mock_course.create_module.assert_not_called()
+
+
+def test_single_target_respects_timestamp(mock_course, course_root, mocker, capsys) -> None:
+    """--single-target skips a file that is up-to-date per manifest timestamp."""
+    _make_old(course_root / "assignments" / "week1.md")
+    preloaded = {
+        "assignments/week1.md": {
+            "canvas_id": 98765, "canvas_type": "assignment",
+            "last_synced": "2025-01-01T00:00:00+00:00",
+        },
+    }
+    mocker.patch("github_to_canvas.manifest.load", return_value=preloaded)
+    mocker.patch("github_to_canvas.manifest.flush")
+
+    run_targeted_sync(
+        _config(), course_root,
+        recursive_targets=[],
+        single_targets=[str(course_root / "assignments" / "week1.md")],
+    )
+
+    mock_course.create_assignment.assert_not_called()
+    mock_course.get_assignment.assert_not_called()
+    out = capsys.readouterr().out
+    assert "Skipping" in out
+
+
+# ---------------------------------------------------------------------------
+# Scenario 8: run_targeted_sync — recursive BFS
+# ---------------------------------------------------------------------------
+
+
+def test_recursive_target_traverses_refs(mock_course, course_root, mocker) -> None:
+    """--target-recursively syncs a module and all content items it lists.
+
+    BFS defers the module until after all its referenced content is processed,
+    so add_module_item can look up canvas IDs from the manifest.
+    """
+    mocker.patch("github_to_canvas.manifest.flush")
+
+    real_page = _mock_page(11111, "syllabus")
+    mock_course.create_page.return_value = real_page
+    mock_course.get_page.return_value = real_page
+    # create_assignment used for stubs (rewrite_links) and potentially real upload
+    mock_course.create_assignment.return_value = _mock_assignment(98765)
+    mock_course.get_assignment.return_value = _mock_assignment(98765)
+    mock_course.create_discussion_topic.return_value = _mock_discussion(55555)
+    module = _mock_module(66666)
+    mock_course.create_module.return_value = module
+    module.create_module_item.side_effect = [_mock_item(i) for i in range(201, 210)]
+
+    run_targeted_sync(
+        _config(), course_root,
+        recursive_targets=[str(course_root / "modules" / "week-1.md")],
+        single_targets=[],
+    )
+
+    # Module is synced (deferred until after content)
+    mock_course.create_module.assert_called_once()
+    # Discussion referenced by module is synced
+    mock_course.create_discussion_topic.assert_called_once()
+    # Assets not referenced from any module-linked content are not uploaded
+    mock_course.upload.assert_not_called()
+
+
+def test_recursive_target_no_duplicate_processing(mock_course, course_root, mocker) -> None:
+    """-t uploads a file and updates its manifest timestamp; -s then skips it via needs_sync."""
+    # Make the file old so -t definitely uploads it (not in manifest, needs_sync=True),
+    # setting last_synced=now. When -s runs, file_mtime=0 < last_synced=now → skipped.
+    _make_old(course_root / "pages" / "syllabus.md")
+    mocker.patch("github_to_canvas.manifest.flush")
+    mock_course.create_page.return_value = _mock_page(11111, "syllabus")
+    mock_course.create_assignment.return_value = _mock_assignment(98765)
+
+    page_path = str(course_root / "pages" / "syllabus.md")
+    run_targeted_sync(
+        _config(), course_root,
+        recursive_targets=[page_path],
+        single_targets=[page_path],
+    )
+
+    # -t uploads via create_page; -s sees updated timestamp and skips (no second upload)
+    mock_course.create_page.assert_called_once()
+
+
+def test_single_target_skipped_when_t_already_uploaded_it(mock_course, course_root, mocker) -> None:
+    """-t BFS uploads pages/syllabus.md and updates last_synced. -s then skips it via needs_sync."""
+    # Make the page old so -t uploads it (needs_sync=True), setting last_synced=now.
+    # When -s runs independently, file_mtime=0 < last_synced=now → skipped.
+    _make_old(course_root / "pages" / "syllabus.md")
+    mocker.patch("github_to_canvas.manifest.flush")
+    real_page = _mock_page(11111, "syllabus")
+    mock_course.create_page.return_value = real_page
+    mock_course.get_page.return_value = real_page
+    mock_course.create_assignment.return_value = _mock_assignment(98765)
+    mock_course.get_assignment.return_value = _mock_assignment(98765)
+    mock_course.create_discussion_topic.return_value = _mock_discussion(55555)
+    module = _mock_module(66666)
+    mock_course.create_module.return_value = module
+    module.create_module_item.side_effect = [_mock_item(i) for i in range(201, 210)]
+
+    run_targeted_sync(
+        _config(), course_root,
+        recursive_targets=[str(course_root / "modules" / "week-1.md")],
+        single_targets=[str(course_root / "pages" / "syllabus.md")],
+    )
+
+    # -t BFS uploads page; -s skips it (needs_sync=False due to updated manifest timestamp)
+    mock_course.create_page.assert_called_once()
+    # Module synced once (deferred by BFS)
+    mock_course.create_module.assert_called_once()

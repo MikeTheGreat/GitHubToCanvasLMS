@@ -32,7 +32,9 @@ On each run the tool:
 3. Rewrites cross-links between files to the correct Canvas URLs
 4. Syncs `modules/` last (after all content has Canvas IDs)
 
-A `.canvas-manifest.toml` file is written to your course repo to track Canvas IDs. Commit it so collaborators share the same mapping.
+Files are skipped if their local modification time is not newer than the `last_synced` timestamp in the manifest — so unchanged files cost nothing on repeat runs.
+
+A `.canvas-manifest.toml` file is written to your course repo to track Canvas IDs and sync times. Commit it so collaborators share the same mapping.
 
 ---
 
@@ -126,40 +128,103 @@ Or put it in the `[auth]` block of `canvas.toml` for local-only use (add `canvas
 ## Usage
 
 ```
-Usage: github-to-canvas [OPTIONS]
+Usage: github-to-canvas update [OPTIONS]
 
   Sync a Markdown course repo to Canvas LMS.
 
 Options:
-  --repo    PATH  Path to the course content repo  [required]
-  --config  PATH  Path to canvas.toml config file  [default: canvas.toml]
-  --help          Show this message and exit.
+  --repo PATH                     Path to the course content repo  [required]
+  --config PATH                   Path to canvas.toml  [default: <repo>/canvas.toml]
+  --force-uploads                 Re-upload all files even if unchanged since last sync
+  -t, --target-recursively FILE   Comma-separated files; each is synced plus all resources
+                                  it transitively references (BFS). Skips the full sync.
+  -s, --single-target FILE        Comma-separated files to sync without traversing references.
+                                  Runs after -t. Skips the full sync.
+  --help                          Show this message and exit.
 ```
 
-### Basic sync
+### Full sync (default)
+
+Syncs every file in the course repo. Files that haven't changed since their last `last_synced` manifest timestamp are skipped automatically.
 
 ```bash
-# config file is canvas.toml in the current directory
-github-to-canvas --repo ./my-course
+# canvas.toml lives inside the repo
+github-to-canvas update --repo ./my-course
 
 # explicit config path
-github-to-canvas --repo ./my-course --config ~/secrets/canvas.toml
+github-to-canvas update --repo ./my-course --config ~/secrets/canvas.toml
+
+# force re-upload of everything regardless of timestamps
+github-to-canvas update --repo ./my-course --force-uploads
 ```
 
-### Typical workflow
+### Typical full-sync workflow
 
 ```bash
 # 1. Pull latest content
 cd my-course && git pull
 
-# 2. Sync to Canvas
+# 2. Sync to Canvas (only changed files are uploaded)
 CANVAS_API_TOKEN=your-token-here \
-  github-to-canvas --repo . --config canvas.toml
+  github-to-canvas update --repo . --config canvas.toml
 
 # 3. Commit the updated manifest
 git add .canvas-manifest.toml
 git commit -m "sync: update Canvas IDs"
 git push
+```
+
+---
+
+## Selective sync
+
+Use `-t` or `-s` when you only want to sync part of the course. Both flags skip the full course sync.
+
+### `-t` — recursive (BFS)
+
+Syncs the specified file(s) and every resource they transitively reference, following links depth-first until no new local files are found.
+
+```bash
+# Re-sync a module and everything it links to
+github-to-canvas update --repo . -t modules/week-1.md
+
+# Re-sync two modules and all their dependencies
+github-to-canvas update --repo . -t modules/week-1.md,modules/week-2.md
+
+# Force re-upload even for unchanged files
+github-to-canvas update --repo . -t modules/week-1.md --force-uploads
+```
+
+**What counts as a reference:**
+
+- Content files (pages, assignments, discussions): all local `<img src>` and `<a href>` targets in the converted HTML
+- Module files: all items listed in the module body
+- Asset files: no outgoing references (assets are leaf nodes)
+
+**Module ordering:** modules discovered during BFS are synced last, after all the content they reference has been uploaded and has Canvas IDs — the same guarantee as a full sync.
+
+### `-s` — single target (no traversal)
+
+Syncs only the listed file(s), with no recursive traversal. Useful when you know exactly which files changed and don't need their dependencies re-synced.
+
+```bash
+# Re-sync one page
+github-to-canvas update --repo . -s pages/syllabus.md
+
+# Re-sync several specific files
+github-to-canvas update --repo . -s assignments/week1.md,discussions/week1-intro.md
+```
+
+### Combining `-t` and `-s`
+
+`-t` runs first (full BFS). `-s` runs after, independently. If `-t` already uploaded a file and updated its manifest timestamp, `-s` will skip it automatically via the timestamp check — no special coordination needed.
+
+```bash
+# Re-sync a module and all its content (via -t),
+# then also sync an unrelated page (via -s)
+github-to-canvas update --repo . \
+  -t modules/week-3.md \
+  -s pages/office-hours.md
 ```
 
 ---
@@ -269,6 +334,8 @@ canvas_type      = "module"
 last_synced      = "2025-02-01T10:02:00+00:00"
 canvas_item_ids  = {"pages/syllabus.md" = 201, "assignments/week1.md" = 202}
 ```
+
+The `last_synced` field is used to skip files that haven't changed since they were last uploaded — a file is re-uploaded only when its local modification time is newer than `last_synced`. Use `--force-uploads` to bypass this check.
 
 If the manifest is lost you can re-run the tool against a fresh Canvas course, or re-create it manually from Canvas IDs.
 

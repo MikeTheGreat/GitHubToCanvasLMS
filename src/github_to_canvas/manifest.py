@@ -11,6 +11,21 @@ from typing import Any
 ManifestDict = dict[str, dict[str, Any]]
 
 
+def needs_sync(manifest: ManifestDict, local_key: str, file_path: Path, force: bool = False) -> bool:
+    """Return True if the file should be synced to Canvas.
+
+    True when: force=True, no manifest entry, no last_synced, or file mtime is newer than last_synced.
+    """
+    if force:
+        return True
+    entry = manifest.get(local_key)
+    if entry is None or "last_synced" not in entry:
+        return True
+    last_synced = datetime.fromisoformat(entry["last_synced"])
+    file_mtime = datetime.fromtimestamp(file_path.stat().st_mtime, tz=timezone.utc)
+    return file_mtime > last_synced
+
+
 def load(path: Path) -> ManifestDict:
     if not path.exists():
         return {}

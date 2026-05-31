@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import re
+from collections import deque
 from pathlib import Path
 from typing import Any
 
@@ -11,7 +12,7 @@ from . import canvas_api as capi
 from . import manifest as manifest_lib
 from .config import Config
 from .convert import markdown_to_html, preprocess_snippets
-from .link_rewrite import infer_canvas_type, rewrite_links
+from .link_rewrite import extract_local_refs, infer_canvas_type, rewrite_links
 
 
 def parse_frontmatter(text: str) -> tuple[dict[str, Any], str]:
@@ -46,7 +47,7 @@ def parse_module_body(body: str, module_file: Path, course_root: Path) -> list[d
     return items
 
 
-def run_sync(config: Config, repo_path: Path) -> None:
+def run_sync(config: Config, repo_path: Path, force_uploads: bool = False) -> None:
     """Main sync pipeline: assets → content → modules."""
     manifest_path = repo_path / ".canvas-manifest.toml"
     manifest = manifest_lib.load(manifest_path)
@@ -56,7 +57,7 @@ def run_sync(config: Config, repo_path: Path) -> None:
     # 1. Assets (depth-first, files before subdirs, alphabetical)
     assets_dir = repo_path / "assets"
     if assets_dir.exists():
-        _walk_assets(course, assets_dir, assets_dir, repo_path, manifest, manifest_path)
+        _walk_assets(course, assets_dir, assets_dir, repo_path, manifest, manifest_path, force_uploads)
 
     # 2. Content folders (alphabetical, excl. assets, modules, snippets, hidden)
     skip = {"assets", "modules", "snippets"}
@@ -67,24 +68,26 @@ def run_sync(config: Config, repo_path: Path) -> None:
     for content_dir in content_dirs:
         for md_file in sorted(content_dir.glob("*.md")):
             _sync_content_file(
-                course, md_file, repo_path, snippets_dir, manifest, manifest_path, config.course_id
+                course, md_file, repo_path, snippets_dir, manifest, manifest_path,
+                config.course_id, force_uploads,
             )
 
     # 3. Modules (alphabetical)
     modules_dir = repo_path / "modules"
     if modules_dir.exists():
         for md_file in sorted(modules_dir.glob("*.md")):
-            _sync_module(course, md_file, repo_path, manifest, manifest_path)
+            _sync_module(course, md_file, repo_path, manifest, manifest_path, force_uploads)
 
 
 def _walk_assets(
-    course, dir_path: Path, assets_root: Path, repo_root: Path, manifest, manifest_path
+    course, dir_path: Path, assets_root: Path, repo_root: Path, manifest, manifest_path,
+    force_uploads: bool = False,
 ) -> None:
     entries = sorted(dir_path.iterdir(), key=lambda p: (p.is_dir(), p.name))
     for entry in entries:
         if entry.is_file():
             local_key = entry.relative_to(repo_root).as_posix()
-            if local_key in manifest:
+            if not manifest_lib.needs_sync(manifest, local_key, entry, force_uploads):
                 continue
             print(f"Uploading asset: {local_key}")
             canvas_entry = capi.upload_asset(course, entry, assets_root)
@@ -94,14 +97,19 @@ def _walk_assets(
                 extra={"canvas_url": canvas_entry["canvas_url"]},
             )
         elif entry.is_dir():
-            _walk_assets(course, entry, assets_root, repo_root, manifest, manifest_path)
+            _walk_assets(course, entry, assets_root, repo_root, manifest, manifest_path, force_uploads)
 
 
 def _sync_content_file(
     course, md_file: Path, repo_root: Path, snippets_dir: Path,
-    manifest, manifest_path, course_id: int,
+    manifest, manifest_path, course_id: int, force_uploads: bool = False,
 ) -> None:
     local_key = md_file.relative_to(repo_root).as_posix()
+
+    if not manifest_lib.needs_sync(manifest, local_key, md_file, force_uploads):
+        print(f"Skipping (up-to-date): {local_key}")
+        return
+
     print(f"Processing: {local_key}")
 
     frontmatter, body = parse_frontmatter(md_file.read_text())
@@ -160,9 +168,15 @@ def _sync_content_file(
 
 
 def _sync_module(
-    course, md_file: Path, repo_root: Path, manifest, manifest_path
+    course, md_file: Path, repo_root: Path, manifest, manifest_path,
+    force_uploads: bool = False,
 ) -> None:
     local_key = md_file.relative_to(repo_root).as_posix()
+
+    if not manifest_lib.needs_sync(manifest, local_key, md_file, force_uploads):
+        print(f"Skipping (up-to-date): {local_key}")
+        return
+
     print(f"Syncing module: {local_key}")
 
     frontmatter, body = parse_frontmatter(md_file.read_text())
@@ -176,7 +190,9 @@ def _sync_module(
         if key in frontmatter:
             module_kwargs[key] = frontmatter[key]
 
-    module = capi.create_or_update_module(course, existing["canvas_id"] if existing else None, title, **module_kwargs)
+    module = capi.create_or_update_module(
+        course, existing["canvas_id"] if existing else None, title, **module_kwargs
+    )
     capi.clear_module_items(module)
 
     canvas_item_ids: dict[str, int] = {}
@@ -189,3 +205,121 @@ def _sync_module(
         manifest, manifest_path, local_key,
         module.id, "module", extra={"canvas_item_ids": canvas_item_ids},
     )
+
+
+def _get_file_refs(
+    local_key: str, file_path: Path, repo_root: Path, snippets_dir: Path
+) -> set[str]:
+    """Return the set of locally-referenced file keys from any file type, without uploading."""
+    folder = local_key.split("/")[0]
+    if folder == "modules":
+        _, body = parse_frontmatter(file_path.read_text())
+        items = parse_module_body(body, file_path, repo_root)
+        return {item["local_path"] for item in items if item["type"] == "content"}
+    if folder in ("assets", "snippets"):
+        return set()
+    _, body = parse_frontmatter(file_path.read_text())
+    body = preprocess_snippets(body, file_path, snippets_dir)
+    html = markdown_to_html(body)
+    return extract_local_refs(html, file_path, repo_root)
+
+
+def _resolve_target(target: str, repo_path: Path) -> str | None:
+    """Resolve a user-supplied path to a repo-root-relative key, or None if outside repo."""
+    p = Path(target)
+    if not p.is_absolute():
+        p = Path.cwd() / p
+    try:
+        return p.resolve().relative_to(repo_path.resolve()).as_posix()
+    except ValueError:
+        return None
+
+
+def run_targeted_sync(
+    config: Config,
+    repo_path: Path,
+    recursive_targets: list[str],
+    single_targets: list[str],
+    force_uploads: bool = False,
+) -> None:
+    """Sync only the specified targets.
+
+    -t (recursive_targets) runs first: BFS each target plus all transitively referenced files.
+    -s (single_targets) runs second, independently: no BFS, no dependency on -t's visited set.
+    If -t already uploaded a file and updated its manifest timestamp, -s will skip it via needs_sync.
+    """
+    manifest_path = repo_path / ".canvas-manifest.toml"
+    manifest = manifest_lib.load(manifest_path)
+    course = capi.get_course(config)
+    snippets_dir = repo_path / "snippets"
+    assets_root = repo_path / "assets"
+
+    visited: set[str] = set()
+
+    def _process(local_key: str) -> None:
+        file_path = repo_path / local_key
+        folder = local_key.split("/")[0]
+        if folder == "assets":
+            if manifest_lib.needs_sync(manifest, local_key, file_path, force_uploads):
+                print(f"Uploading asset: {local_key}")
+                canvas_entry = capi.upload_asset(course, file_path, assets_root)
+                manifest_lib.record(
+                    manifest, manifest_path, local_key,
+                    canvas_entry["canvas_id"], "file",
+                    extra={"canvas_url": canvas_entry["canvas_url"]},
+                )
+            else:
+                print(f"Skipping (up-to-date): {local_key}")
+        elif folder == "modules":
+            _sync_module(course, file_path, repo_path, manifest, manifest_path, force_uploads)
+        else:
+            _sync_content_file(
+                course, file_path, repo_path, snippets_dir, manifest, manifest_path,
+                config.course_id, force_uploads,
+            )
+
+    def _warn_missing(target: str) -> None:
+        print(f"  WARNING: target not found or outside repo: {target}")
+
+    # -t first: BFS over all transitively referenced local files.
+    # Modules are deferred until after all content in the BFS is processed,
+    # because modules require their referenced content to already have manifest entries.
+    queue: deque[str] = deque()
+    for target in recursive_targets:
+        local_key = _resolve_target(target, repo_path)
+        if local_key is None or not (repo_path / local_key).exists():
+            _warn_missing(target)
+            continue
+        if local_key not in visited:
+            queue.append(local_key)
+
+    deferred_modules: list[str] = []
+
+    while queue:
+        local_key = queue.popleft()
+        if local_key in visited:
+            continue
+        visited.add(local_key)
+        file_path = repo_path / local_key
+        if not file_path.exists():
+            continue
+        refs = _get_file_refs(local_key, file_path, repo_path, snippets_dir)
+        if local_key.split("/")[0] == "modules":
+            deferred_modules.append(local_key)
+        else:
+            _process(local_key)
+        for ref in refs:
+            if ref not in visited:
+                queue.append(ref)
+
+    for local_key in deferred_modules:
+        _process(local_key)
+
+    # -s second: each target processed independently, no BFS.
+    # needs_sync prevents re-uploading anything -t just uploaded.
+    for target in single_targets:
+        local_key = _resolve_target(target, repo_path)
+        if local_key is None or not (repo_path / local_key).exists():
+            _warn_missing(target)
+            continue
+        _process(local_key)
