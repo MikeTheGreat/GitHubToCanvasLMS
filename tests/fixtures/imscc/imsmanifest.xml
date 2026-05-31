@@ -85,11 +85,12 @@
       <file href="g_discussion_1_meta.xml"/>
     </resource>
 
-    <!-- Quiz (to be warned + skipped) -->
+    <!-- Quiz -->
     <resource identifier="g_quiz_1"
               type="imsqti_xmlv1p2/imscc_xmlv1p1/assessment"
               href="g_quiz_1/assessment_meta.xml">
       <file href="g_quiz_1/assessment_meta.xml"/>
+      <file href="g_quiz_1/g_quiz_1.xml"/>
     </resource>
 
     <!-- External URL -->

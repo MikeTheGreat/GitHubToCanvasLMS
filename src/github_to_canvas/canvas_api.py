@@ -79,6 +79,48 @@ def create_stub(course, canvas_type: str, title: str) -> dict[str, Any]:
     raise ValueError(f"Cannot create stub for canvas_type: {canvas_type!r}")
 
 
+def create_or_update_quiz(
+    course, canvas_id: int | None, title: str, description: str, **kwargs
+) -> dict[str, Any]:
+    params = {"title": title, "description": description, **kwargs}
+    if canvas_id is not None:
+        quiz = course.get_quiz(canvas_id)
+        quiz = quiz.edit(quiz=params)
+    else:
+        quiz = course.create_quiz(quiz=params)
+    return {"canvas_type": "quiz", "canvas_id": quiz.id}
+
+
+def _build_question_params(q: dict[str, Any]) -> dict[str, Any]:
+    params: dict[str, Any] = {
+        "question_name": q["title"],
+        "question_type": q["question_type"],
+        "question_text": q["question_text"],
+        "points_possible": q["points_possible"],
+    }
+    if q.get("answers"):
+        params["answers"] = q["answers"]
+    return params
+
+
+def sync_quiz_questions(
+    course,
+    quiz,
+    questions: list[dict[str, Any]],
+) -> dict[str, int]:
+    """Delete all existing quiz questions and re-add in order.
+
+    Returns a dict mapping each question's rel_path to its new Canvas question ID.
+    """
+    for existing_q in quiz.get_questions():
+        existing_q.delete()
+    result: dict[str, int] = {}
+    for q in questions:
+        canvas_q = quiz.create_question(question=_build_question_params(q))
+        result[q["rel_path"]] = canvas_q.id
+    return result
+
+
 def create_or_update_module(course, canvas_id: int | None, title: str, **kwargs):
     """Return the canvasapi Module object (created or updated)."""
     if canvas_id is not None:
@@ -91,6 +133,7 @@ _CANVAS_ITEM_TYPE = {
     "page": "Page",
     "assignment": "Assignment",
     "discussion": "Discussion",
+    "quiz": "Quiz",
 }
 
 

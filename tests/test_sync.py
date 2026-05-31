@@ -553,6 +553,183 @@ def test_recursive_target_no_duplicate_processing(mock_course, course_root, mock
     mock_course.create_page.assert_called_once()
 
 
+# ---------------------------------------------------------------------------
+# Scenario 9: Quiz sync
+# ---------------------------------------------------------------------------
+
+
+def _mock_quiz(canvas_id: int) -> MagicMock:
+    q = MagicMock()
+    q.id = canvas_id
+    q.edit.return_value = q
+    q.get_questions.return_value = []
+    return q
+
+
+def _mock_quiz_question(q_id: int) -> MagicMock:
+    qq = MagicMock()
+    qq.id = q_id
+    return qq
+
+
+def _quiz_course_root(tmp_path: Path) -> Path:
+    """Minimal course root with one quiz and no other content."""
+    root = tmp_path / "course"
+    quiz_dir = root / "quizzes" / "a-quiz"
+    q_dir = quiz_dir / "questions"
+    q_dir.mkdir(parents=True)
+    (quiz_dir / "a-quiz.md").write_text(
+        "---\ntitle: A Quiz\nquiz_type: assignment\npublished: true\n---\n\n"
+        "1. [What is 2+2?](questions/what-is-2-plus-2.md)\n"
+        "2. [Explain something](questions/explain-something.md)\n"
+    )
+    (q_dir / "what-is-2-plus-2.md").write_text(
+        "---\ntitle: What is 2+2?\nquestion_type: multiple_choice_question\n"
+        "points_possible: 1\ncorrect: 2\n---\n\n"
+        "What is 2+2?\n\n## Answers\n\n1. 3\n2. 4\n3. 5\n"
+    )
+    (q_dir / "explain-something.md").write_text(
+        "---\ntitle: Explain something\nquestion_type: essay_question\n"
+        "points_possible: 5\n---\n\nExplain the concept.\n"
+    )
+    return root
+
+
+def test_quiz_sync_creates_quiz_on_first_sync(mock_course, mocker, tmp_path) -> None:
+    mocker.patch("github_to_canvas.manifest.flush")
+    root = _quiz_course_root(tmp_path)
+    quiz = _mock_quiz(12345)
+    mock_course.create_quiz.return_value = quiz
+    mock_course.get_quiz.return_value = quiz
+    quiz.create_question.side_effect = [_mock_quiz_question(i) for i in [101, 102]]
+
+    run_sync(_config(), root)
+
+    mock_course.create_quiz.assert_called_once()
+    call_params = mock_course.create_quiz.call_args[1]["quiz"]
+    assert call_params["title"] == "A Quiz"
+    assert call_params["published"] is True
+
+
+def test_quiz_sync_updates_quiz_on_second_sync(mock_course, mocker, tmp_path) -> None:
+    root = _quiz_course_root(tmp_path)
+    preloaded = {
+        "quizzes/a-quiz/a-quiz.md": {
+            "canvas_id": 12345, "canvas_type": "quiz",
+            "last_synced": "2025-01-01T00:00:00+00:00",
+            "canvas_question_ids": {},
+        },
+    }
+    mocker.patch("github_to_canvas.manifest.load", return_value=preloaded)
+    mocker.patch("github_to_canvas.manifest.flush")
+    quiz = _mock_quiz(12345)
+    mock_course.get_quiz.return_value = quiz
+    quiz.create_question.side_effect = [_mock_quiz_question(i) for i in [101, 102]]
+
+    run_sync(_config(), root)
+
+    mock_course.create_quiz.assert_not_called()
+    mock_course.get_quiz.assert_called_with(12345)
+    quiz.edit.assert_called_once()
+
+
+def test_quiz_questions_created_in_order(mock_course, mocker, tmp_path) -> None:
+    mocker.patch("github_to_canvas.manifest.flush")
+    root = _quiz_course_root(tmp_path)
+    quiz = _mock_quiz(12345)
+    mock_course.create_quiz.return_value = quiz
+    mock_course.get_quiz.return_value = quiz
+    quiz.create_question.side_effect = [_mock_quiz_question(i) for i in [101, 102]]
+
+    run_sync(_config(), root)
+
+    assert quiz.create_question.call_count == 2
+    first_q = quiz.create_question.call_args_list[0][1]["question"]
+    second_q = quiz.create_question.call_args_list[1][1]["question"]
+    assert first_q["question_type"] == "multiple_choice_question"
+    assert len(first_q["answers"]) == 3
+    assert second_q["question_type"] == "essay_question"
+
+
+def test_quiz_skipped_if_up_to_date(mock_course, mocker, tmp_path, capsys) -> None:
+    root = _quiz_course_root(tmp_path)
+    # Make all quiz files old
+    quiz_dir = root / "quizzes" / "a-quiz"
+    for f in [quiz_dir / "a-quiz.md",
+              quiz_dir / "questions" / "what-is-2-plus-2.md",
+              quiz_dir / "questions" / "explain-something.md"]:
+        _make_old(f)
+    preloaded = {
+        "quizzes/a-quiz/a-quiz.md": {
+            "canvas_id": 12345, "canvas_type": "quiz",
+            "last_synced": "2025-01-01T00:00:00+00:00",
+            "canvas_question_ids": {},
+        },
+    }
+    mocker.patch("github_to_canvas.manifest.load", return_value=preloaded)
+    mocker.patch("github_to_canvas.manifest.flush")
+
+    run_sync(_config(), root)
+
+    mock_course.create_quiz.assert_not_called()
+    mock_course.get_quiz.assert_not_called()
+    out = capsys.readouterr().out
+    assert "Skipping (up-to-date): quizzes/a-quiz/a-quiz.md" in out
+
+
+def test_quiz_resynced_when_question_file_updated(mock_course, mocker, tmp_path) -> None:
+    root = _quiz_course_root(tmp_path)
+    quiz_dir = root / "quizzes" / "a-quiz"
+    # Make quiz .md old but leave question files at current mtime
+    _make_old(quiz_dir / "a-quiz.md")
+    preloaded = {
+        "quizzes/a-quiz/a-quiz.md": {
+            "canvas_id": 12345, "canvas_type": "quiz",
+            "last_synced": "2025-01-01T00:00:00+00:00",
+            "canvas_question_ids": {},
+        },
+    }
+    mocker.patch("github_to_canvas.manifest.load", return_value=preloaded)
+    mocker.patch("github_to_canvas.manifest.flush")
+    quiz = _mock_quiz(12345)
+    mock_course.get_quiz.return_value = quiz
+    quiz.create_question.side_effect = [_mock_quiz_question(i) for i in [101, 102]]
+
+    run_sync(_config(), root)
+
+    # Question file mtime > last_synced → whole quiz re-synced via update
+    mock_course.get_quiz.assert_called_with(12345)
+    quiz.edit.assert_called_once()
+
+
+def test_quiz_module_item_type_is_quiz(mock_course, mocker, tmp_path) -> None:
+    """A module that references a quiz creates a Quiz-type module item."""
+    root = _quiz_course_root(tmp_path)
+    (root / "modules").mkdir()
+    (root / "modules" / "week-1.md").write_text(
+        "---\ntitle: Week 1\npublished: true\n---\n\n"
+        "- [A Quiz](../quizzes/a-quiz/a-quiz.md)\n"
+    )
+    preloaded = {
+        "quizzes/a-quiz/a-quiz.md": {
+            "canvas_id": 12345, "canvas_type": "quiz",
+            "last_synced": _FUTURE_SYNCED,
+        },
+    }
+    mocker.patch("github_to_canvas.manifest.load", return_value=preloaded)
+    mocker.patch("github_to_canvas.manifest.flush")
+    module = _mock_module(66666)
+    mock_course.create_module.return_value = module
+    module.create_module_item.return_value = _mock_item(201)
+
+    run_sync(_config(), root)
+
+    module.create_module_item.assert_called_once()
+    item_call = module.create_module_item.call_args[1]["module_item"]
+    assert item_call["type"] == "Quiz"
+    assert item_call["content_id"] == 12345
+
+
 def test_single_target_skipped_when_t_already_uploaded_it(mock_course, course_root, mocker) -> None:
     """-t BFS uploads pages/syllabus.md and updates last_synced. -s then skips it via needs_sync."""
     # Make the page old so -t uploads it (needs_sync=True), setting last_synced=now.

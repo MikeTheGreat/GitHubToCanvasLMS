@@ -208,12 +208,93 @@ def test_module_external_url_as_absolute_link(output_dir: Path) -> None:
     assert "https://example.com/resource" in text
 
 
-def test_module_quiz_skipped_with_comment(output_dir: Path, capsys: pytest.CaptureFixture) -> None:
+def test_module_quiz_included_as_link(output_dir: Path) -> None:
     run_import(FIXTURE_DIR, output_dir)
     text = (output_dir / "modules" / "week-1.md").read_text()
-    assert "# SKIPPED" in text
-    assert "Quiz" in text
-    assert "WARNING" in capsys.readouterr().out
+    assert "# SKIPPED" not in text
+    assert "../quizzes/a-quiz/a-quiz.md" in text
+
+
+# --- Quizzes ---
+
+def test_quiz_folder_created(output_dir: Path) -> None:
+    run_import(FIXTURE_DIR, output_dir)
+    assert (output_dir / "quizzes" / "a-quiz").is_dir()
+
+
+def test_quiz_md_created(output_dir: Path) -> None:
+    run_import(FIXTURE_DIR, output_dir)
+    assert (output_dir / "quizzes" / "a-quiz" / "a-quiz.md").exists()
+
+
+def test_quiz_md_has_title(output_dir: Path) -> None:
+    run_import(FIXTURE_DIR, output_dir)
+    text = (output_dir / "quizzes" / "a-quiz" / "a-quiz.md").read_text()
+    assert "title: A Quiz" in text
+
+
+def test_quiz_md_has_quiz_type(output_dir: Path) -> None:
+    run_import(FIXTURE_DIR, output_dir)
+    text = (output_dir / "quizzes" / "a-quiz" / "a-quiz.md").read_text()
+    assert "quiz_type: assignment" in text
+
+
+def test_quiz_md_has_points(output_dir: Path) -> None:
+    run_import(FIXTURE_DIR, output_dir)
+    text = (output_dir / "quizzes" / "a-quiz" / "a-quiz.md").read_text()
+    assert "points_possible: 6.0" in text
+
+
+def test_quiz_md_lists_questions_in_order(output_dir: Path) -> None:
+    run_import(FIXTURE_DIR, output_dir)
+    text = (output_dir / "quizzes" / "a-quiz" / "a-quiz.md").read_text()
+    # Both question files are listed — titles slugify to what-is-22 and explain-something
+    assert "questions/what-is-22.md" in text
+    assert "questions/explain-something.md" in text
+    # MCQ appears before essay (as in the QTI file)
+    assert text.index("what-is-22") < text.index("explain-something")
+
+
+def test_quiz_mcq_question_file_created(output_dir: Path) -> None:
+    run_import(FIXTURE_DIR, output_dir)
+    q_dir = output_dir / "quizzes" / "a-quiz" / "questions"
+    assert (q_dir / "what-is-22.md").exists()
+
+
+def test_quiz_essay_question_file_created(output_dir: Path) -> None:
+    run_import(FIXTURE_DIR, output_dir)
+    q_dir = output_dir / "quizzes" / "a-quiz" / "questions"
+    assert (q_dir / "explain-something.md").exists()
+
+
+def test_quiz_mcq_has_correct_frontmatter(output_dir: Path) -> None:
+    run_import(FIXTURE_DIR, output_dir)
+    text = (output_dir / "quizzes" / "a-quiz" / "questions" / "what-is-22.md").read_text()
+    assert "question_type: multiple_choice_question" in text
+    assert "points_possible: 1.0" in text
+    assert "correct: 2" in text
+
+
+def test_quiz_mcq_has_answers_section(output_dir: Path) -> None:
+    run_import(FIXTURE_DIR, output_dir)
+    text = (output_dir / "quizzes" / "a-quiz" / "questions" / "what-is-22.md").read_text()
+    assert "## Answers" in text
+    assert "3" in text
+    assert "4" in text
+    assert "5" in text
+
+
+def test_quiz_essay_has_no_correct_field(output_dir: Path) -> None:
+    run_import(FIXTURE_DIR, output_dir)
+    text = (output_dir / "quizzes" / "a-quiz" / "questions" / "explain-something.md").read_text()
+    assert "correct:" not in text
+    assert "question_type: essay_question" in text
+
+
+def test_quiz_essay_has_question_text(output_dir: Path) -> None:
+    run_import(FIXTURE_DIR, output_dir)
+    text = (output_dir / "quizzes" / "a-quiz" / "questions" / "explain-something.md").read_text()
+    assert "Explain something" in text
 
 
 # --- Course settings ---

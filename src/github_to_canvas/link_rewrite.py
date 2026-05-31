@@ -17,6 +17,7 @@ _FOLDER_TO_TYPE = {
     "assignments": "assignment",
     "discussions": "discussion",
     "assets": "file",
+    "quizzes": "quiz",
 }
 
 
@@ -35,6 +36,8 @@ def canvas_content_url(entry: dict[str, Any], course_id: int) -> str:
         return f"/courses/{course_id}/assignments/{entry['canvas_id']}"
     if t == "discussion":
         return f"/courses/{course_id}/discussion_topics/{entry['canvas_id']}"
+    if t == "quiz":
+        return f"/courses/{course_id}/quizzes/{entry['canvas_id']}"
     raise ValueError(f"Unknown canvas_type: {t!r}")
 
 

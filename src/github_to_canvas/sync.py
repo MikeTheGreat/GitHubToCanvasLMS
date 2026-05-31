@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import re
 from collections import deque
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -13,6 +14,7 @@ from . import manifest as manifest_lib
 from .config import Config
 from .convert import markdown_to_html, preprocess_snippets
 from .link_rewrite import extract_local_refs, infer_canvas_type, rewrite_links
+from .quiz import parse_question_file, parse_quiz_file
 
 
 def parse_frontmatter(text: str) -> tuple[dict[str, Any], str]:
@@ -59,8 +61,8 @@ def run_sync(config: Config, repo_path: Path, force_uploads: bool = False) -> No
     if assets_dir.exists():
         _walk_assets(course, assets_dir, assets_dir, repo_path, manifest, manifest_path, force_uploads)
 
-    # 2. Content folders (alphabetical, excl. assets, modules, snippets, hidden)
-    skip = {"assets", "modules", "snippets"}
+    # 2. Content folders (alphabetical, excl. assets, modules, quizzes, snippets, hidden)
+    skip = {"assets", "modules", "quizzes", "snippets"}
     content_dirs = sorted(
         d for d in repo_path.iterdir()
         if d.is_dir() and not d.name.startswith(".") and d.name not in skip
@@ -71,6 +73,15 @@ def run_sync(config: Config, repo_path: Path, force_uploads: bool = False) -> No
                 course, md_file, repo_path, snippets_dir, manifest, manifest_path,
                 config.course_id, force_uploads,
             )
+
+    # 2.5. Quizzes (each quiz lives in its own sub-folder)
+    quizzes_dir = repo_path / "quizzes"
+    if quizzes_dir.exists():
+        for quiz_folder in sorted(d for d in quizzes_dir.iterdir() if d.is_dir()):
+            quiz_md = quiz_folder / f"{quiz_folder.name}.md"
+            if quiz_md.exists():
+                _sync_quiz(course, quiz_folder, quiz_md, repo_path, manifest, manifest_path,
+                           force_uploads)
 
     # 3. Modules (alphabetical)
     modules_dir = repo_path / "modules"
@@ -207,6 +218,83 @@ def _sync_module(
     )
 
 
+def _quiz_needs_sync(
+    quiz_md: Path,
+    questions_dir: Path,
+    local_key: str,
+    manifest: manifest_lib.ManifestDict,
+    force_uploads: bool,
+) -> bool:
+    """Return True if the quiz .md or any question file is newer than last_synced."""
+    if force_uploads:
+        return True
+    entry = manifest.get(local_key)
+    if entry is None or "last_synced" not in entry:
+        return True
+    last_synced = datetime.fromisoformat(entry["last_synced"])
+    all_files: list[Path] = [quiz_md]
+    if questions_dir.exists():
+        all_files.extend(questions_dir.glob("*.md"))
+    for f in all_files:
+        mtime = datetime.fromtimestamp(f.stat().st_mtime, tz=timezone.utc)
+        if mtime > last_synced:
+            return True
+    return False
+
+
+def _sync_quiz(
+    course,
+    quiz_folder: Path,
+    quiz_md: Path,
+    repo_root: Path,
+    manifest: manifest_lib.ManifestDict,
+    manifest_path: Path,
+    force_uploads: bool = False,
+) -> None:
+    local_key = quiz_md.relative_to(repo_root).as_posix()
+    questions_dir = quiz_folder / "questions"
+
+    if not _quiz_needs_sync(quiz_md, questions_dir, local_key, manifest, force_uploads):
+        print(f"Skipping (up-to-date): {local_key}")
+        return
+
+    print(f"Processing quiz: {local_key}")
+
+    frontmatter, desc_html, question_paths = parse_quiz_file(quiz_md)
+    title = frontmatter.get("title", quiz_folder.name)
+    published = frontmatter.get("published", False)
+
+    quiz_kwargs: dict[str, Any] = {}
+    for key in ("quiz_type", "time_limit", "allowed_attempts", "shuffle_answers",
+                "show_correct_answers", "points_possible"):
+        if key in frontmatter:
+            quiz_kwargs[key] = frontmatter[key]
+
+    questions: list[dict[str, Any]] = []
+    for q_path in question_paths:
+        if not q_path.exists():
+            print(f"  ERROR: question file not found: {q_path}")
+            continue
+        rel_path = q_path.relative_to(quiz_folder).as_posix()
+        q_data = parse_question_file(q_path)
+        q_data["rel_path"] = rel_path
+        questions.append(q_data)
+
+    existing = manifest.get(local_key)
+    canvas_id = existing["canvas_id"] if existing else None
+
+    print(f"  Uploading: {local_key}")
+    result = capi.create_or_update_quiz(course, canvas_id, title, desc_html, published=published,
+                                        **quiz_kwargs)
+    quiz_obj = course.get_quiz(result["canvas_id"])
+    q_id_map = capi.sync_quiz_questions(course, quiz_obj, questions)
+
+    manifest_lib.record(
+        manifest, manifest_path, local_key,
+        result["canvas_id"], "quiz", extra={"canvas_question_ids": q_id_map},
+    )
+
+
 def _get_file_refs(
     local_key: str, file_path: Path, repo_root: Path, snippets_dir: Path
 ) -> set[str]:
@@ -217,6 +305,14 @@ def _get_file_refs(
         items = parse_module_body(body, file_path, repo_root)
         return {item["local_path"] for item in items if item["type"] == "content"}
     if folder in ("assets", "snippets"):
+        return set()
+    if folder == "quizzes":
+        # TODO: quiz description HTML and question text can contain links to other Canvas
+        # content (pages, assignments, etc.).  Currently BFS never follows those links and
+        # _sync_quiz never rewrites them to Canvas URLs.  Investigate whether
+        # _get_file_refs should parse the quiz .md + question files for local <a>/<img>
+        # refs and return them here, and whether rewrite_links() should be called on the
+        # converted quiz description / question HTML before upload.
         return set()
     _, body = parse_frontmatter(file_path.read_text())
     body = preprocess_snippets(body, file_path, snippets_dir)
@@ -272,6 +368,10 @@ def run_targeted_sync(
                 print(f"Skipping (up-to-date): {local_key}")
         elif folder == "modules":
             _sync_module(course, file_path, repo_path, manifest, manifest_path, force_uploads)
+        elif folder == "quizzes":
+            quiz_folder = file_path.parent
+            _sync_quiz(course, quiz_folder, file_path, repo_path, manifest, manifest_path,
+                       force_uploads)
         else:
             _sync_content_file(
                 course, file_path, repo_path, snippets_dir, manifest, manifest_path,

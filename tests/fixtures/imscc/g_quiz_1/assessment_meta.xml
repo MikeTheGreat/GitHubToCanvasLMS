@@ -3,7 +3,12 @@
       xmlns="http://canvas.instructure.com/xsd/cccv1p0"
       xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
   <title>A Quiz</title>
+  <description>Answer each question carefully.</description>
   <workflow_state>published</workflow_state>
-  <quiz_type>survey</quiz_type>
-  <points_possible>0.0</points_possible>
+  <quiz_type>assignment</quiz_type>
+  <points_possible>6.0</points_possible>
+  <time_limit>30</time_limit>
+  <allowed_attempts>1</allowed_attempts>
+  <shuffle_answers>false</shuffle_answers>
+  <show_correct_answers>true</show_correct_answers>
 </quiz>
