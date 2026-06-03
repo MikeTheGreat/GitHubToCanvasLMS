@@ -136,6 +136,7 @@ Options:
   --repo PATH                     Path to the course content repo  [required]
   --config PATH                   Path to canvas.toml  [default: <repo>/canvas.toml]
   --force-uploads                 Re-upload all files even if unchanged since last sync
+  --force-overwrite               Skip Canvas timestamp check; always overwrite Canvas
   -t, --target-recursively FILE   Comma-separated files; each is synced plus all resources
                                   it transitively references (BFS). Skips the full sync.
   -s, --single-target FILE        Comma-separated files to sync without traversing references.
@@ -338,6 +339,42 @@ canvas_item_ids  = {"pages/syllabus.md" = 201, "assignments/week1.md" = 202}
 The `last_synced` field is used to skip files that haven't changed since they were last uploaded — a file is re-uploaded only when its local modification time is newer than `last_synced`. Use `--force-uploads` to bypass this check.
 
 If the manifest is lost you can re-run the tool against a fresh Canvas course, or re-create it manually from Canvas IDs.
+
+---
+
+## Canvas overwrite protection
+
+By default, before uploading any item that already exists in Canvas the tool fetches its `updated_at` timestamp from Canvas and compares it to the local file's modification time. If Canvas is newer — meaning someone edited the item directly in Canvas after the last sync — the upload is **skipped**.
+
+At the end of the run, all skipped items are printed together as a single list:
+
+```text
+The following resources were NOT uploaded because Canvas has a newer version.
+Review these files and re-upload manually if needed (use --force-overwrite to skip this check):
+  pages/syllabus.md
+  assignments/week2.md
+```
+
+This lets you review the diverged items before deciding what to do:
+
+- **Keep the Canvas version** — update your local file to match Canvas, then sync again.
+- **Keep the local version** — use `--force-overwrite` to overwrite Canvas regardless:
+
+```bash
+github-to-canvas update --repo . --force-overwrite
+```
+
+`--force-overwrite` skips the Canvas timestamp check entirely. This is also faster (no extra API calls) when you know the local repo is the authoritative source and don't need the protection.
+
+The two flags are independent:
+
+| | `--force-uploads` | `--force-overwrite` |
+| --- | --- | --- |
+| Bypasses local `mtime` check | Yes | No |
+| Bypasses Canvas timestamp check | No | Yes |
+| Extra Canvas API calls (per item) | Same | Fewer (check skipped) |
+
+Use both flags together to re-upload and overwrite everything unconditionally.
 
 ---
 

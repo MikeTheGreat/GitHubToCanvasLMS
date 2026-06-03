@@ -174,7 +174,7 @@ def test_first_sync_creates_all_content(mock_course, course_root, mocker) -> Non
 
     # One stub page create + no extra create_page (real page goes via edit)
     mock_course.create_page.assert_called_once()
-    mock_course.get_page.assert_called_once()   # real page via update path
+    assert mock_course.get_page.call_count == 2  # Canvas timestamp check + actual update
     mock_course.create_assignment.assert_called_once()
     mock_course.create_discussion_topic.assert_called_once()
     mock_course.upload.assert_called_once()
@@ -264,12 +264,16 @@ def test_second_sync_updates_not_creates(mock_course, course_root, mocker) -> No
     # Asset already in manifest — no re-upload
     mock_course.upload.assert_not_called()
 
-    # Updates used instead
-    mock_course.get_page.assert_called_once_with("syllabus")
+    # Updates used instead (each item fetched twice: Canvas timestamp check + actual update)
+    assert mock_course.get_page.call_count == 2
+    mock_course.get_page.assert_any_call("syllabus")
     real_page.edit.assert_called_once()
-    mock_course.get_assignment.assert_called_once_with(98765)
-    mock_course.get_discussion_topic.assert_called_once_with(55555)
-    mock_course.get_module.assert_called_once_with(66666)
+    assert mock_course.get_assignment.call_count == 2
+    mock_course.get_assignment.assert_any_call(98765)
+    assert mock_course.get_discussion_topic.call_count == 2
+    mock_course.get_discussion_topic.assert_any_call(55555)
+    assert mock_course.get_module.call_count == 2
+    mock_course.get_module.assert_any_call(66666)
 
 
 # ---------------------------------------------------------------------------
@@ -446,6 +450,110 @@ def test_force_uploads_re_uploads_up_to_date_file(mock_course, course_root, mock
     run_sync(_config(), course_root, force_uploads=True)
 
     mock_course.upload.assert_called_once()  # asset re-uploaded despite old mtime
+
+
+# ---------------------------------------------------------------------------
+# Scenario 7b: Canvas overwrite protection
+# ---------------------------------------------------------------------------
+
+
+def test_canvas_newer_skips_upload_and_prints_summary(
+    mock_course, course_root, mocker, capsys
+) -> None:
+    """When Canvas updated_at > local mtime the upload is skipped and the file appears in the
+    end-of-run summary."""
+    preloaded = {
+        "pages/syllabus.md": {
+            "canvas_id": 11111, "canvas_type": "page", "canvas_url": "syllabus",
+            "last_synced": "2025-01-01T00:00:00+00:00",
+        },
+    }
+    mocker.patch("github_to_canvas.manifest.load", return_value=preloaded)
+    mocker.patch("github_to_canvas.manifest.flush")
+
+    page_mock = _mock_page(11111, "syllabus")
+    page_mock.updated_at = "2999-12-31T00:00:00+00:00"  # Canvas far in future → newer
+    mock_course.get_page.return_value = page_mock
+
+    run_targeted_sync(_config(), course_root, [], [str(course_root / "pages" / "syllabus.md")])
+
+    # get_page called once for Canvas timestamp check; upload skipped so no edit
+    mock_course.get_page.assert_called_once_with("syllabus")
+    page_mock.edit.assert_not_called()
+
+    out = capsys.readouterr().out
+    assert "pages/syllabus.md" in out
+    assert "Canvas is newer" in out  # confirmed in the summary block
+
+
+def test_canvas_older_upload_proceeds(mock_course, course_root, mocker) -> None:
+    """When Canvas updated_at < local mtime the upload is not blocked."""
+    preloaded = {
+        "pages/syllabus.md": {
+            "canvas_id": 11111, "canvas_type": "page", "canvas_url": "syllabus",
+            "last_synced": "2025-01-01T00:00:00+00:00",
+        },
+    }
+    mocker.patch("github_to_canvas.manifest.load", return_value=preloaded)
+    mocker.patch("github_to_canvas.manifest.flush")
+
+    page_mock = _mock_page(11111, "syllabus")
+    page_mock.updated_at = "2020-01-01T00:00:00+00:00"  # Canvas is old → local file is newer
+    mock_course.get_page.return_value = page_mock
+
+    run_targeted_sync(_config(), course_root, [], [str(course_root / "pages" / "syllabus.md")])
+
+    assert mock_course.get_page.call_count == 2  # timestamp check + actual update
+    page_mock.edit.assert_called_once()
+
+
+def test_force_overwrite_skips_canvas_check_and_uploads(mock_course, course_root, mocker) -> None:
+    """--force-overwrite skips the Canvas timestamp check and uploads regardless."""
+    preloaded = {
+        "pages/syllabus.md": {
+            "canvas_id": 11111, "canvas_type": "page", "canvas_url": "syllabus",
+            "last_synced": "2025-01-01T00:00:00+00:00",
+        },
+    }
+    mocker.patch("github_to_canvas.manifest.load", return_value=preloaded)
+    mocker.patch("github_to_canvas.manifest.flush")
+
+    page_mock = _mock_page(11111, "syllabus")
+    page_mock.updated_at = "2999-12-31T00:00:00+00:00"  # Canvas "newer" but should be ignored
+    mock_course.get_page.return_value = page_mock
+
+    run_targeted_sync(
+        _config(), course_root, [], [str(course_root / "pages" / "syllabus.md")],
+        force_overwrite=True,
+    )
+
+    # Only the actual update call; no extra Canvas timestamp check
+    mock_course.get_page.assert_called_once_with("syllabus")
+    page_mock.edit.assert_called_once()  # upload proceeded
+
+
+def test_canvas_newer_skips_asset_upload(mock_course, course_root, mocker) -> None:
+    """Canvas overwrite protection applies to assets as well as content files."""
+    preloaded = {
+        "assets/images/fig.png": {
+            "canvas_id": 77777, "canvas_type": "file",
+            "canvas_url": "https://school.instructure.com/files/77777/download",
+            "last_synced": "2025-01-01T00:00:00+00:00",
+        },
+    }
+    mocker.patch("github_to_canvas.manifest.load", return_value=preloaded)
+    mocker.patch("github_to_canvas.manifest.flush")
+
+    file_mock = MagicMock()
+    file_mock.updated_at = "2999-12-31T00:00:00+00:00"  # Canvas far in future → newer
+    mock_course.get_file.return_value = file_mock
+
+    run_targeted_sync(
+        _config(), course_root, [], [str(course_root / "assets" / "images" / "fig.png")]
+    )
+
+    mock_course.get_file.assert_called_once_with(77777)  # timestamp check call
+    mock_course.upload.assert_not_called()  # asset upload skipped
 
 
 # ---------------------------------------------------------------------------

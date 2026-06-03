@@ -49,17 +49,53 @@ def parse_module_body(body: str, module_file: Path, course_root: Path) -> list[d
     return items
 
 
-def run_sync(config: Config, repo_path: Path, force_uploads: bool = False) -> None:
+def _canvas_is_newer(
+    course,
+    local_key: str,
+    local_mtime: datetime,
+    manifest: manifest_lib.ManifestDict,
+    newer_on_canvas: list[str],
+) -> bool:
+    """Check if the Canvas version of an existing item is newer than the local file.
+
+    Returns True (and appends to newer_on_canvas) if Canvas should be preserved.
+    Only called when force_overwrite is False and the item already exists in the manifest.
+    """
+    entry = manifest.get(local_key)
+    if entry is None:
+        return False
+    canvas_type = entry.get("canvas_type")
+    identifier = entry.get("canvas_url") if canvas_type == "page" else entry.get("canvas_id")
+    if identifier is None:
+        return False
+    canvas_ts = capi.get_canvas_updated_at(course, canvas_type, identifier)
+    if canvas_ts is not None and canvas_ts > local_mtime:
+        print(f"Skipping (Canvas is newer): {local_key}")
+        newer_on_canvas.append(local_key)
+        return True
+    return False
+
+
+def run_sync(
+    config: Config,
+    repo_path: Path,
+    force_uploads: bool = False,
+    force_overwrite: bool = False,
+) -> None:
     """Main sync pipeline: assets → content → modules."""
     manifest_path = repo_path / ".canvas-manifest.toml"
     manifest = manifest_lib.load(manifest_path)
     course = capi.get_course(config)
     snippets_dir = repo_path / "snippets"
+    newer_on_canvas: list[str] = []
 
     # 1. Assets (depth-first, files before subdirs, alphabetical)
     assets_dir = repo_path / "assets"
     if assets_dir.exists():
-        _walk_assets(course, assets_dir, assets_dir, repo_path, manifest, manifest_path, force_uploads)
+        _walk_assets(
+            course, assets_dir, assets_dir, repo_path, manifest, manifest_path,
+            force_uploads, force_overwrite, newer_on_canvas,
+        )
 
     # 2. Content folders (alphabetical, excl. assets, modules, quizzes, snippets, hidden)
     skip = {"assets", "modules", "quizzes", "snippets"}
@@ -71,7 +107,7 @@ def run_sync(config: Config, repo_path: Path, force_uploads: bool = False) -> No
         for md_file in sorted(content_dir.glob("*.md")):
             _sync_content_file(
                 course, md_file, repo_path, snippets_dir, manifest, manifest_path,
-                config.course_id, force_uploads,
+                config.course_id, force_uploads, force_overwrite, newer_on_canvas,
             )
 
     # 2.5. Quizzes (each quiz lives in its own sub-folder)
@@ -80,26 +116,41 @@ def run_sync(config: Config, repo_path: Path, force_uploads: bool = False) -> No
         for quiz_folder in sorted(d for d in quizzes_dir.iterdir() if d.is_dir()):
             quiz_md = quiz_folder / f"{quiz_folder.name}.md"
             if quiz_md.exists():
-                _sync_quiz(course, quiz_folder, quiz_md, repo_path, manifest, manifest_path,
-                           force_uploads)
+                _sync_quiz(
+                    course, quiz_folder, quiz_md, repo_path, manifest, manifest_path,
+                    force_uploads, force_overwrite, newer_on_canvas,
+                )
 
     # 3. Modules (alphabetical)
     modules_dir = repo_path / "modules"
     if modules_dir.exists():
         for md_file in sorted(modules_dir.glob("*.md")):
-            _sync_module(course, md_file, repo_path, manifest, manifest_path, force_uploads)
+            _sync_module(
+                course, md_file, repo_path, manifest, manifest_path,
+                force_uploads, force_overwrite, newer_on_canvas,
+            )
+
+    _print_newer_on_canvas_summary(newer_on_canvas)
 
 
 def _walk_assets(
     course, dir_path: Path, assets_root: Path, repo_root: Path, manifest, manifest_path,
     force_uploads: bool = False,
+    force_overwrite: bool = False,
+    newer_on_canvas: list[str] | None = None,
 ) -> None:
+    if newer_on_canvas is None:
+        newer_on_canvas = []
     entries = sorted(dir_path.iterdir(), key=lambda p: (p.is_dir(), p.name))
     for entry in entries:
         if entry.is_file():
             local_key = entry.relative_to(repo_root).as_posix()
             if not manifest_lib.needs_sync(manifest, local_key, entry, force_uploads):
                 continue
+            if not force_overwrite:
+                local_mtime = datetime.fromtimestamp(entry.stat().st_mtime, tz=timezone.utc)
+                if _canvas_is_newer(course, local_key, local_mtime, manifest, newer_on_canvas):
+                    continue
             print(f"Uploading asset: {local_key}")
             canvas_entry = capi.upload_asset(course, entry, assets_root)
             manifest_lib.record(
@@ -108,18 +159,31 @@ def _walk_assets(
                 extra={"canvas_url": canvas_entry["canvas_url"]},
             )
         elif entry.is_dir():
-            _walk_assets(course, entry, assets_root, repo_root, manifest, manifest_path, force_uploads)
+            _walk_assets(
+                course, entry, assets_root, repo_root, manifest, manifest_path,
+                force_uploads, force_overwrite, newer_on_canvas,
+            )
 
 
 def _sync_content_file(
     course, md_file: Path, repo_root: Path, snippets_dir: Path,
-    manifest, manifest_path, course_id: int, force_uploads: bool = False,
+    manifest, manifest_path, course_id: int,
+    force_uploads: bool = False,
+    force_overwrite: bool = False,
+    newer_on_canvas: list[str] | None = None,
 ) -> None:
+    if newer_on_canvas is None:
+        newer_on_canvas = []
     local_key = md_file.relative_to(repo_root).as_posix()
 
     if not manifest_lib.needs_sync(manifest, local_key, md_file, force_uploads):
         print(f"Skipping (up-to-date): {local_key}")
         return
+
+    if not force_overwrite:
+        local_mtime = datetime.fromtimestamp(md_file.stat().st_mtime, tz=timezone.utc)
+        if _canvas_is_newer(course, local_key, local_mtime, manifest, newer_on_canvas):
+            return
 
     print(f"Processing: {local_key}")
 
@@ -181,12 +245,21 @@ def _sync_content_file(
 def _sync_module(
     course, md_file: Path, repo_root: Path, manifest, manifest_path,
     force_uploads: bool = False,
+    force_overwrite: bool = False,
+    newer_on_canvas: list[str] | None = None,
 ) -> None:
+    if newer_on_canvas is None:
+        newer_on_canvas = []
     local_key = md_file.relative_to(repo_root).as_posix()
 
     if not manifest_lib.needs_sync(manifest, local_key, md_file, force_uploads):
         print(f"Skipping (up-to-date): {local_key}")
         return
+
+    if not force_overwrite:
+        local_mtime = datetime.fromtimestamp(md_file.stat().st_mtime, tz=timezone.utc)
+        if _canvas_is_newer(course, local_key, local_mtime, manifest, newer_on_canvas):
+            return
 
     print(f"Syncing module: {local_key}")
 
@@ -250,13 +323,27 @@ def _sync_quiz(
     manifest: manifest_lib.ManifestDict,
     manifest_path: Path,
     force_uploads: bool = False,
+    force_overwrite: bool = False,
+    newer_on_canvas: list[str] | None = None,
 ) -> None:
+    if newer_on_canvas is None:
+        newer_on_canvas = []
     local_key = quiz_md.relative_to(repo_root).as_posix()
     questions_dir = quiz_folder / "questions"
 
     if not _quiz_needs_sync(quiz_md, questions_dir, local_key, manifest, force_uploads):
         print(f"Skipping (up-to-date): {local_key}")
         return
+
+    if not force_overwrite:
+        all_files: list[Path] = [quiz_md]
+        if questions_dir.exists():
+            all_files.extend(questions_dir.glob("*.md"))
+        local_max_mtime = max(
+            datetime.fromtimestamp(f.stat().st_mtime, tz=timezone.utc) for f in all_files
+        )
+        if _canvas_is_newer(course, local_key, local_max_mtime, manifest, newer_on_canvas):
+            return
 
     print(f"Processing quiz: {local_key}")
 
@@ -331,12 +418,24 @@ def _resolve_target(target: str, repo_path: Path) -> str | None:
         return None
 
 
+def _print_newer_on_canvas_summary(newer_on_canvas: list[str]) -> None:
+    if not newer_on_canvas:
+        return
+    print(
+        "\nThe following resources were NOT uploaded because Canvas has a newer version.\n"
+        "Review these files and re-upload manually if needed (use --force-overwrite to skip this check):"
+    )
+    for key in newer_on_canvas:
+        print(f"  {key}")
+
+
 def run_targeted_sync(
     config: Config,
     repo_path: Path,
     recursive_targets: list[str],
     single_targets: list[str],
     force_uploads: bool = False,
+    force_overwrite: bool = False,
 ) -> None:
     """Sync only the specified targets.
 
@@ -349,6 +448,7 @@ def run_targeted_sync(
     course = capi.get_course(config)
     snippets_dir = repo_path / "snippets"
     assets_root = repo_path / "assets"
+    newer_on_canvas: list[str] = []
 
     visited: set[str] = set()
 
@@ -357,6 +457,10 @@ def run_targeted_sync(
         folder = local_key.split("/")[0]
         if folder == "assets":
             if manifest_lib.needs_sync(manifest, local_key, file_path, force_uploads):
+                if not force_overwrite:
+                    local_mtime = datetime.fromtimestamp(file_path.stat().st_mtime, tz=timezone.utc)
+                    if _canvas_is_newer(course, local_key, local_mtime, manifest, newer_on_canvas):
+                        return
                 print(f"Uploading asset: {local_key}")
                 canvas_entry = capi.upload_asset(course, file_path, assets_root)
                 manifest_lib.record(
@@ -367,15 +471,20 @@ def run_targeted_sync(
             else:
                 print(f"Skipping (up-to-date): {local_key}")
         elif folder == "modules":
-            _sync_module(course, file_path, repo_path, manifest, manifest_path, force_uploads)
+            _sync_module(
+                course, file_path, repo_path, manifest, manifest_path,
+                force_uploads, force_overwrite, newer_on_canvas,
+            )
         elif folder == "quizzes":
             quiz_folder = file_path.parent
-            _sync_quiz(course, quiz_folder, file_path, repo_path, manifest, manifest_path,
-                       force_uploads)
+            _sync_quiz(
+                course, quiz_folder, file_path, repo_path, manifest, manifest_path,
+                force_uploads, force_overwrite, newer_on_canvas,
+            )
         else:
             _sync_content_file(
                 course, file_path, repo_path, snippets_dir, manifest, manifest_path,
-                config.course_id, force_uploads,
+                config.course_id, force_uploads, force_overwrite, newer_on_canvas,
             )
 
     def _warn_missing(target: str) -> None:
@@ -423,3 +532,5 @@ def run_targeted_sync(
             _warn_missing(target)
             continue
         _process(local_key)
+
+    _print_newer_on_canvas_summary(newer_on_canvas)

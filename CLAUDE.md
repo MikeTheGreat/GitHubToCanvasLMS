@@ -100,6 +100,12 @@ Syncing module: modules/week-1.md
 
 Re-uploads every file regardless of its mtime vs `last_synced`. Bypasses the timestamp check for all file types (assets, content, modules).
 
+### `--force-overwrite`
+
+Skips the Canvas-side timestamp check entirely and always overwrites whatever is in Canvas. Use this when you know the local files are authoritative and want to avoid the extra API calls that the overwrite-protection check requires.
+
+Without this flag, after a file passes the local mtime check, the tool fetches `updated_at` from Canvas for every item that already exists in the manifest. If Canvas has a newer version (i.e. someone edited the item directly in Canvas after the last sync) the upload is skipped and the file is added to a summary list printed at the end of the run — making it easy to review which items diverged before deciding whether to overwrite them.
+
 ### `--target-recursively / -t` (BFS selective sync)
 
 Accepts a comma-separated list of local file paths. For each target, the tool:

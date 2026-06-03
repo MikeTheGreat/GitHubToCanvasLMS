@@ -1,6 +1,7 @@
 """Canvas upload logic via the canvasapi library."""
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -12,6 +13,36 @@ from .config import Config
 def get_course(config: Config):
     canvas = Canvas(config.base_url, config.api_token)
     return canvas.get_course(config.course_id)
+
+
+def get_canvas_updated_at(course, canvas_type: str, identifier) -> datetime | None:
+    """Return the updated_at datetime for an existing Canvas item, or None if unavailable.
+
+    identifier is the page URL slug (str) for pages, canvas_id (int) for all other types.
+    """
+    try:
+        if canvas_type == "page":
+            obj = course.get_page(identifier)
+        elif canvas_type == "assignment":
+            obj = course.get_assignment(identifier)
+        elif canvas_type == "discussion":
+            obj = course.get_discussion_topic(identifier)
+        elif canvas_type == "quiz":
+            obj = course.get_quiz(identifier)
+        elif canvas_type == "module":
+            obj = course.get_module(identifier)
+        elif canvas_type == "file":
+            obj = course.get_file(identifier)
+        else:
+            return None
+        val = getattr(obj, "updated_at", None)
+        if val is None:
+            return None
+        if isinstance(val, datetime):
+            return val if val.tzinfo else val.replace(tzinfo=timezone.utc)
+        return datetime.fromisoformat(str(val).replace("Z", "+00:00"))
+    except Exception:
+        return None
 
 
 def upload_asset(course, local_path: Path, assets_root: Path) -> dict[str, Any]:

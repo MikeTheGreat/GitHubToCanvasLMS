@@ -61,6 +61,15 @@ def import_cmd(imscc_path: Path, output_dir: Path) -> None:
     help="Re-upload all files even if unchanged since last sync.",
 )
 @click.option(
+    "--force-overwrite",
+    is_flag=True,
+    default=False,
+    help=(
+        "Upload even if Canvas has a newer version. Skips the Canvas timestamp check entirely "
+        "(faster; avoids extra API calls)."
+    ),
+)
+@click.option(
     "--target-recursively", "-t",
     default=None,
     metavar="FILE[,FILE...]",
@@ -83,6 +92,7 @@ def update(
     repo: Path,
     config: Path | None,
     force_uploads: bool,
+    force_overwrite: bool,
     target_recursively: str | None,
     single_target: str | None,
 ) -> None:
@@ -101,9 +111,9 @@ def update(
             [p.strip() for p in single_target.split(",") if p.strip()]
             if single_target else []
         )
-        run_targeted_sync(cfg, repo, recursive_list, single_list, force_uploads)
+        run_targeted_sync(cfg, repo, recursive_list, single_list, force_uploads, force_overwrite)
     else:
-        run_sync(cfg, repo, force_uploads=force_uploads)
+        run_sync(cfg, repo, force_uploads=force_uploads, force_overwrite=force_overwrite)
     # except FileNotFoundError as e:
     #     die(f"Config file not found: {e.filename}")
     # except tomllib.TOMLDecodeError as e:
