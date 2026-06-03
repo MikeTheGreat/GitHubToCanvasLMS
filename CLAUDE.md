@@ -16,7 +16,7 @@ git clone (local)
 2. load .canvas-manifest.toml           (into in-memory dict; single source of truth during the run)
 3. upload assets/                       (see processing order below)
      → skip any file whose mtime ≤ manifest last_synced (unless --force-uploads)
-4. for each content folder in alphabetical order (excludes assets/ and modules/):
+4. for each content folder in alphabetical order (excludes assets/, modules/, quizzes/, snippets/):
      for each .md file in that folder, alphabetically:
        a. skip if mtime ≤ manifest last_synced (unless --force-uploads); print "Skipping (up-to-date)"
        b. snippet preprocessing: replace any [text](snippets/...) links with snippet file contents
@@ -29,13 +29,20 @@ git clone (local)
                                    → rewrite tag to Canvas URL
        e. upload the fully-resolved HTML to Canvas (create or update via manifest)
        f. update manifest dict and flush to disk
+4b. for each quiz folder in quizzes/ alphabetically:
+     → skip if quiz .md AND all question files have mtime ≤ manifest last_synced
+     → parse quiz-level .md (frontmatter + ordered question list)
+     → parse each question .md file
+     → create or update quiz in Canvas (Classic Quizzes API)
+     → delete all existing quiz questions, re-add in order
+     → update manifest dict and flush to disk
 5. sync modules/ alphabetically         (all content IDs now guaranteed in manifest)
      → skip any module whose mtime ≤ manifest last_synced (unless --force-uploads)
 ```
 
 **Processing order:**
 
-`assets/` is always processed first, `modules/` always last. All other content folders (`assignments/`, `discussions/`, `pages/`, etc.) are processed in alphabetical order between them, with files within each folder also sorted alphabetically. This makes console output predictable and easy to follow.
+`assets/` is always processed first, `modules/` always last. `quizzes/` is processed between regular content folders and modules (after `pages/`, before `modules/`). All other content folders (`assignments/`, `discussions/`, `pages/`, etc.) are processed in alphabetical order, with files within each folder also sorted alphabetically. This makes console output predictable and easy to follow.
 
 Asset traversal is depth-first with files before subdirectories, both sorted alphabetically:
 
@@ -59,6 +66,7 @@ The `assets/` folder hierarchy is mirrored into Canvas Files. `assets/images/fig
 - `<a href="../pages/foo.md">` → look up or stub-create → rewrite to `/courses/:id/pages/slug`
 - `<a href="../assignments/bar.md">` → look up or stub-create → rewrite to `/courses/:id/assignments/:id`
 - `<a href="../discussions/baz.md">` → look up or stub-create → rewrite to `/courses/:id/discussion_topics/:id`
+- `<a href="../quizzes/foo/foo.md">` → look up → rewrite to `/courses/:id/quizzes/:id`
 - `<a href="https://...">` → leave unchanged
 - `<a href="#anchor">` → leave unchanged
 
@@ -148,7 +156,7 @@ github-to-canvas import <imscc_path> <output_dir>
 | `imsdt_xmlv1p1` | `gXXX.xml` | `discussion` |
 | `associatedcontent/...` | `gXXX/` dir | `assignment` |
 | `imswl_xmlv1p1` | `gXXX.xml` | `external_url` |
-| `imsqti_xmlv1p2/...` | any | `quiz` (warn + skip) |
+| `imsqti_xmlv1p2/...` | `gXXX/assessment_meta.xml` + `gXXX/gXXX.xml` | `quiz` |
 | `imsbasiclti_xmlv1p3` | any | `lti` (warn + skip) |
 
 The `_syllabus` resource (`course_settings/syllabus.html`) → `course_settings/syllabus.md`.
@@ -161,6 +169,7 @@ The `_syllabus` resource (`course_settings/syllabus.html`) → `course_settings/
 4. **Pages:** strip `<html>/<head>/<body>` wrapper, rewrite internal links, Pandoc HTML→Markdown, write `pages/{stem}.md` with `title` and `published: true` frontmatter
 5. **Assignments:** read `gXXX/assignment_settings.xml` for title, points_possible, due_at, lock_at, unlock_at, submission_types, grading_type, workflow_state; convert HTML body; write `assignments/{stem}.md`
 6. **Discussions:** parse topic XML body and paired topicMeta for title, published, require_initial_post; skip announcements with warning; write `discussions/{slugify(title)}.md`
+6b. **Quizzes:** read `gXXX/assessment_meta.xml` for quiz settings; parse QTI 1.2 XML (`gXXX/gXXX.xml`) for questions; write `quizzes/{slug}/{slug}.md` and one file per question under `quizzes/{slug}/questions/`; unsupported question types emit a warning and are skipped
 7. **Modules:** read `course_settings/module_meta.xml`; emit items in position order (see below); write `modules/{slugify(title)}.md`
 8. Write `course_settings/syllabus.md`, `course_settings/course_settings.md`, and `canvas.toml` skeleton in repo root
 
@@ -182,16 +191,17 @@ Unknown `gXXX` not in resource map → warn and remove href, keep link text.
 ### Module file generation
 
 - `ContextModuleSubHeader` → `## Title` heading
-- Page / Assignment / Discussion → `- [display_title](../type/file.md)`
+- Page / Assignment / Discussion / Quiz → `- [display_title](../type/file.md)`
 - `ExternalUrl` → `- [display_title](https://url)`
-- `Attachment` (Canvas File) → `- [title](../assets/file.pdf)`
-- `Quizzes::Quiz`, `LTI` → commented warning line in file + printed warning
+- `Attachment` (Canvas File) → `- [title](../assets/file.pdf)` — commented warning + printed warning (not yet implemented)
+- `LTI` → commented warning line in file + printed warning
 
 ### Key behaviours
 
 - **No `.canvas-manifest.toml` written** — IMSCC `gXXX` identifiers are not real Canvas numeric IDs; the first `sync` run creates all items and populates the manifest with real IDs.
 - **`course_settings/` directory** — syllabus and course settings land here rather than in `pages/`.
 - **Graded discussion metadata captured** — `points_possible`, `due_at`, etc. written to frontmatter even if not currently used by sync.
+- **Quiz question slugification** — question filenames are derived from the QTI `title` attribute via `_slugify()`. Special characters (e.g. `+`) are stripped, so "What is 2+2?" becomes `what-is-22.md`.
 
 ### Console output style
 
@@ -202,7 +212,9 @@ Converting page: pages/syllabus.md
 Converting assignment: assignments/week-1-problem-set.md
 Converting discussion: discussions/week-01-forum.md
   WARNING: Skipping announcement: "Coding Exercises 07 has been graded"
-  WARNING: Skipping quiz: "How would you like to be graded?" (gXXX) — appears in module "Getting Started"
+  Converting question: quizzes/week-1-quiz/questions/what-is-2-plus-2.md
+  Converting question: quizzes/week-1-quiz/questions/explain-gravity.md
+Converting quiz: quizzes/week-1-quiz/week-1-quiz.md
 Generating module: modules/getting-started.md
 Done. Wrote course repo to: ./my-course/
 ```
@@ -212,7 +224,7 @@ Done. Wrote course repo to: ./my-course/
 - **Source of truth**: GitHub repo containing `.md` files and supporting assets (images, etc.)
 - **Conversion**: Pandoc for Markdown → HTML conversion (produces clean HTML fragments suitable for Canvas)
 - **Delivery**: Command-line tool, packaged as a `uv` tool for easy installation and running via `uvx`
-- **Canvas content types**: Pages, Assignments, Discussion Forums, Modules
+- **Canvas content types**: Pages, Assignments, Discussion Forums, Quizzes (Classic), Modules
 
 ## Repository Structure (Proposed)
 
@@ -224,6 +236,12 @@ course-repo/           ← the user's course content repo (separate from this to
 │   └── assignment-1.md
 ├── discussions/
 │   └── week-1-intro.md
+├── quizzes/
+│   └── my-quiz/
+│       ├── my-quiz.md          # quiz-level file: frontmatter + ordered question list
+│       └── questions/
+│           ├── question-1.md   # individual question file
+│           └── question-2.md
 ├── modules/
 │   └── week-1.md
 ├── snippets/
@@ -241,19 +259,27 @@ github-to-canvas/      ← this tool repo
 │       ├── convert.py       # Markdown → HTML via Pandoc
 │       ├── canvas_api.py    # Canvas upload logic via canvasapi library
 │       ├── config.py        # config file handling (API token, base URL, course ID)
+│       ├── quiz.py          # quiz/question file parsing
+│       ├── sync.py          # main sync pipeline
+│       ├── manifest.py      # .canvas-manifest.toml read/write
+│       ├── link_rewrite.py  # post-Pandoc HTML link rewriting
 │       └── imscc_import.py  # import subcommand: .imscc → local Markdown repo
 └── tests/
     ├── fixtures/            ← mini course repo covering all test cases
     │   ├── pages/
     │   ├── assignments/
     │   ├── discussions/
+    │   ├── quizzes/
+    │   │   └── a-quiz/      ← quiz fixture with MCQ + essay questions
     │   ├── modules/
     │   ├── snippets/
     │   ├── assets/
     │   └── imscc/           ← synthetic IMSCC fixture for import tests
+    │       └── g_quiz_1/    ← quiz fixture: assessment_meta.xml + QTI questions XML
     ├── test_convert.py      # unit tests: snippet preprocessing, Pandoc output
     ├── test_link_rewrite.py # unit tests: HTML link/img rewriting logic
     ├── test_manifest.py     # unit tests: manifest read/write/flush
+    ├── test_quiz.py         # unit tests: quiz/question file parsing
     ├── test_sync.py         # integration tests: full pipeline with mocked canvasapi
     ├── test_imscc_import.py # integration tests: full import pipeline
     └── test_imscc_convert.py # unit tests: IMSCC XML parsing, link rewriting, slugification
@@ -284,6 +310,7 @@ Content type is determined by **directory convention** — no explicit config ne
 pages/          → Canvas Pages
 assignments/    → Canvas Assignments
 discussions/    → Canvas Discussion Topics
+quizzes/        → Canvas Quizzes (Classic) — nested structure, see below
 modules/        → Canvas Modules (special — see below)
 ```
 
@@ -334,6 +361,111 @@ editing_roles: teachers
 published: true
 ---
 ```
+
+### Quiz file format
+
+Quizzes use a **nested folder structure** — each quiz lives in its own sub-folder under `quizzes/`, named with the slugified quiz title. Questions are stored as individual files in a `questions/` sub-folder.
+
+```text
+quizzes/
+└── my-quiz/
+    ├── my-quiz.md          # quiz-level file (same name as folder)
+    └── questions/
+        ├── question-one.md # individual question files (human-readable names)
+        └── question-two.md
+```
+
+**Quiz-level file** (`quizzes/{slug}/{slug}.md`):
+
+The frontmatter holds quiz settings. The body is an optional description shown to students before they begin, followed by a numbered list of links to question files. The link order defines the question order in Canvas.
+
+```yaml
+---
+title: "Week 1 Quiz"
+quiz_type: assignment        # assignment | practice_quiz | graded_survey | survey
+points_possible: 6.0
+time_limit: 30               # minutes; omit if no time limit
+allowed_attempts: 1
+shuffle_answers: false
+show_correct_answers: true
+published: true
+---
+
+Read each question carefully before answering.
+
+1. [What is 2+2?](questions/what-is-2-plus-2.md)
+2. [Explain gravity](questions/explain-gravity.md)
+```
+
+**Multiple choice question** (`question_type: multiple_choice_question`):
+
+`correct` is the 1-based index of the correct answer in the `## Answers` list.
+
+```yaml
+---
+title: "What is 2+2?"
+question_type: multiple_choice_question
+points_possible: 1
+correct: 2
+---
+
+What is the result of adding 2 and 2?
+
+## Answers
+
+1. 3
+2. 4
+3. 5
+```
+
+**True/false question** (`question_type: true_false_question`):
+
+No `## Answers` section — Canvas always provides "True" and "False". `correct` is the boolean value.
+
+```yaml
+---
+title: "The sky is blue"
+question_type: true_false_question
+points_possible: 1
+correct: true
+---
+
+The sky appears blue during the day due to Rayleigh scattering.
+```
+
+**Essay question** (`question_type: essay_question`):
+
+No `correct` field or `## Answers` section — manually graded.
+
+```yaml
+---
+title: "Explain gravity"
+question_type: essay_question
+points_possible: 5
+---
+
+In 3–5 paragraphs, explain the concept of gravity and how it affects objects with different masses.
+```
+
+**Quiz manifest entry:**
+
+The manifest key is the quiz-level `.md` path. `canvas_question_ids` maps each question file's path (relative to the quiz folder) to its Canvas question ID.
+
+```toml
+["quizzes/my-quiz/my-quiz.md"]
+canvas_type = "quiz"
+canvas_id = 12345
+last_synced = "2025-02-01T10:00:00"
+canvas_question_ids = {"questions/what-is-2-plus-2.md" = 111, "questions/explain-gravity.md" = 222}
+```
+
+**Quiz sync behaviour:**
+
+- The quiz is re-synced if the quiz `.md` file **or any question file** has mtime newer than `last_synced`. A change to a single question triggers a full quiz re-sync.
+- On each sync, all existing Canvas questions are deleted and re-created in the order listed in the quiz `.md`. This keeps question order correct and avoids stale questions after edits.
+- Canvas module items reference the quiz by `canvas_id` and use module item type `"Quiz"`.
+
+**Supported question types:** `multiple_choice_question`, `true_false_question`, `essay_question`. Other types imported from IMSCC emit a warning and are skipped.
 
 ### Module file format
 
@@ -445,8 +577,9 @@ Markdown editors render the include as a normal clickable link, making it easy t
   - Modules: `course.get_module()` / `course.create_module()`
   - Module items: `module.get_module_items()` / `module.create_module_item()` / `module_item.delete()`
 - HTML body field name varies by content type (`body`, `description`, `message`) — check `canvasapi` docs per object type
-- Module item `type` values: `Page`, `Assignment`, `Discussion`, `File`, `ExternalUrl`, `SubHeader`
-- Sync content (pages/assignments/discussions) before syncing modules — modules reference content by Canvas ID
+- Module item `type` values: `Page`, `Assignment`, `Discussion`, `Quiz`, `File`, `ExternalUrl`, `SubHeader`
+- Sync content (pages/assignments/discussions/quizzes) before syncing modules — modules reference content by Canvas ID
+- Quizzes: `course.get_quiz()` / `course.create_quiz()` / `quiz.edit()` / `quiz.get_questions()` / `quiz.create_question()` / `quiz_question.delete()`
 
 ## Pandoc Notes
 
@@ -475,8 +608,9 @@ Tests are organised in three layers. All tests live in `tests/` in this repo; no
 Test individual functions in isolation, with no network or Canvas dependency. Each test passes in a string or small data structure and asserts on the output:
 
 - **Snippet preprocessor** (`test_convert.py`): given Markdown text with `[text](../snippets/...)` links, assert the correct substitution; test nested-include error behaviour.
-- **Link rewriter** (`test_link_rewrite.py`): given an HTML fragment and a manifest dict, assert that `<img src>` and `<a href>` are rewritten to the correct Canvas URLs; test each link type (page, assignment, discussion, asset, external, anchor).
+- **Link rewriter** (`test_link_rewrite.py`): given an HTML fragment and a manifest dict, assert that `<img src>` and `<a href>` are rewritten to the correct Canvas URLs; test each link type (page, assignment, discussion, asset, quiz, external, anchor).
 - **Manifest** (`test_manifest.py`): TOML round-trips, flush-on-every-write behaviour, create-vs-update lookup logic, `needs_sync` timestamp comparisons.
+- **Quiz parsing** (`test_quiz.py`): quiz-level file parsing (frontmatter, question order, description), MCQ/essay/true-false question file parsing, answer weight assignment, correct-answer detection.
 - **Processing order**: asset-first, module-last, alphabetical sorting of folders and files within folders.
 - **Frontmatter parsing**: all content types and their specific fields.
 
@@ -491,6 +625,7 @@ Mock the `canvasapi` library with `pytest-mock`. Run the full sync pipeline agai
 - Missing local file: tool prints an error, removes the tag, and continues (no stub, no crash)
 - Module sync: module items created in the correct order; SubHeader items interleaved correctly
 - Timestamp skip: a file whose mtime is older than `last_synced` is skipped; `--force-uploads` overrides
+- Quiz sync: quiz created/updated; questions deleted and re-created in order; skipped when all files up-to-date; re-synced when any question file is newer than `last_synced`; quiz module items use type `"Quiz"`
 - `--target-recursively`: BFS from a module reaches all referenced content; module deferred until content is in manifest
 - `--single-target`: only specified files processed; no BFS
 - Combined `-t` + `-s`: `-t` uploads first, `-s` skips anything already uploaded via `needs_sync`
@@ -508,6 +643,15 @@ A minimal but complete course repo committed directly into this tool repo. It co
 - `tomllib` (stdlib) — manifest fixture parsing in tests
 
 ## Possible Future Features
+
+### Quiz: link-rewriting in question/description HTML
+
+Currently `_get_file_refs()` returns an empty set for `quizzes/` files, and `_sync_quiz()` uploads quiz description and question text HTML without running it through `rewrite_links()`. This means:
+
+- BFS (`-t`) never follows links embedded in quiz content.
+- Links like `<a href="../pages/intro.md">` inside a quiz description or question prompt are uploaded as-is and will be dead links in Canvas.
+
+The fix would be to call `rewrite_links()` on the converted description HTML and on each question's `question_text` HTML before upload, and to add quiz file ref extraction to `_get_file_refs()`. This is the same pattern used for pages/assignments/discussions. See the TODO comment in `sync.py:_get_file_refs`.
 
 ### `--rebuild-manifest`: re-sync manifest from Canvas
 
@@ -550,3 +694,10 @@ When implemented, the suggested approach:
 - Run the tool against `tests/fixtures/` pointed at the sandbox
 - Use `canvasapi` directly in the test assertions to fetch each uploaded item and verify its content, metadata, and published state
 - Run this suite manually or in a separate CI job gated on `CANVAS_API_TOKEN` being present — not on every push
+
+### How to move, rename files locally without creating orphaned files in Canvas
+
+- Would be nice to be able to move things around in the local file system
+  - Maybe if we store the canvas ID in the file?
+- Alternately: what about having "move" / rename commands in the tool to handle this?
+  - It'll need to update the manifest file
