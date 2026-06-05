@@ -13,6 +13,21 @@
           <lomimscc:string>Test Course</lomimscc:string>
         </lomimscc:title>
       </lomimscc:general>
+      <lomimscc:lifeCycle>
+        <lomimscc:contribute>
+          <lomimscc:date>
+            <lomimscc:dateTime>2025-08-01</lomimscc:dateTime>
+          </lomimscc:date>
+        </lomimscc:contribute>
+      </lomimscc:lifeCycle>
+      <lomimscc:rights>
+        <lomimscc:copyrightAndOtherRestrictions>
+          <lomimscc:value>yes</lomimscc:value>
+        </lomimscc:copyrightAndOtherRestrictions>
+        <lomimscc:description>
+          <lomimscc:string>Private (Copyrighted)</lomimscc:string>
+        </lomimscc:description>
+      </lomimscc:rights>
     </lomimscc:lom>
   </metadata>
   <organizations>

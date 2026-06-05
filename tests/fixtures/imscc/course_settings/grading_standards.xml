@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<gradingStandards xmlns="http://canvas.instructure.com/xsd/cccv1p0"
+                  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+                  xsi:schemaLocation="http://canvas.instructure.com/xsd/cccv1p0 https://canvas.instructure.com/xsd/cccv1p0.xsd">
+  <gradingStandard identifier="g_grading_std_1" version="2">
+    <title>Test Grade Scale</title>
+    <data>[["A",0.93],["B",0.83],["C",0.73],["F",0.0]]</data>
+    <points_based>false</points_based>
+    <scaling_factor>1.0</scaling_factor>
+  </gradingStandard>
+</gradingStandards>

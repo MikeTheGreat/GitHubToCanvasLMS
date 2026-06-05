@@ -175,7 +175,11 @@ The `_syllabus` resource (`course_settings/syllabus.html`) → `course_settings/
 6. **Discussions:** parse topic XML body and paired topicMeta for title, published, require_initial_post; skip announcements with warning; write `discussions/{slugify(title)}.md`
 6b. **Quizzes:** read `gXXX/assessment_meta.xml` for quiz settings; parse QTI 1.2 XML (`gXXX/gXXX.xml`) for questions; write `quizzes/{slug}/{slug}.md` and one file per question under `quizzes/{slug}/questions/`; unsupported question types emit a warning and are skipped
 7. **Modules:** read `course_settings/module_meta.xml`; emit items in position order (see below); write `modules/{slugify(title)}.md`
-8. Write `course_settings/syllabus.md`, `course_settings/course_settings.md`, and `canvas.toml` skeleton in repo root
+8. **Course settings:** collect data from all `course_settings/*.xml` files and `imsmanifest.xml` metadata; write:
+   - `course_settings.toml` (root) — all course-level settings (see below)
+   - `course_settings/syllabus.md` — syllabus HTML converted to Markdown
+   - `course_settings/events.md` — calendar events (if any exist in `events.xml`)
+   - `canvas.toml` (root) — connection config skeleton pre-populated from `context.xml`
 
 ### Internal link rewriting
 
@@ -200,10 +204,28 @@ Unknown `gXXX` not in resource map → warn and remove href, keep link text.
 - `Attachment` (Canvas File) → `- [title](../assets/file.pdf)` — commented warning + printed warning (not yet implemented)
 - `LTI` → commented warning line in file + printed warning
 
+### Course settings output (`course_settings.toml`)
+
+A TOML file written at the repo root capturing all course-level metadata. Sources and content:
+
+| Source file | Fields extracted |
+| --- | --- |
+| `imsmanifest.xml` (lom metadata) | `last_modified`, `copyright_restrictions`, `copyright_description` |
+| `course_settings.xml` | All elements: title, course_code, dates, visibility flags, grading settings, tab configuration, post policy, etc. |
+| `grading_standards.xml` | `[[grading_standards]]` — title, data (threshold array), points_based, scaling_factor |
+| `assignment_groups.xml` | `[[assignment_groups]]` — title, position, group_weight, rules (drop_lowest etc.) |
+| `late_policy.xml` | `[late_policy]` — deduction enablement, deduction amounts, interval |
+| `context.xml` | `canvas_domain` → pre-fills `canvas.toml` base_url; `course_id` → pre-fills `canvas.toml` course_id |
+
+Boolean fields (`true`/`false`) are stored as TOML booleans. Numeric fields are stored as int or float. Empty elements are omitted. The nested `default_post_policy` element is stored as a TOML inline table.
+
+`canvas.toml` is written with `base_url` pre-filled from `context.xml`'s `canvas_domain` (instead of a placeholder). If `context.xml` is absent, the placeholder is used.
+
 ### Key behaviours
 
 - **No `.canvas-manifest.toml` written** — IMSCC `gXXX` identifiers are not real Canvas numeric IDs; the first `sync` run creates all items and populates the manifest with real IDs.
-- **`course_settings/` directory** — syllabus and course settings land here rather than in `pages/`.
+- **`course_settings/` directory** — syllabus, events, and any other converted HTML content land here.
+- **`course_settings.toml` at root** — all course-wide settings (not in `course_settings/` subdir) so they are immediately visible.
 - **Graded discussion metadata captured** — `points_possible`, `due_at`, etc. written to frontmatter even if not currently used by sync.
 - **Quiz question slugification** — question filenames are derived from the QTI `title` attribute via `_slugify()`. Special characters (e.g. `+`) are stripped, so "What is 2+2?" becomes `what-is-22.md`.
 

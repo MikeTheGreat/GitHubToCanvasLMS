@@ -9,4 +9,9 @@
   <default_view>modules</default_view>
   <is_public>false</is_public>
   <license>private</license>
+  <grading_standard_enabled>true</grading_standard_enabled>
+  <home_page_announcement_limit>3</home_page_announcement_limit>
+  <default_post_policy>
+    <post_manually>true</post_manually>
+  </default_post_policy>
 </course>

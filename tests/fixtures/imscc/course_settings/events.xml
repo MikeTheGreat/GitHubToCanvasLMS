@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<events xmlns="http://canvas.instructure.com/xsd/cccv1p0"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://canvas.instructure.com/xsd/cccv1p0 https://canvas.instructure.com/xsd/cccv1p0.xsd">
+  <event identifier="g_event_1">
+    <title>No Class - Holiday</title>
+    <description></description>
+    <start_at>2025-11-27T00:00:00</start_at>
+    <end_at>2025-11-27T00:00:00</end_at>
+    <all_day>true</all_day>
+    <all_day_date>2025-11-27</all_day_date>
+    <rrule></rrule>
+  </event>
+  <event identifier="g_event_2">
+    <title>Project Due</title>
+    <description>&lt;p&gt;Submit your final project on Canvas.&lt;/p&gt;</description>
+    <start_at>2025-12-10T23:59:00</start_at>
+    <end_at>2025-12-10T23:59:00</end_at>
+    <all_day>false</all_day>
+    <all_day_date></all_day_date>
+  </event>
+</events>

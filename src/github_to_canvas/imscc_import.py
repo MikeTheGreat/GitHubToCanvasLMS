@@ -1,6 +1,7 @@
 """Import a Canvas course from a local .imscc file into a Markdown repo."""
 from __future__ import annotations
 
+import json
 import re
 import shutil
 import tempfile
@@ -13,6 +14,7 @@ from typing import Any
 from urllib.parse import unquote
 
 import pypandoc
+import tomli_w
 
 
 # ---------------------------------------------------------------------------
@@ -168,7 +170,7 @@ def parse_imsmanifest(imscc_dir: Path) -> dict[str, TempEntry]:
                 imscc_id=identifier,
                 category="course_settings",
                 imscc_path=href,
-                local_path="course_settings/course_settings.md",
+                local_path="course_settings.toml",
                 title="Course Settings",
             )
             continue
@@ -1009,12 +1011,362 @@ def generate_module_file(
 # Group 8: Course settings folder
 # ---------------------------------------------------------------------------
 
+_NS_LOMIMSCC = "http://ltsc.ieee.org/xsd/imsccv1p1/LOM/manifest"
+
+
+def _el_text(parent: ET.Element, tag: str, ns: str = "") -> str:
+    """Get text of a direct child element, with optional namespace."""
+    el = parent.find(f"{{{ns}}}{tag}") if ns else parent.find(tag)
+    return (el.text or "").strip() if el is not None else ""
+
+
+def _parse_manifest_metadata(manifest_path: Path) -> dict[str, str]:
+    """Extract last_modified and copyright info from imsmanifest.xml lom metadata."""
+    result: dict[str, str] = {}
+    try:
+        tree = ET.parse(manifest_path)
+        root = tree.getroot()
+        ns = _NS_LOMIMSCC
+
+        dt_el = root.find(f".//{{{ns}}}dateTime")
+        if dt_el is not None and dt_el.text:
+            result["last_modified"] = dt_el.text.strip()
+
+        cr_el = root.find(f".//{{{ns}}}copyrightAndOtherRestrictions/{{{ns}}}value")
+        if cr_el is not None and cr_el.text:
+            result["copyright_restrictions"] = cr_el.text.strip()
+
+        desc_el = root.find(f".//{{{ns}}}rights/{{{ns}}}description/{{{ns}}}string")
+        if desc_el is not None and desc_el.text:
+            result["copyright_description"] = desc_el.text.strip()
+    except (OSError, ET.ParseError):
+        pass
+    return result
+
+
+def _coerce_xml_value(text: str) -> Any:
+    """Convert an XML text value to bool, int, float, or str."""
+    if not text:
+        return None
+    low = text.lower()
+    if low == "true":
+        return True
+    if low == "false":
+        return False
+    try:
+        return int(text)
+    except ValueError:
+        pass
+    try:
+        return float(text)
+    except ValueError:
+        pass
+    return text
+
+
+def _parse_course_settings_full(xml_path: Path) -> dict[str, Any]:
+    """Extract all fields from course_settings.xml."""
+    if not xml_path.exists():
+        return {}
+    try:
+        tree = ET.parse(xml_path)
+        root = tree.getroot()
+        ns = _xml_ns(root)
+
+        result: dict[str, Any] = {}
+        for child in root:
+            tag = _strip_ns(child.tag)
+
+            if tag == "default_post_policy":
+                sub: dict[str, Any] = {}
+                for sub_child in child:
+                    sub_tag = _strip_ns(sub_child.tag)
+                    val = _coerce_xml_value((sub_child.text or "").strip())
+                    if val is not None:
+                        sub[sub_tag] = val
+                if sub:
+                    result[tag] = sub
+                continue
+
+            text = (child.text or "").strip()
+            val = _coerce_xml_value(text)
+            if val is not None:
+                result[tag] = val
+
+        return result
+    except (OSError, ET.ParseError):
+        return {}
+
+
+def _parse_grading_standards(xml_path: Path) -> list[dict[str, Any]]:
+    """Parse grading_standards.xml into a list of grading standard dicts."""
+    if not xml_path.exists():
+        return []
+    standards: list[dict[str, Any]] = []
+    try:
+        tree = ET.parse(xml_path)
+        root = tree.getroot()
+        ns = _xml_ns(root)
+        gs_tag = f"{{{ns}}}gradingStandard" if ns else "gradingStandard"
+
+        for gs_el in root.findall(gs_tag):
+            title = _el_text(gs_el, "title", ns)
+            data_raw = _el_text(gs_el, "data", ns)
+            points_based_raw = _el_text(gs_el, "points_based", ns)
+            scaling_raw = _el_text(gs_el, "scaling_factor", ns)
+
+            gs: dict[str, Any] = {"title": title}
+            if data_raw:
+                try:
+                    gs["data"] = json.loads(data_raw)
+                except json.JSONDecodeError:
+                    gs["data"] = data_raw
+            if points_based_raw:
+                gs["points_based"] = points_based_raw.lower() == "true"
+            if scaling_raw:
+                try:
+                    gs["scaling_factor"] = float(scaling_raw)
+                except ValueError:
+                    pass
+            standards.append(gs)
+    except (OSError, ET.ParseError):
+        pass
+    return standards
+
+
+def _parse_assignment_groups(xml_path: Path) -> list[dict[str, Any]]:
+    """Parse assignment_groups.xml into a list of assignment group dicts."""
+    if not xml_path.exists():
+        return []
+    groups: list[dict[str, Any]] = []
+    try:
+        tree = ET.parse(xml_path)
+        root = tree.getroot()
+        ns = _xml_ns(root)
+        ag_tag = f"{{{ns}}}assignmentGroup" if ns else "assignmentGroup"
+
+        for ag_el in root.findall(ag_tag):
+            g: dict[str, Any] = {"title": _el_text(ag_el, "title", ns)}
+            pos_raw = _el_text(ag_el, "position", ns)
+            if pos_raw.isdigit():
+                g["position"] = int(pos_raw)
+            wt_raw = _el_text(ag_el, "group_weight", ns)
+            if wt_raw:
+                try:
+                    g["group_weight"] = float(wt_raw)
+                except ValueError:
+                    pass
+
+            rules_el = ag_el.find(f"{{{ns}}}rules") if ns else ag_el.find("rules")
+            if rules_el is not None:
+                rules: list[dict[str, Any]] = []
+                rule_tag = f"{{{ns}}}rule" if ns else "rule"
+                for rule_el in rules_el.findall(rule_tag):
+                    rule: dict[str, Any] = {}
+                    dt = _el_text(rule_el, "drop_type", ns)
+                    if dt:
+                        rule["drop_type"] = dt
+                    dc_raw = _el_text(rule_el, "drop_count", ns)
+                    if dc_raw.isdigit():
+                        rule["drop_count"] = int(dc_raw)
+                    if rule:
+                        rules.append(rule)
+                if rules:
+                    g["rules"] = rules
+
+            groups.append(g)
+    except (OSError, ET.ParseError):
+        pass
+    return groups
+
+
+def _parse_late_policy(xml_path: Path) -> dict[str, Any]:
+    """Parse late_policy.xml into a flat dict."""
+    if not xml_path.exists():
+        return {}
+    try:
+        tree = ET.parse(xml_path)
+        root = tree.getroot()
+
+        result: dict[str, Any] = {}
+        for child in root:
+            tag = _strip_ns(child.tag)
+            text = (child.text or "").strip()
+            if not text:
+                continue
+            val = _coerce_xml_value(text)
+            if val is not None:
+                result[tag] = val
+        return result
+    except (OSError, ET.ParseError):
+        return {}
+
+
+def _parse_context(xml_path: Path) -> dict[str, Any]:
+    """Parse context.xml into a dict (canvas_domain, course_id, etc.)."""
+    if not xml_path.exists():
+        return {}
+    try:
+        tree = ET.parse(xml_path)
+        root = tree.getroot()
+
+        result: dict[str, Any] = {}
+        for child in root:
+            tag = _strip_ns(child.tag)
+            text = (child.text or "").strip()
+            if text:
+                try:
+                    result[tag] = int(text)
+                except ValueError:
+                    result[tag] = text
+        return result
+    except (OSError, ET.ParseError):
+        return {}
+
+
+def _parse_events(xml_path: Path) -> list[dict[str, Any]]:
+    """Parse events.xml into a list of event dicts."""
+    if not xml_path.exists():
+        return []
+    events: list[dict[str, Any]] = []
+    try:
+        tree = ET.parse(xml_path)
+        root = tree.getroot()
+        ns = _xml_ns(root)
+        ev_tag = f"{{{ns}}}event" if ns else "event"
+
+        for ev_el in root.findall(ev_tag):
+            all_day_raw = _el_text(ev_el, "all_day", ns)
+            all_day_date = _el_text(ev_el, "all_day_date", ns)
+            ev: dict[str, Any] = {
+                "title": _el_text(ev_el, "title", ns),
+                "description": _el_text(ev_el, "description", ns),
+                "start_at": _el_text(ev_el, "start_at", ns),
+                "end_at": _el_text(ev_el, "end_at", ns),
+                "all_day": all_day_raw.lower() == "true",
+            }
+            if all_day_date:
+                ev["all_day_date"] = all_day_date
+            events.append(ev)
+    except (OSError, ET.ParseError):
+        pass
+    return events
+
+
+def _write_course_settings_toml(
+    course_settings: dict[str, Any],
+    manifest_meta: dict[str, str],
+    grading_standards: list[dict[str, Any]],
+    assignment_groups: list[dict[str, Any]],
+    late_policy: dict[str, Any],
+    output_dir: Path,
+) -> None:
+    """Write course_settings.toml at the output root with all course-level settings."""
+    data: dict[str, Any] = {}
+
+    # Identity and key settings first (deterministic ordering)
+    for key in ("title", "course_code", "default_view", "license", "start_at", "conclude_at"):
+        if key in course_settings:
+            data[key] = course_settings[key]
+
+    # Manifest metadata (last_modified, copyright info)
+    for key, val in manifest_meta.items():
+        data[key] = val
+
+    # Remaining flat course settings, excluding nested sections handled below
+    skip = {"title", "course_code", "default_view", "license", "start_at", "conclude_at",
+            "default_post_policy"}
+    for key, val in course_settings.items():
+        if key not in data and key not in skip:
+            data[key] = val
+
+    # Inline nested sections
+    if late_policy:
+        data["late_policy"] = late_policy
+    if "default_post_policy" in course_settings:
+        data["default_post_policy"] = course_settings["default_post_policy"]
+
+    # Array-of-tables sections last (tomli_w emits [[...]] for list-of-dicts)
+    if grading_standards:
+        data["grading_standards"] = grading_standards
+    if assignment_groups:
+        data["assignment_groups"] = assignment_groups
+
+    (output_dir / "course_settings.toml").write_text(
+        tomli_w.dumps(data), encoding="utf-8"
+    )
+    print("Writing: course_settings.toml")
+
+
+def _write_canvas_toml(context: dict[str, Any], output_dir: Path) -> None:
+    """Write canvas.toml, using canvas_domain and course_id from context.xml when available."""
+    canvas_domain = context.get("canvas_domain", "")
+    course_id = context.get("course_id")
+
+    base_url = f"https://{canvas_domain}" if canvas_domain else "https://yourschool.instructure.com"
+    course_id_line = (
+        f"course_id = {course_id}\n" if course_id
+        else "course_id = 0  # TODO: set your course ID\n"
+    )
+
+    (output_dir / "canvas.toml").write_text(
+        f'base_url = "{base_url}"\n'
+        + course_id_line
+        + "\n"
+        "[auth]\n"
+        "# Prefer env var CANVAS_API_TOKEN; this is a fallback for local use only\n"
+        'api_token = ""\n',
+        encoding="utf-8",
+    )
+    print("Writing: canvas.toml")
+
+
+def _write_events_md(
+    events: list[dict[str, Any]],
+    temp_manifest: dict[str, TempEntry],
+    output_dir: Path,
+) -> None:
+    """Write course_settings/events.md from parsed course calendar events."""
+    cs_dir = output_dir / "course_settings"
+    cs_dir.mkdir(parents=True, exist_ok=True)
+
+    fm = _build_frontmatter({"title": "Course Events"})
+    lines: list[str] = [fm, ""]
+
+    for event in events:
+        title = event.get("title", "Untitled Event")
+        start_at = event.get("start_at", "")
+        all_day = event.get("all_day", False)
+        all_day_date = event.get("all_day_date", "")
+        description_html = event.get("description", "")
+
+        lines.append(f"## {title}")
+        lines.append("")
+        if all_day and all_day_date:
+            lines.append(f"**Date:** {all_day_date} (all day)")
+        elif start_at:
+            lines.append(f"**Date:** {start_at}")
+        lines.append("")
+
+        if description_html:
+            body_html = rewrite_imscc_links(
+                description_html, temp_manifest, "course_settings/events.md"
+            )
+            md = _html_to_markdown(body_html).strip()
+            if md:
+                lines.append(md)
+                lines.append("")
+
+    (cs_dir / "events.md").write_text("\n".join(lines), encoding="utf-8")
+    print("Writing: course_settings/events.md")
+
+
 def create_course_settings(
     imscc_dir: Path,
     temp_manifest: dict[str, TempEntry],
     output_dir: Path,
 ) -> None:
-    """Write course_settings/ folder: syllabus.md, course_settings.md, canvas.toml."""
+    """Write course_settings.toml (root), course_settings/syllabus.md, events.md, canvas.toml."""
     cs_dir = output_dir / "course_settings"
     cs_dir.mkdir(parents=True, exist_ok=True)
 
@@ -1029,49 +1381,24 @@ def create_course_settings(
         (cs_dir / "syllabus.md").write_text(fm + "\n" + markdown + "\n", encoding="utf-8")
         print("Converting page: course_settings/syllabus.md")
 
-    # course_settings.xml → course_settings/course_settings.md
-    cs_xml = imscc_dir / "course_settings" / "course_settings.xml"
-    cs_fm = _parse_course_settings_xml(cs_xml)
-    (cs_dir / "course_settings.md").write_text(
-        _build_frontmatter(cs_fm) + "\n", encoding="utf-8"
+    imscc_cs_dir = imscc_dir / "course_settings"
+    manifest_meta = _parse_manifest_metadata(imscc_dir / "imsmanifest.xml")
+    course_settings = _parse_course_settings_full(imscc_cs_dir / "course_settings.xml")
+    grading_standards = _parse_grading_standards(imscc_cs_dir / "grading_standards.xml")
+    assignment_groups = _parse_assignment_groups(imscc_cs_dir / "assignment_groups.xml")
+    late_policy = _parse_late_policy(imscc_cs_dir / "late_policy.xml")
+    context = _parse_context(imscc_cs_dir / "context.xml")
+    events = _parse_events(imscc_cs_dir / "events.xml")
+
+    _write_course_settings_toml(
+        course_settings, manifest_meta, grading_standards, assignment_groups, late_policy,
+        output_dir,
     )
-    print("Writing: course_settings/course_settings.md")
 
-    # canvas.toml skeleton in repo root
-    toml_path = output_dir / "canvas.toml"
-    toml_path.write_text(
-        "base_url = \"https://yourschool.instructure.com\"\n"
-        "course_id = 0  # TODO: set your course ID\n"
-        "\n"
-        "[auth]\n"
-        "# Prefer env var CANVAS_API_TOKEN; this is a fallback for local use only\n"
-        "api_token = \"\"\n",
-        encoding="utf-8",
-    )
-    print("Writing: canvas.toml")
+    if events:
+        _write_events_md(events, temp_manifest, output_dir)
 
-
-def _parse_course_settings_xml(xml_path: Path) -> dict[str, Any]:
-    """Extract key fields from course_settings.xml for course_settings.md frontmatter."""
-    if not xml_path.exists():
-        return {}
-    try:
-        tree = ET.parse(xml_path)
-        root = tree.getroot()
-        ns = _xml_ns(root)
-
-        def _text(tag: str) -> str:
-            el = root.find(f"{{{ns}}}{tag}") if ns else root.find(tag)
-            return (el.text or "").strip() if el is not None else ""
-
-        result: dict[str, Any] = {}
-        for field in ("title", "course_code", "start_at", "conclude_at", "default_view"):
-            val = _text(field)
-            if val:
-                result[field] = val
-        return result
-    except (OSError, ET.ParseError):
-        return {}
+    _write_canvas_toml(context, output_dir)
 
 
 # ---------------------------------------------------------------------------
