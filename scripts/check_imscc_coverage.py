@@ -2,10 +2,19 @@
 """
 Verify that content from an IMSCC file survived conversion to a Markdown repo.
 
-For each converted resource (pages, assignments, discussions) it picks a random
-plain-text fragment from the IMSCC source and checks whether that text appears
-anywhere in the output Markdown directory.  Quizzes and assets are skipped
-because their content transforms too differently to compare directly.
+Two complementary sampling modes are available:
+
+Per-resource mode (default)
+    For each converted resource (pages, assignments, discussions) picks a random
+    plain-text fragment from the IMSCC source and checks whether that text appears
+    anywhere in the output Markdown directory.  Quizzes and assets are skipped
+    because their content transforms too differently to compare directly.
+
+Pool mode (--pool-samples N)
+    Collects all readable text from every HTML and XML file in the IMSCC (no
+    stratification by resource type) and draws N random fragments from the
+    combined pool.  Useful for measuring overall coverage without being limited
+    to the categories the per-resource mode checks.
 
 Usage
 -----
@@ -22,6 +31,10 @@ Options
     --categories LIST   Comma-separated resource types to check.
                         Default: page,assignment,discussion,syllabus
                         Omit "syllabus" if the syllabus is just a file link.
+    --pool-samples N    Draw N random fragments from the entire IMSCC text pool
+                        (all HTML/XML files combined) and check each against the
+                        Markdown corpus.  Runs in addition to the per-resource
+                        check.  Default: 0 (disabled).
 
 Examples
 --------
@@ -33,13 +46,17 @@ Examples
     python scripts/check_imscc_coverage.py \\
         ./it-cs142-imscc-unzipped ./Test_Import --min-words 15
 
+    # Pool-based sampling: draw 50 random fragments from the whole IMSCC:
+    python scripts/check_imscc_coverage.py \\
+        course-export.imscc ./my-course-repo --pool-samples 50
+
     # Try a different random seed if you want a different sample:
     python scripts/check_imscc_coverage.py \\
         course-export.imscc ./my-course-repo --seed 7
 
 Exit codes
 ----------
-    0   All sampled fragments found.
+    0   All sampled fragments found (both modes).
     1   One or more fragments missing (printed to stdout).
     2   Argument / file error.
 
@@ -194,6 +211,48 @@ def _get_imscc_text(entry: TempEntry, imscc_dir: Path) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Pool sampling: collect all text across the entire IMSCC
+# ---------------------------------------------------------------------------
+
+_TEXT_EXTENSIONS = frozenset({".html", ".htm", ".xhtml", ".xml"})
+
+
+def _extract_xml_text_nodes(xml_str: str) -> str:
+    """Pull all text from XML text-nodes; HTML snippets inside nodes are stripped too."""
+    try:
+        root = ET.fromstring(xml_str)
+    except ET.ParseError:
+        return _strip_html(xml_str)
+    parts: list[str] = []
+    for el in root.iter():
+        for chunk in (el.text, el.tail):
+            if chunk:
+                stripped = _strip_html(chunk)
+                if stripped.strip():
+                    parts.append(stripped)
+    return " ".join(parts)
+
+
+def _collect_all_imscc_text(imscc_dir: Path) -> str:
+    """Return normalized plain text pooled from every HTML/XML file in the IMSCC."""
+    parts: list[str] = []
+    for path in sorted(imscc_dir.rglob("*")):
+        if not path.is_file() or path.suffix.lower() not in _TEXT_EXTENSIONS:
+            continue
+        try:
+            raw = path.read_text(encoding="utf-8", errors="replace")
+        except Exception:
+            continue
+        if path.suffix.lower() in (".html", ".htm", ".xhtml"):
+            chunk = _normalize(_strip_html(raw))
+        else:
+            chunk = _normalize(_extract_xml_text_nodes(raw))
+        if chunk:
+            parts.append(chunk)
+    return " ".join(parts)
+
+
+# ---------------------------------------------------------------------------
 # Fragment sampling
 # ---------------------------------------------------------------------------
 
@@ -265,6 +324,14 @@ def _parse_args() -> argparse.Namespace:
             f"(default: {','.join(sorted(DEFAULT_CATEGORIES))})"
         ),
     )
+    p.add_argument(
+        "--pool-samples", type=int, default=0, metavar="N",
+        help=(
+            "Draw N random fragments from the entire IMSCC text pool "
+            "(all HTML/XML files, no per-resource stratification). "
+            "Default: 0 (disabled)."
+        ),
+    )
     return p.parse_args()
 
 
@@ -324,17 +391,20 @@ def main() -> None:
                 print(f"  [MISS] {entry.category}: {entry.title!r}")
 
         # ------------------------------------------------------------------
-        # Summary
+        # Per-resource summary
         # ------------------------------------------------------------------
         total = len(checkable)
         print(f"\n{'='*60}")
-        print(f"Results: {len(results_found)} OK  |  "
+        print(f"Per-resource results: {len(results_found)} OK  |  "
               f"{len(results_missing)} MISSING  |  "
               f"{len(results_short)} skipped (too short)  |  "
               f"{total} total checked")
         print(f"{'='*60}")
 
+        has_failures = False
+
         if results_missing:
+            has_failures = True
             print(f"\n{len(results_missing)} MISSING fragment(s):\n")
             for entry, fragment, full_text in results_missing:
                 print(f"  Type:    {entry.category}")
@@ -343,6 +413,46 @@ def main() -> None:
                 print(f"  Output:  {entry.local_path or '(none)'}")
                 print(f"  Context: {_context_around(full_text, fragment)}")
                 print()
+
+        # ------------------------------------------------------------------
+        # Pool-based sampling (optional)
+        # ------------------------------------------------------------------
+        if args.pool_samples > 0:
+            print(f"\nCollecting full IMSCC text pool (all HTML/XML files)...")
+            pool_text = _collect_all_imscc_text(imscc_dir)
+            pool_word_count = len(pool_text.split())
+            print(f"Pool size: {pool_word_count:,} words")
+            print(f"\nDrawing {args.pool_samples} random fragments from pool...\n")
+
+            pool_found = 0
+            pool_missing_frags: list[str] = []
+
+            for i in range(args.pool_samples):
+                frag = _pick_fragment(pool_text, args.min_words, rng)
+                if frag is None:
+                    print(f"  Pool text too short to sample (need >= {args.min_words} words).")
+                    break
+                if frag in corpus:
+                    pool_found += 1
+                    print(f"  [ OK ] {frag!r}")
+                else:
+                    pool_missing_frags.append(frag)
+                    print(f"  [MISS] {frag!r}")
+
+            total_pool = pool_found + len(pool_missing_frags)
+            print(f"\n{'='*60}")
+            print(f"Pool results: {pool_found} OK  |  "
+                  f"{len(pool_missing_frags)} MISSING  |  "
+                  f"{total_pool} sampled")
+            print(f"{'='*60}")
+
+            if pool_missing_frags:
+                has_failures = True
+                print(f"\n{len(pool_missing_frags)} missing pool fragment(s):\n")
+                for frag in pool_missing_frags:
+                    print(f"  {frag!r}")
+
+        if has_failures:
             sys.exit(1)
 
     finally:
