@@ -14,9 +14,13 @@ git clone (local)
 // This tool:
 1. git pull                             (ensure local copy is up-to-date)
 2. load .canvas-manifest.toml           (into in-memory dict; single source of truth during the run)
+2.5. if course_settings.toml exists: apply course metadata to Canvas (name, dates, flags, grading
+     standards, assignment groups, late policy, post policy, rubrics)
+2.6. if course_settings/syllabus.md exists: convert body to HTML and set as course syllabus body
 3. upload assets/                       (see processing order below)
      → skip any file whose mtime ≤ manifest last_synced (unless --force-uploads)
-4. for each content folder in alphabetical order (excludes assets/, modules/, quizzes/, snippets/):
+4. for each content folder in alphabetical order (excludes assets/, course_settings/, modules/,
+   question_banks/, quizzes/, snippets/, hidden dirs):
      for each .md file in that folder, alphabetically:
        a. skip if mtime ≤ manifest last_synced (unless --force-uploads); print "Skipping (up-to-date)"
        b. snippet preprocessing: replace any [text](snippets/...) links with snippet file contents
@@ -33,8 +37,14 @@ git clone (local)
      → skip if quiz .md AND all question files have mtime ≤ manifest last_synced
      → parse quiz-level .md (frontmatter + ordered question list)
      → parse each question .md file
+     → run rewrite_links() on quiz description HTML and each question_text HTML (same as step 4d)
      → create or update quiz in Canvas (Classic Quizzes API)
      → delete all existing quiz questions, re-add in order
+     → update manifest dict and flush to disk
+4c. for each question bank in question_banks/ alphabetically:
+     → skip if bank .toml mtime ≤ manifest last_synced (unless --force-uploads)
+     → parse bank metadata .toml; parse each question .md in questions/
+     → create Canvas question bank and populate with questions
      → update manifest dict and flush to disk
 5. sync modules/ alphabetically         (all content IDs now guaranteed in manifest)
      → skip any module whose mtime ≤ manifest last_synced (unless --force-uploads)
@@ -42,7 +52,7 @@ git clone (local)
 
 **Processing order:**
 
-`assets/` is always processed first, `modules/` always last. `quizzes/` is processed between regular content folders and modules (after `pages/`, before `modules/`). All other content folders (`assignments/`, `discussions/`, `pages/`, etc.) are processed in alphabetical order, with files within each folder also sorted alphabetically. This makes console output predictable and easy to follow.
+Course settings and syllabus are applied first. Then `assets/`. Then regular content folders alphabetically. Then `quizzes/`. Then `question_banks/`. Finally `modules/`. All other content folders (`assignments/`, `discussions/`, `pages/`, etc.) are processed in alphabetical order, with files within each folder also sorted alphabetically. `course_settings/`, `question_banks/`, `quizzes/`, `snippets/`, and `assets/` are excluded from the regular content pass — each has its own dedicated phase.
 
 Asset traversal is depth-first with files before subdirectories, both sorted alphabetically:
 
@@ -321,7 +331,10 @@ published: true
 title: "Week 1 Problem Set"
 canvas_type: assignment      # optional if file is in assignments/
 points_possible: 50
-due_at: 2025-02-01T23:59:00-05:00
+due_at: "2025-02-01T23:59:00-05:00"
+lock_at: "2025-02-08T23:59:00-05:00"
+unlock_at: "2025-01-27T00:00:00-05:00"
+grading_type: "points"       # points | percent | letter_grade | gpa_scale | pass_fail
 submission_types: [online_upload]
 published: true
 ---
@@ -333,6 +346,20 @@ published: true
 ---
 title: "Introduce Yourself"
 require_initial_post: true
+published: true
+---
+```
+
+Graded discussions additionally accept these fields, which are passed to Canvas as nested assignment params:
+
+```yaml
+---
+title: "Week 1 Discussion"
+require_initial_post: true
+points_possible: 10
+due_at: "2025-02-01T23:59:00-05:00"
+lock_at: "2025-02-08T23:59:00-05:00"
+unlock_at: "2025-01-27T00:00:00-05:00"
 published: true
 ---
 ```
@@ -506,8 +533,23 @@ canvas_question_ids = {"questions/what-is-2-plus-2.md" = 111, "questions/explain
 - The quiz is re-synced if the quiz `.md` file **or any question file** has mtime newer than `last_synced`. A change to a single question triggers a full quiz re-sync.
 - On each sync, all existing Canvas questions are deleted and re-created in the order listed in the quiz `.md`. This keeps question order correct and avoids stale questions after edits.
 - Canvas module items reference the quiz by `canvas_id` and use module item type `"Quiz"`.
+- Quiz description HTML and question text HTML are passed through `rewrite_links()` before upload, so cross-links to other course content resolve to correct Canvas URLs.
 
 **Supported question types:** `multiple_choice_question`, `true_false_question`, `essay_question`, `multiple_response_question`, `fill_in_blank_question`, `pattern_match_question`. Other types emit a warning and are skipped.
+
+**Effectively required fields per question type** (missing them won't crash the upload, but the question will be ungradable in Canvas):
+
+| Question type | Field | Effect if missing |
+| --- | --- | --- |
+| `multiple_choice_question` | `correct` (1-based int) | No answer marked correct |
+| `multiple_choice_question` | `## Answers` section | No answer choices at all |
+| `true_false_question` | `correct` (bool) | Neither True nor False marked correct |
+| `multiple_response_question` | `correct` (list of 1-based ints) | No answers marked correct |
+| `multiple_response_question` | `## Answers` section | No answer choices at all |
+| `fill_in_blank_question` | `answers` (list of strings) | No accepted answers |
+| `pattern_match_question` | `answers` (list of patterns) | No accepted patterns |
+
+All other fields across all resource types (`title`, `published`, dates, points, etc.) have safe defaults — nothing will crash or be skipped if they are absent.
 
 ### Question bank file format
 
@@ -546,6 +588,31 @@ original_answer_ids: [8230, 5348, 7678, 5601]
 
 Note: quizzes that draw from question banks export their questions **inline** in the quiz's own QTI file. There is no "draw N from bank X" reference in the IMSCC output. Question banks and quizzes are independent exports. Deleted banks (`bank_state = "deleted"`) are still imported in deleted state to preserve round-trip fidelity.
 
+**Question bank manifest entry:** The manifest key is the bank `.toml` path. `canvas_type = "question_bank"`.
+
+### Course settings files
+
+These files are never uploaded as Canvas Pages. Each has a dedicated upload path:
+
+| File | Upload behaviour |
+| --- | --- |
+| `course_settings.toml` (repo root) | Applied via `course.update()` for flat metadata; dedicated API calls for grading standards, assignment groups, late policy, post policy, and rubrics |
+| `course_settings/syllabus.md` | Body converted to HTML and set as `course.syllabus_body` via `course.update()` |
+| `course_settings/events.md` | Not yet uploaded (future feature) |
+| `course_settings/rubrics.toml` | Each rubric created via `course.create_rubric()` if title not already present |
+| `course_settings/files_meta.toml` | Not yet uploaded (requires matching Canvas file IDs after asset upload) |
+
+**`course_settings.toml` upload detail:**
+
+The following sections are handled separately from the flat `course.update()` call:
+
+- `[[grading_standards]]` — each entry created via `course.create_grading_standard()` if title not already present; first standard's ID passed as `grading_standard_id` in the course update
+- `[[assignment_groups]]` — each entry created or updated via `course.create_assignment_group()` / `ag.edit()`, matched by name; processed in `position` order
+- `[late_policy]` — applied via `PATCH /api/v1/courses/:id/late_policy` (raw requester call, not wrapped in `canvasapi`)
+- `[default_post_policy]` — applied via `PUT /api/v1/courses/:id/post_policies` (raw requester call)
+
+Read-only or infrastructure fields (`storage_quota`, `root_account_uuid`, `image_identifier_ref`, `last_modified`, `copyright_restrictions`, `copyright_description`, and others) are present in the TOML for round-trip fidelity but are silently ignored by the uploader.
+
 ### Module file format
 
 Module files differ from content files: they don't have a body that becomes HTML. Instead, the frontmatter holds module attributes and the body is a Markdown list of links to local content files. The order of links defines the order of items in the Canvas module.
@@ -564,7 +631,18 @@ require_sequential_progress: false
 - [Week 1 Discussion](../discussions/week1-intro.md)
 ```
 
-The link text becomes the display title of the item within the module. The link target is a path relative to the module file, pointing to a local content file.
+The link text becomes the display title of the item within the module. The link target is either:
+
+- A relative path to a local content file (page, assignment, discussion, or quiz)
+- An absolute URL (`https://...`) — rendered as a Canvas ExternalUrl module item
+
+**External URL items** with a `target="_blank"` attribute (written as an HTML comment on the same line by the importer) open in a new tab in Canvas:
+
+```markdown
+- [Course Website](https://example.com) <!-- target="_blank" windowFeatures="width=800" -->
+```
+
+The `target` attribute is mapped to Canvas's `new_tab` boolean; `windowFeatures` is discarded (no Canvas equivalent). External URL items without a comment default to `new_tab: false`.
 
 **Section sub-headers** within a module (Canvas calls these `SubHeader` items) are represented as Markdown headings in the body:
 

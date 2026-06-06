@@ -23,6 +23,8 @@ def _parse_frontmatter(text: str) -> tuple[dict[str, Any], str]:
 _QUIZ_LINK_RE = re.compile(r"^\s*\d+\.\s+\[([^\]]+)\]\(([^)]+\.md)\)")
 _ANSWERS_HEADING_RE = re.compile(r"^##\s+Answers\s*$", re.MULTILINE)
 _ANSWER_ITEM_RE = re.compile(r"^\s*\d+\.\s+(.+)")
+_SECTION_HEADING_RE = re.compile(r"^##\s+(.+)$", re.MULTILINE)
+_SUBSECTION_HEADING_RE = re.compile(r"^###\s+(.+)$", re.MULTILINE)
 
 
 def parse_quiz_file(quiz_md: Path) -> tuple[dict[str, Any], str, list[Path]]:
@@ -53,11 +55,66 @@ def parse_quiz_file(quiz_md: Path) -> tuple[dict[str, Any], str, list[Path]]:
     return frontmatter, desc_html, question_files
 
 
+def _split_sections(body: str) -> dict[str, str]:
+    """Split body into named sections keyed by ## heading text (lowercased).
+
+    The implicit first section (before any ## heading) is stored as "".
+    """
+    sections: dict[str, str] = {}
+    parts = _SECTION_HEADING_RE.split(body)
+    # parts[0] = text before first ##, then alternating heading/content
+    sections[""] = parts[0]
+    for i in range(1, len(parts), 2):
+        heading = parts[i].strip().lower()
+        content = parts[i + 1] if i + 1 < len(parts) else ""
+        sections[heading] = content
+    return sections
+
+
+def _parse_feedback_section(feedback_body: str) -> dict[str, str]:
+    """Parse ### General/Correct/Incorrect subsections from a ## Feedback section."""
+    result: dict[str, str] = {}
+    parts = _SUBSECTION_HEADING_RE.split(feedback_body)
+    # parts[0] is text before first ###
+    for i in range(1, len(parts), 2):
+        subheading = parts[i].strip().lower()
+        content = (parts[i + 1] if i + 1 < len(parts) else "").strip()
+        if subheading == "general" and content:
+            result["neutral_comments"] = content
+        elif subheading == "correct" and content:
+            result["correct_comments"] = content
+        elif subheading == "incorrect" and content:
+            result["incorrect_comments"] = content
+    return result
+
+
+def _parse_answers_section(answers_text: str, correct, question_type: str) -> list[dict[str, Any]]:
+    """Parse numbered answer list into answer dicts for MCQ or multiple_response."""
+    answer_texts: list[str] = []
+    for line in answers_text.splitlines():
+        am = _ANSWER_ITEM_RE.match(line)
+        if am:
+            answer_texts.append(am.group(1).strip())
+
+    if question_type == "multiple_response_question":
+        correct_set = set(correct) if isinstance(correct, list) else set()
+        return [
+            {"text": text, "weight": 100 if (i + 1) in correct_set else 0}
+            for i, text in enumerate(answer_texts)
+        ]
+    # multiple_choice_question
+    return [
+        {"text": text, "weight": 100 if (i + 1) == correct else 0}
+        for i, text in enumerate(answer_texts)
+    ]
+
+
 def parse_question_file(q_path: Path) -> dict[str, Any]:
     """Parse a quiz question .md file.
 
     Returns a dict with: title, question_type, points_possible, question_text (HTML),
-    answers (list of {text, weight} for MCQ/T-F; empty for essay).
+    answers (list of {text, weight} for MCQ/T-F/multiple_response; empty for essay),
+    and optionally neutral_comments, correct_comments, incorrect_comments.
     rel_path is NOT set here — callers add it.
     """
     text = q_path.read_text(encoding="utf-8")
@@ -68,8 +125,13 @@ def parse_question_file(q_path: Path) -> dict[str, Any]:
     title = frontmatter.get("title", q_path.stem)
     correct = frontmatter.get("correct")
 
+    sections = _split_sections(body)
+    feedback_section = sections.get("feedback", "")
+    feedback = _parse_feedback_section(feedback_section) if feedback_section.strip() else {}
+
     if question_type == "true_false_question":
-        question_text_html = markdown_to_html(body.strip()) if body.strip() else ""
+        desc = sections.get("", "").strip()
+        question_text_html = markdown_to_html(desc) if desc else ""
         answers = [
             {"text": "True", "weight": 100 if correct is True else 0},
             {"text": "False", "weight": 100 if correct is False else 0},
@@ -80,43 +142,64 @@ def parse_question_file(q_path: Path) -> dict[str, Any]:
             "points_possible": points,
             "question_text": question_text_html,
             "answers": answers,
+            **feedback,
         }
 
-    if question_type == "multiple_choice_question":
-        m = _ANSWERS_HEADING_RE.search(body)
-        if m:
-            desc_part = body[: m.start()].strip()
-            answers_part = body[m.end():].strip()
-        else:
-            desc_part = body.strip()
-            answers_part = ""
-
-        question_text_html = markdown_to_html(desc_part) if desc_part else ""
-
-        answer_texts: list[str] = []
-        for line in answers_part.splitlines():
-            am = _ANSWER_ITEM_RE.match(line)
-            if am:
-                answer_texts.append(am.group(1).strip())
-
-        answers = [
-            {"text": text, "weight": 100 if (i + 1) == correct else 0}
-            for i, text in enumerate(answer_texts)
-        ]
+    if question_type in ("multiple_choice_question", "multiple_response_question"):
+        desc = sections.get("", "").strip()
+        question_text_html = markdown_to_html(desc) if desc else ""
+        answers_text = sections.get("answers", "")
+        answers = _parse_answers_section(answers_text, correct, question_type)
         return {
             "title": title,
             "question_type": question_type,
             "points_possible": points,
             "question_text": question_text_html,
             "answers": answers,
+            **feedback,
+        }
+
+    if question_type == "fill_in_blank_question":
+        desc = sections.get("", "").strip()
+        question_text_html = markdown_to_html(desc) if desc else ""
+        accepted = frontmatter.get("answers", [])
+        answers = [{"text": a, "weight": 100} for a in accepted]
+        return {
+            "title": title,
+            "question_type": "short_answer_question",
+            "points_possible": points,
+            "question_text": question_text_html,
+            "answers": answers,
+            **feedback,
+        }
+
+    if question_type == "pattern_match_question":
+        desc = sections.get("", "").strip()
+        question_text_html = markdown_to_html(desc) if desc else ""
+        patterns = frontmatter.get("answers", [])
+        answers = [{"text": patterns[0], "weight": 100}] if patterns else []
+        return {
+            "title": title,
+            "question_type": "short_answer_question",
+            "points_possible": points,
+            "question_text": question_text_html,
+            "answers": answers,
+            **feedback,
         }
 
     # essay_question or any other type — no structured answers
-    question_text_html = markdown_to_html(body.strip()) if body.strip() else ""
+    # §11: Sample Solution → neutral_comments
+    sample_solution = sections.get("sample solution", "").strip()
+    if sample_solution and "neutral_comments" not in feedback:
+        feedback["neutral_comments"] = sample_solution
+
+    desc = sections.get("", "").strip()
+    question_text_html = markdown_to_html(desc) if desc else ""
     return {
         "title": title,
         "question_type": question_type,
         "points_possible": points,
         "question_text": question_text_html,
         "answers": [],
+        **feedback,
     }

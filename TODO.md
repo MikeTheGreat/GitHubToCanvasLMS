@@ -46,14 +46,19 @@ To investigate: grep for a fragment in `it-cs142-imscc-unzipped` to find the sou
 file, then check whether the corresponding output file exists in `Test_Import` and
 whether the text is present there.
 
-## Quiz: link-rewriting in question/description HTML
+## Unimplemented upload paths from `course_settings/`
 
-Currently `_get_file_refs()` returns an empty set for `quizzes/` files, and `_sync_quiz()` uploads quiz description and question text HTML without running it through `rewrite_links()`. This means:
+These files are produced by the importer but have no upload path yet:
 
-- BFS (`-t`) never follows links embedded in quiz content.
-- Links like `<a href="../pages/intro.md">` inside a quiz description or question prompt are uploaded as-is and will be dead links in Canvas.
+- **`course_settings/events.md`** — Calendar events. Requires parsing `## Title` / `**Date:**` sections back into structured event data and calling `canvas.create_calendar_event()` per event. Complex (deduplication, update-vs-create). See UPLOADER_CHANGES.md §3.
+- **`course_settings/files_meta.toml`** — File visibility (`locked`, `hidden`, `display_name`, `unlock_at`) and folder visibility. Requires Canvas file IDs from the manifest (needs matching by `local_path` or `display_name`). Import-side fix also needed: `_write_files_meta_toml()` should write `local_path` alongside each file entry. See UPLOADER_CHANGES.md §16.
+- **Tab configuration** in `course_settings.toml` — `tab_configuration` JSON string. Call `tab.update(hidden=...)` per tab via `course.list_tabs()`. See UPLOADER_CHANGES.md §1f.
 
-The fix would be to call `rewrite_links()` on the converted description HTML and on each question's `question_text` HTML before upload, and to add quiz file ref extraction to `_get_file_refs()`. This is the same pattern used for pages/assignments/discussions. See the TODO comment in `sync.py:_get_file_refs`.
+## Quiz BFS traversal (`-t` with quizzes)
+
+`_get_file_refs()` returns an empty set for `quizzes/` files, so `-t` on a module that includes a quiz will not follow links embedded in quiz description or question HTML. The quiz itself is synced (including link rewriting), but BFS won't pre-upload unreferenced assets or pages that only appear inside quiz content.
+
+The fix would be to parse the quiz `.md` + question files for local `<a>`/`<img>` refs in `_get_file_refs()` and return them so BFS can follow them. This is lower priority since `rewrite_links()` already handles stub-creation for missing manifest entries at upload time.
 
 ## `--rebuild-manifest`: re-sync manifest from Canvas
 

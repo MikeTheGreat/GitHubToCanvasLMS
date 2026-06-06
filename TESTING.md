@@ -9,7 +9,7 @@ Test individual functions in isolation, with no network or Canvas dependency. Ea
 - **Snippet preprocessor** (`test_convert.py`): given Markdown text with `[text](../snippets/...)` links, assert the correct substitution; test nested-include error behaviour.
 - **Link rewriter** (`test_link_rewrite.py`): given an HTML fragment and a manifest dict, assert that `<img src>` and `<a href>` are rewritten to the correct Canvas URLs; test each link type (page, assignment, discussion, asset, quiz, external, anchor).
 - **Manifest** (`test_manifest.py`): TOML round-trips, flush-on-every-write behaviour, create-vs-update lookup logic, `needs_sync` timestamp comparisons.
-- **Quiz parsing** (`test_quiz.py`): quiz-level file parsing (frontmatter, question order, description), MCQ/essay/true-false question file parsing, answer weight assignment, correct-answer detection.
+- **Quiz parsing** (`test_quiz.py`): quiz-level file parsing (frontmatter, question order, description), MCQ/essay/true-false question file parsing, answer weight assignment, correct-answer detection. New question types: `multiple_response_question` (correct as list, multiple weights 100), `fill_in_blank_question` (mapped to `short_answer_question`, all answers weight 100), `pattern_match_question` (first pattern becomes sole answer). Feedback: `## Feedback` section with `### General/Correct/Incorrect` subsections → `neutral_comments`, `correct_comments`, `incorrect_comments` in returned dict. Essay `## Sample Solution` → `neutral_comments`. No feedback section → no comment keys in dict.
 - **IMSCC parsing** (`test_imscc_convert.py`): unit tests for each XML parser — `_parse_manifest_metadata`, `_parse_course_settings_full`, `_parse_grading_standards`, `_parse_assignment_groups`, `_parse_late_policy`, `_parse_context`, `_parse_events`, `_parse_rubrics`, `_parse_files_meta`; HTML body extraction; frontmatter rendering; `parse_qti_questions` with both Canvas-extended format (`question_type` labels) and IMS CC format (`cc_profile` labels).
 - **Processing order**: asset-first, module-last, alphabetical sorting of folders and files within folders.
 - **Frontmatter parsing**: all content types and their specific fields.
@@ -24,15 +24,21 @@ Mock the `canvasapi` library with `pytest-mock`. Run the full sync pipeline agai
 - Interrupted sync: pre-populated partial manifest causes only the remaining items to be synced
 - Missing local file: tool prints an error, removes the tag, and continues (no stub, no crash)
 - Module sync: module items created in the correct order; SubHeader items interleaved correctly
+- **ExternalUrl module items**: absolute URLs produce `ExternalUrl` type items; `target="_blank"` HTML comment sets `new_tab: true`; missing comment defaults to `new_tab: false`; local and external links can coexist
 - Timestamp skip: a file whose mtime is older than `last_synced` is skipped; `--force-uploads` overrides
 - Quiz sync: quiz created/updated; questions deleted and re-created in order; skipped when all files up-to-date; re-synced when any question file is newer than `last_synced`; quiz module items use type `"Quiz"`
+- **Assignment extended fields**: `lock_at`, `unlock_at`, `grading_type` from frontmatter reach `canvasapi` (fixture `assignments/week1.md` carries these fields)
+- **Graded discussion fields**: `points_possible`, `due_at`, `lock_at`, `unlock_at` passed to `create_discussion_topic()` as `assignment={...}` nested dict (fixture `discussions/week1-intro.md` carries these fields)
+- **Syllabus sync**: `course_settings/syllabus.md` body converted to HTML and passed to `course.update(course={"syllabus_body": ...})`; absent file → no update called
+- **Course metadata sync**: flat fields from `course_settings.toml` reach `course.update(course={...})`; absent file → no crash
+- **`course_settings/` folder isolation**: files inside `course_settings/` are never uploaded as Canvas Pages
 - `--target-recursively`: BFS from a module reaches all referenced content; module deferred until content is in manifest
 - `--single-target`: only specified files processed; no BFS
 - Combined `-t` + `-s`: `-t` uploads first, `-s` skips anything already uploaded via `needs_sync`
 
 ## Layer 3 — Test fixtures (`tests/fixtures/`)
 
-A minimal but complete course repo committed directly into this tool repo. It covers every case the tests need — cross-links between content types, snippet includes, nested assets, modules with SubHeaders, files with every frontmatter variant. Fixtures are plain files; no special tooling needed to use them.
+A minimal but complete course repo committed directly into this tool repo. It covers every case the tests need — cross-links between content types, snippet includes, nested assets, modules with SubHeaders, files with every frontmatter variant. `assignments/week1.md` includes `lock_at`, `unlock_at`, and `grading_type`. `discussions/week1-intro.md` includes `points_possible`, `due_at`, `lock_at`, and `unlock_at` for graded discussion testing. Fixtures are plain files; no special tooling needed to use them.
 
 The IMSCC fixture (`tests/fixtures/imscc/`) is a synthetic `.imscc`-style directory covering all content types. It includes:
 

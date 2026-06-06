@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import re
+import tomllib
 from collections import deque
 from datetime import datetime, timezone
 from pathlib import Path
@@ -30,6 +31,13 @@ def parse_frontmatter(text: str) -> tuple[dict[str, Any], str]:
 
 _MODULE_LINK_RE = re.compile(r"^\s*-\s+\[([^\]]+)\]\(([^)]+)\)")
 _MODULE_HEADER_RE = re.compile(r"^#{1,6}\s+(.+)")
+_EXTURL_ATTRS_RE = re.compile(r"<!--(.*?)-->")
+_EXTURL_ATTR_KV_RE = re.compile(r'(\w+)=["\']([^"\']*)["\']')
+
+
+def _parse_exturl_attrs(comment_text: str) -> dict[str, str]:
+    """Parse key="value" pairs from an HTML comment string."""
+    return {m.group(1): m.group(2) for m in _EXTURL_ATTR_KV_RE.finditer(comment_text)}
 
 
 def parse_module_body(body: str, module_file: Path, course_root: Path) -> list[dict[str, Any]]:
@@ -39,9 +47,16 @@ def parse_module_body(body: str, module_file: Path, course_root: Path) -> list[d
         link_m = _MODULE_LINK_RE.match(line)
         if link_m:
             title, href = link_m.group(1), link_m.group(2)
-            resolved = (module_file.parent / href).resolve()
-            local_path = resolved.relative_to(course_root.resolve()).as_posix()
-            items.append({"type": "content", "title": title, "local_path": local_path})
+            # Detect absolute URLs → ExternalUrl item
+            if href.startswith("http://") or href.startswith("https://"):
+                attrs_m = _EXTURL_ATTRS_RE.search(line)
+                attrs = _parse_exturl_attrs(attrs_m.group(1)) if attrs_m else {}
+                new_tab = attrs.get("target", "") in ("_blank", "_new")
+                items.append({"type": "ExternalUrl", "title": title, "url": href, "new_tab": new_tab})
+            else:
+                resolved = (module_file.parent / href).resolve()
+                local_path = resolved.relative_to(course_root.resolve()).as_posix()
+                items.append({"type": "content", "title": title, "local_path": local_path})
             continue
         header_m = _MODULE_HEADER_RE.match(line)
         if header_m:
@@ -76,6 +91,69 @@ def _canvas_is_newer(
     return False
 
 
+def sync_syllabus(course, repo_path: Path, manifest: dict, course_id: int) -> None:
+    """Upload course_settings/syllabus.md as the Canvas course syllabus body."""
+    syllabus_md = repo_path / "course_settings" / "syllabus.md"
+    if not syllabus_md.exists():
+        return
+    print("Syncing syllabus...")
+    frontmatter, body = parse_frontmatter(syllabus_md.read_text())
+    html = markdown_to_html(body.strip()) if body.strip() else ""
+    # Stub creator is not needed for the syllabus; pass a no-op
+    html = rewrite_links(html, syllabus_md, repo_path, manifest, course_id, lambda *_: {})
+    course.update(course={"syllabus_body": html})
+
+
+def sync_course_settings(course, repo_path: Path, manifest: dict) -> None:
+    """Sync course_settings.toml: metadata, grading standards, assignment groups, policies, rubrics."""
+    settings_path = repo_path / "course_settings.toml"
+    if not settings_path.exists():
+        return
+    print("Syncing course settings...")
+    with settings_path.open("rb") as fh:
+        settings = tomllib.load(fh)
+
+    grading_standards = settings.get("grading_standards", [])
+    assignment_groups = settings.get("assignment_groups", [])
+    late_policy = settings.get("late_policy", {})
+    default_post_policy = settings.get("default_post_policy", {})
+
+    # §1c: grading standards (needed before §1a so we can set grading_standard_id)
+    gs_id = capi.sync_grading_standards(course, grading_standards)
+
+    # §1a: core course metadata
+    capi.update_course_metadata(course, settings, grading_standard_id=gs_id)
+
+    # §1d: assignment groups
+    capi.sync_assignment_groups(course, assignment_groups)
+
+    # §1e: late policy
+    if late_policy:
+        try:
+            capi.update_late_policy(course, late_policy)
+        except Exception as exc:
+            print(f"  WARNING: late policy update failed: {exc}")
+
+    # §1b: default post policy
+    if "post_manually" in default_post_policy:
+        try:
+            capi.update_post_policy(course, default_post_policy["post_manually"])
+        except Exception as exc:
+            print(f"  WARNING: post policy update failed: {exc}")
+
+    # §15: rubrics
+    rubrics_path = repo_path / "course_settings" / "rubrics.toml"
+    if rubrics_path.exists():
+        with rubrics_path.open("rb") as fh:
+            rubrics_data = tomllib.load(fh)
+        rubrics = rubrics_data.get("rubrics", [])
+        if rubrics:
+            try:
+                capi.sync_rubrics(course, rubrics)
+            except Exception as exc:
+                print(f"  WARNING: rubrics sync failed: {exc}")
+
+
 def run_sync(
     config: Config,
     repo_path: Path,
@@ -89,6 +167,12 @@ def run_sync(
     snippets_dir = repo_path / "snippets"
     newer_on_canvas: list[str] = []
 
+    # 0. Course settings (metadata, grading standards, assignment groups, policies, rubrics)
+    sync_course_settings(course, repo_path, manifest)
+
+    # 0.5. Syllabus
+    sync_syllabus(course, repo_path, manifest, config.course_id)
+
     # 1. Assets (depth-first, files before subdirs, alphabetical)
     assets_dir = repo_path / "assets"
     if assets_dir.exists():
@@ -97,8 +181,8 @@ def run_sync(
             force_uploads, force_overwrite, newer_on_canvas,
         )
 
-    # 2. Content folders (alphabetical, excl. assets, modules, quizzes, snippets, hidden)
-    skip = {"assets", "modules", "quizzes", "snippets"}
+    # 2. Content folders (alphabetical, excl. assets, modules, quizzes, snippets, course_settings, hidden)
+    skip = {"assets", "modules", "quizzes", "snippets", "course_settings", "question_banks"}
     content_dirs = sorted(
         d for d in repo_path.iterdir()
         if d.is_dir() and not d.name.startswith(".") and d.name not in skip
@@ -118,8 +202,11 @@ def run_sync(
             if quiz_md.exists():
                 _sync_quiz(
                     course, quiz_folder, quiz_md, repo_path, manifest, manifest_path,
-                    force_uploads, force_overwrite, newer_on_canvas,
+                    config.course_id, force_uploads, force_overwrite, newer_on_canvas,
                 )
+
+    # 2.6. Question banks
+    _sync_question_banks(course, repo_path, manifest, manifest_path, force_uploads)
 
     # 3. Modules (alphabetical)
     modules_dir = repo_path / "modules"
@@ -224,7 +311,8 @@ def _sync_content_file(
     elif canvas_type == "assignment":
         canvas_id = existing["canvas_id"] if existing else None
         extra: dict[str, Any] = {}
-        for key in ("points_possible", "due_at", "submission_types"):
+        for key in ("points_possible", "due_at", "lock_at", "unlock_at",
+                    "submission_types", "grading_type"):
             if key in frontmatter:
                 extra[key] = frontmatter[key]
         entry = capi.create_or_update_assignment(
@@ -236,6 +324,10 @@ def _sync_content_file(
         extra = {}
         if "require_initial_post" in frontmatter:
             extra["require_initial_post"] = frontmatter["require_initial_post"]
+        grading_keys = ("points_possible", "due_at", "lock_at", "unlock_at")
+        grading_params = {k: frontmatter[k] for k in grading_keys if k in frontmatter}
+        if grading_params:
+            extra["assignment"] = grading_params
         entry = capi.create_or_update_discussion(
             course, canvas_id, title, html, published=published, **extra
         )
@@ -282,7 +374,7 @@ def _sync_module(
     canvas_item_ids: dict[str, int] = {}
     for item in items:
         item_id = capi.add_module_item(module, item, manifest)
-        if item["type"] == "content":
+        if item["type"] == "content" and item_id is not None:
             canvas_item_ids[item["local_path"]] = item_id
 
     manifest_lib.record(
@@ -322,6 +414,7 @@ def _sync_quiz(
     repo_root: Path,
     manifest: manifest_lib.ManifestDict,
     manifest_path: Path,
+    config_course_id: int = 0,
     force_uploads: bool = False,
     force_overwrite: bool = False,
     newer_on_canvas: list[str] | None = None,
@@ -357,6 +450,22 @@ def _sync_quiz(
         if key in frontmatter:
             quiz_kwargs[key] = frontmatter[key]
 
+    def _stub_creator(ref_local_path: str, ref_canvas_type: str) -> dict[str, Any]:
+        title_stub = Path(ref_local_path).stem.replace("-", " ").replace("_", " ").title()
+        print(f"  Stub-creating: {ref_local_path} (referenced from quiz)")
+        entry = capi.create_stub(course, ref_canvas_type, title_stub)
+        extra = {k: v for k, v in entry.items() if k not in ("canvas_id", "canvas_type")}
+        manifest_lib.record(
+            manifest, manifest_path, ref_local_path,
+            entry["canvas_id"], ref_canvas_type, extra=extra or None,
+        )
+        return entry
+
+    # §7: rewrite links in quiz description
+    if desc_html:
+        desc_html = rewrite_links(desc_html, quiz_md, repo_root, manifest,
+                                  config_course_id, _stub_creator)
+
     questions: list[dict[str, Any]] = []
     for q_path in question_paths:
         if not q_path.exists():
@@ -364,6 +473,12 @@ def _sync_quiz(
             continue
         rel_path = q_path.relative_to(quiz_folder).as_posix()
         q_data = parse_question_file(q_path)
+        # §7: rewrite links in question text
+        if q_data.get("question_text"):
+            q_data["question_text"] = rewrite_links(
+                q_data["question_text"], q_path, repo_root, manifest,
+                config_course_id, _stub_creator,
+            )
         q_data["rel_path"] = rel_path
         questions.append(q_data)
 
@@ -380,6 +495,40 @@ def _sync_quiz(
         manifest, manifest_path, local_key,
         result["canvas_id"], "quiz", extra={"canvas_question_ids": q_id_map},
     )
+
+
+def _sync_question_banks(
+    course,
+    repo_root: Path,
+    manifest: manifest_lib.ManifestDict,
+    manifest_path: Path,
+    force_uploads: bool = False,
+) -> None:
+    """Sync all question banks from question_banks/ to Canvas."""
+    banks_dir = repo_root / "question_banks"
+    if not banks_dir.exists():
+        return
+    for bank_folder in sorted(d for d in banks_dir.iterdir() if d.is_dir()):
+        toml_path = bank_folder / f"{bank_folder.name}.toml"
+        if not toml_path.exists():
+            continue
+        local_key = toml_path.relative_to(repo_root).as_posix()
+        if not force_uploads and not manifest_lib.needs_sync(manifest, local_key, toml_path, False):
+            print(f"Skipping (up-to-date): {local_key}")
+            continue
+        with toml_path.open("rb") as fh:
+            bank_meta = tomllib.load(fh)
+        bank_title = bank_meta.get("bank_title", bank_folder.name)
+        questions_dir = bank_folder / "questions"
+        questions: list[dict[str, Any]] = []
+        if questions_dir.exists():
+            for q_path in sorted(questions_dir.glob("*.md")):
+                q_data = parse_question_file(q_path)
+                q_data["rel_path"] = q_path.relative_to(bank_folder).as_posix()
+                questions.append(q_data)
+        print(f"  Uploading question bank: {local_key}")
+        canvas_id = capi.sync_question_bank(course, bank_title, questions)
+        manifest_lib.record(manifest, manifest_path, local_key, canvas_id, "question_bank")
 
 
 def _get_file_refs(
@@ -479,7 +628,7 @@ def run_targeted_sync(
             quiz_folder = file_path.parent
             _sync_quiz(
                 course, quiz_folder, file_path, repo_path, manifest, manifest_path,
-                force_uploads, force_overwrite, newer_on_canvas,
+                config.course_id, force_uploads, force_overwrite, newer_on_canvas,
             )
         else:
             _sync_content_file(

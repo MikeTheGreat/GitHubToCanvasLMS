@@ -864,3 +864,343 @@ def test_single_target_skipped_when_t_already_uploaded_it(mock_course, course_ro
     mock_course.create_page.assert_called_once()
     # Module synced once (deferred by BFS)
     mock_course.create_module.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# parse_module_body — ExternalUrl items
+# ---------------------------------------------------------------------------
+
+
+def test_parse_module_body_external_url(tmp_path: Path) -> None:
+    """Absolute URLs in module body produce ExternalUrl items."""
+    course_root = tmp_path / "course"
+    course_root.mkdir()
+    (course_root / "modules").mkdir()
+    module_file = course_root / "modules" / "week-1.md"
+    body = "- [Canvas Site](https://canvas.example.com)\n"
+    items = parse_module_body(body, module_file, course_root)
+    assert len(items) == 1
+    assert items[0]["type"] == "ExternalUrl"
+    assert items[0]["url"] == "https://canvas.example.com"
+    assert items[0]["title"] == "Canvas Site"
+    assert items[0]["new_tab"] is False
+
+
+def test_parse_module_body_external_url_new_tab(tmp_path: Path) -> None:
+    """target='_blank' in HTML comment sets new_tab=True."""
+    course_root = tmp_path / "course"
+    course_root.mkdir()
+    (course_root / "modules").mkdir()
+    module_file = course_root / "modules" / "week-1.md"
+    body = '- [Resource](https://example.com) <!-- target="_blank" windowFeatures="width=800" -->\n'
+    items = parse_module_body(body, module_file, course_root)
+    assert items[0]["type"] == "ExternalUrl"
+    assert items[0]["new_tab"] is True
+
+
+def test_parse_module_body_external_url_no_comment_new_tab_false(tmp_path: Path) -> None:
+    """ExternalUrl items without a target comment have new_tab=False."""
+    course_root = tmp_path / "course"
+    course_root.mkdir()
+    (course_root / "modules").mkdir()
+    module_file = course_root / "modules" / "week-1.md"
+    body = "- [Link](https://example.com)\n"
+    items = parse_module_body(body, module_file, course_root)
+    assert items[0]["new_tab"] is False
+
+
+def test_parse_module_body_mixed_content_and_external(tmp_path: Path) -> None:
+    """External URL and local content links can coexist in one module."""
+    course_root = tmp_path / "course"
+    (course_root / "modules").mkdir(parents=True)
+    module_file = course_root / "modules" / "m.md"
+    body = (
+        "- [Local Page](../pages/intro.md)\n"
+        "- [External](https://example.com)\n"
+    )
+    items = parse_module_body(body, module_file, course_root)
+    assert items[0]["type"] == "content"
+    assert items[0]["local_path"] == "pages/intro.md"
+    assert items[1]["type"] == "ExternalUrl"
+
+
+# ---------------------------------------------------------------------------
+# Scenario 10: Assignment extended fields — lock_at, unlock_at, grading_type
+# ---------------------------------------------------------------------------
+
+
+def test_assignment_lock_at_unlock_at_grading_type_passed_to_canvas(
+    mock_course, course_root, mocker
+) -> None:
+    """lock_at, unlock_at, grading_type from assignment frontmatter reach canvasapi."""
+    mocker.patch("github_to_canvas.manifest.flush")
+    _setup_first_sync_mocks(mock_course)
+
+    run_sync(_config(), course_root)
+
+    call_kwargs = mock_course.create_assignment.call_args[1]["assignment"]
+    assert "lock_at" in call_kwargs
+    assert "unlock_at" in call_kwargs
+    assert call_kwargs["grading_type"] == "points"
+
+
+# ---------------------------------------------------------------------------
+# Scenario 11: Graded discussion fields passed as nested assignment params
+# ---------------------------------------------------------------------------
+
+
+def test_graded_discussion_fields_passed_as_assignment_dict(
+    mock_course, course_root, mocker
+) -> None:
+    """points_possible, due_at, lock_at, unlock_at passed as assignment= dict for discussions."""
+    mocker.patch("github_to_canvas.manifest.flush")
+    _setup_first_sync_mocks(mock_course)
+
+    run_sync(_config(), course_root)
+
+    call_kwargs = mock_course.create_discussion_topic.call_args[1]
+    assert "assignment" in call_kwargs
+    assignment_params = call_kwargs["assignment"]
+    assert assignment_params["points_possible"] == 10
+    assert "due_at" in assignment_params
+    assert "lock_at" in assignment_params
+    assert "unlock_at" in assignment_params
+
+
+# ---------------------------------------------------------------------------
+# Scenario 12: Syllabus sync — course_settings/syllabus.md → course.update()
+# ---------------------------------------------------------------------------
+
+
+def _make_course_with_syllabus(tmp_path: Path) -> Path:
+    """Minimal course repo with a syllabus file."""
+    root = tmp_path / "course"
+    cs_dir = root / "course_settings"
+    cs_dir.mkdir(parents=True)
+    (cs_dir / "syllabus.md").write_text(
+        "---\ntitle: Syllabus\npublished: true\n---\n\n"
+        "Welcome to the course.\n"
+    )
+    return root
+
+
+def test_syllabus_synced_calls_course_update(mock_course, mocker, tmp_path) -> None:
+    """sync_syllabus converts syllabus.md to HTML and calls course.update(syllabus_body=...)."""
+    mocker.patch("github_to_canvas.manifest.flush")
+    root = _make_course_with_syllabus(tmp_path)
+
+    run_sync(_config(), root)
+
+    update_calls = mock_course.update.call_args_list
+    syllabus_calls = [c for c in update_calls if "syllabus_body" in c[1].get("course", {})]
+    assert len(syllabus_calls) == 1
+    body_html = syllabus_calls[0][1]["course"]["syllabus_body"]
+    assert "Welcome to the course" in body_html
+
+
+def test_syllabus_missing_does_not_crash(mock_course, mocker, tmp_path) -> None:
+    """If course_settings/syllabus.md is absent, sync proceeds without error."""
+    mocker.patch("github_to_canvas.manifest.flush")
+    root = tmp_path / "course"
+    root.mkdir()
+
+    run_sync(_config(), root)  # should not raise
+
+    # No syllabus_body update when file is missing
+    for c in mock_course.update.call_args_list:
+        assert "syllabus_body" not in c[1].get("course", {})
+
+
+# ---------------------------------------------------------------------------
+# Scenario 13: Course metadata sync — course_settings.toml → course.update()
+# ---------------------------------------------------------------------------
+
+
+def _make_course_with_settings(tmp_path: Path) -> Path:
+    """Minimal course repo with a course_settings.toml."""
+    root = tmp_path / "course"
+    root.mkdir()
+    (root / "course_settings.toml").write_text(
+        'title = "Intro to CS"\n'
+        'course_code = "CS101"\n'
+        'default_view = "modules"\n'
+    )
+    return root
+
+
+def test_course_metadata_synced_calls_course_update(mock_course, mocker, tmp_path) -> None:
+    """course_settings.toml fields reach course.update(course={...})."""
+    mocker.patch("github_to_canvas.manifest.flush")
+    root = _make_course_with_settings(tmp_path)
+
+    run_sync(_config(), root)
+
+    update_calls = mock_course.update.call_args_list
+    meta_calls = [c for c in update_calls if "name" in c[1].get("course", {})]
+    assert len(meta_calls) == 1
+    params = meta_calls[0][1]["course"]
+    assert params["name"] == "Intro to CS"
+    assert params["course_code"] == "CS101"
+    assert params["default_view"] == "modules"
+
+
+def test_course_settings_missing_does_not_crash(mock_course, mocker, tmp_path) -> None:
+    """If course_settings.toml is absent, sync proceeds without error."""
+    mocker.patch("github_to_canvas.manifest.flush")
+    root = tmp_path / "course"
+    root.mkdir()
+
+    run_sync(_config(), root)  # should not raise
+
+
+# ---------------------------------------------------------------------------
+# Scenario 14: course_settings/ folder not processed as Canvas Pages
+# ---------------------------------------------------------------------------
+
+
+def test_course_settings_folder_not_synced_as_page(mock_course, mocker, tmp_path) -> None:
+    """Files inside course_settings/ are not uploaded as Canvas Pages."""
+    mocker.patch("github_to_canvas.manifest.flush")
+    root = tmp_path / "course"
+    cs_dir = root / "course_settings"
+    cs_dir.mkdir(parents=True)
+    (cs_dir / "syllabus.md").write_text(
+        "---\ntitle: Syllabus\npublished: true\n---\n\nBody.\n"
+    )
+    (cs_dir / "events.md").write_text(
+        "---\ntitle: Events\n---\n\n## An Event\n\n**Date:** 2025-09-01\n"
+    )
+    # Provide a real page so create_page won't be called for course_settings files
+    mock_course.update = MagicMock()
+
+    run_sync(_config(), root)
+
+    # No page should be created for course_settings/ content
+    mock_course.create_page.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Scenario 15: ExternalUrl module item created via add_module_item
+# ---------------------------------------------------------------------------
+
+
+def test_module_external_url_item_created(mock_course, mocker, tmp_path) -> None:
+    """ExternalUrl items in module body result in ExternalUrl module item calls."""
+    mocker.patch("github_to_canvas.manifest.flush")
+    root = tmp_path / "course"
+    (root / "modules").mkdir(parents=True)
+    (root / "modules" / "m.md").write_text(
+        "---\ntitle: Module\npublished: true\n---\n\n"
+        '- [External Resource](https://example.com) <!-- target="_blank" -->\n'
+    )
+    module = _mock_module(66666)
+    mock_course.create_module.return_value = module
+    module.create_module_item.return_value = _mock_item(201)
+
+    run_sync(_config(), root)
+
+    module.create_module_item.assert_called_once()
+    item_call = module.create_module_item.call_args[1]["module_item"]
+    assert item_call["type"] == "ExternalUrl"
+    assert item_call["external_url"] == "https://example.com"
+    assert item_call["new_tab"] is True
+
+
+# ---------------------------------------------------------------------------
+# Scenario 16: Graceful handling of missing optional fields
+# ---------------------------------------------------------------------------
+
+
+def test_module_item_missing_from_manifest_warns_and_skips(
+    mock_course, mocker, tmp_path, capsys
+) -> None:
+    """A module referencing a non-existent file warns and skips that item without crashing.
+
+    The module .md links to pages/ghost.md, which is never created in the repo.
+    That file is never synced, so it never appears in the manifest.  When the module
+    sync runs, add_module_item should print a WARNING and skip the item rather than
+    raising a KeyError.
+    """
+    mocker.patch("github_to_canvas.manifest.flush")
+    root = tmp_path / "course"
+    (root / "modules").mkdir(parents=True)
+    # pages/ghost.md is referenced but NEVER created — it won't be in the manifest
+    (root / "modules" / "m.md").write_text(
+        "---\ntitle: Module\n---\n\n"
+        "- [Ghost Page](../pages/ghost.md)\n"
+    )
+    module = _mock_module(66666)
+    mock_course.create_module.return_value = module
+
+    run_sync(_config(), root)
+
+    out = capsys.readouterr().out
+    assert "WARNING" in out
+    assert "ghost.md" in out
+    # Module itself is still created; the missing item is skipped
+    mock_course.create_module.assert_called_once()
+    module.create_module_item.assert_not_called()
+
+
+def test_assignment_without_optional_fields_still_uploads(
+    mock_course, mocker, tmp_path
+) -> None:
+    """An assignment with only title and body (no dates, points, etc.) uploads successfully."""
+    mocker.patch("github_to_canvas.manifest.flush")
+    root = tmp_path / "course"
+    (root / "assignments").mkdir(parents=True)
+    (root / "assignments" / "simple.md").write_text(
+        "---\ntitle: Simple Assignment\n---\n\nDo the work.\n"
+    )
+    mock_course.create_assignment.return_value = _mock_assignment(10001)
+
+    run_sync(_config(), root)
+
+    mock_course.create_assignment.assert_called_once()
+    call_kwargs = mock_course.create_assignment.call_args[1]["assignment"]
+    assert call_kwargs["name"] == "Simple Assignment"
+    assert "due_at" not in call_kwargs
+    assert "lock_at" not in call_kwargs
+    assert "unlock_at" not in call_kwargs
+    assert "points_possible" not in call_kwargs
+    assert "submission_types" not in call_kwargs
+    assert "grading_type" not in call_kwargs
+
+
+def test_discussion_without_optional_fields_still_uploads(
+    mock_course, mocker, tmp_path
+) -> None:
+    """A discussion with only title and body (no grading params) uploads successfully."""
+    mocker.patch("github_to_canvas.manifest.flush")
+    root = tmp_path / "course"
+    (root / "discussions").mkdir(parents=True)
+    (root / "discussions" / "intro.md").write_text(
+        "---\ntitle: Intro Discussion\n---\n\nTell us about yourself.\n"
+    )
+    mock_course.create_discussion_topic.return_value = _mock_discussion(20001)
+
+    run_sync(_config(), root)
+
+    mock_course.create_discussion_topic.assert_called_once()
+    call_kwargs = mock_course.create_discussion_topic.call_args[1]
+    assert call_kwargs["title"] == "Intro Discussion"
+    assert "assignment" not in call_kwargs
+    assert "require_initial_post" not in call_kwargs
+
+
+def test_content_file_without_frontmatter_still_uploads(
+    mock_course, mocker, tmp_path
+) -> None:
+    """A page with no frontmatter at all is uploaded using the filename as title."""
+    mocker.patch("github_to_canvas.manifest.flush")
+    root = tmp_path / "course"
+    (root / "pages").mkdir(parents=True)
+    (root / "pages" / "my-notes.md").write_text("# Notes\n\nSome content here.\n")
+    mock_course.create_page.return_value = _mock_page(30001, "my-notes")
+
+    run_sync(_config(), root)
+
+    mock_course.create_page.assert_called_once()
+    call_kwargs = mock_course.create_page.call_args[1]["wiki_page"]
+    assert call_kwargs["title"] == "my-notes"
+    assert "Notes" in call_kwargs["body"]

@@ -27,10 +27,13 @@ course-repo/
 
 On each run the tool:
 
-1. Uploads everything in `assets/` to Canvas Files
-2. Converts each `.md` file to HTML via Pandoc and uploads it to Canvas
-3. Rewrites cross-links between files to the correct Canvas URLs
-4. Syncs `modules/` last (after all content has Canvas IDs)
+1. Applies `course_settings.toml` (name, dates, grading standards, assignment groups, policies)
+2. Uploads `course_settings/syllabus.md` as the course syllabus body
+3. Uploads everything in `assets/` to Canvas Files
+4. Converts each `.md` in `pages/`, `assignments/`, `discussions/` to HTML via Pandoc and uploads
+5. Syncs `quizzes/` (Classic Quizzes API) and `question_banks/`
+6. Rewrites cross-links between files to correct Canvas URLs
+7. Syncs `modules/` last (after all content has Canvas IDs)
 
 Files are skipped if their local modification time is not newer than the `last_synced` timestamp in the manifest — so unchanged files cost nothing on repeat runs.
 
@@ -255,6 +258,9 @@ Welcome to the course. See [Week 1 Assignment](../assignments/week1.md).
 title: "Week 1 Problem Set"
 points_possible: 50
 due_at: "2025-02-01T23:59:00-05:00"
+lock_at: "2025-02-08T23:59:00-05:00"
+unlock_at: "2025-01-27T00:00:00-05:00"
+grading_type: "points"
 submission_types: ["online_upload"]
 published: true
 ---
@@ -263,6 +269,8 @@ Submit a PDF of your solutions by the deadline.
 ```
 
 ### Discussion (`discussions/`)
+
+Ungraded:
 
 ```markdown
 ---
@@ -274,9 +282,25 @@ published: true
 Tell us your name, your background, and what you hope to get from this course.
 ```
 
+Graded (grading fields are passed to Canvas as nested assignment params):
+
+```markdown
+---
+title: "Week 1 Discussion"
+require_initial_post: true
+points_possible: 10
+due_at: "2025-02-01T23:59:00-05:00"
+lock_at: "2025-02-08T23:59:00-05:00"
+unlock_at: "2025-01-27T00:00:00-05:00"
+published: true
+---
+
+Post your initial response by Wednesday, then reply to two classmates.
+```
+
 ### Module (`modules/`)
 
-Module files don't have a body that becomes HTML. The body lists content items and optional sub-headers.
+Module files don't have a body that becomes HTML. The body lists content items and optional sub-headers. Links to local `.md` files become Canvas content items; absolute URLs become ExternalUrl items.
 
 ```markdown
 ---
@@ -288,11 +312,109 @@ unlock_at: "2025-01-20T00:00:00-05:00"
 ## Readings
 
 - [Syllabus](../pages/syllabus.md)
+- [Course Website](https://example.com) <!-- target="_blank" -->
 
 ## Work
 
 - [Week 1 Assignment](../assignments/week1.md)
 - [Week 1 Discussion](../discussions/week1-intro.md)
+```
+
+The `<!-- target="_blank" -->` comment sets `new_tab: true` on the Canvas ExternalUrl item (opens in a new tab). Lines without a comment default to `new_tab: false`.
+
+### Quiz (`quizzes/`)
+
+Each quiz lives in its own sub-folder. The folder name becomes the quiz slug.
+
+```text
+quizzes/
+└── week-1-quiz/
+    ├── week-1-quiz.md          ← quiz settings + ordered question list
+    └── questions/
+        ├── what-is-2-plus-2.md
+        └── explain-gravity.md
+```
+
+**Quiz-level file** — frontmatter holds settings; the body is an optional description followed by a numbered list of links to question files (order = Canvas question order):
+
+```markdown
+---
+title: "Week 1 Quiz"
+quiz_type: assignment
+time_limit: 30
+allowed_attempts: 1
+published: true
+---
+
+Read each question carefully.
+
+1. [What is 2+2?](questions/what-is-2-plus-2.md)
+2. [Explain gravity](questions/explain-gravity.md)
+```
+
+**Question files** — each question is a separate `.md` file. Every question type shares these fields:
+
+| Field | Default if omitted | Notes |
+| --- | --- | --- |
+| `title` | filename stem | Shown as the question name in Canvas |
+| `question_type` | `essay_question` | See types below |
+| `points_possible` | `0` | |
+
+**Supported question types and their required fields:**
+
+> **Note:** None of these fields are required for the *sync to succeed* — a question with missing fields will upload without errors. However, the question will be ungradable in Canvas until the fields are provided.
+
+| Question type | Fields needed to be gradable |
+| --- | --- |
+| `multiple_choice_question` | `correct` (1-based index of the right answer) + `## Answers` section listing choices |
+| `true_false_question` | `correct: true` or `correct: false` |
+| `multiple_response_question` | `correct` (list of 1-based indices, e.g. `[1, 3]`) + `## Answers` section |
+| `fill_in_blank_question` | `answers` list in frontmatter (accepted strings) |
+| `pattern_match_question` | `answers` list in frontmatter (accepted patterns) |
+| `essay_question` | — (manually graded; no `correct` needed) |
+
+Example MCQ question file:
+
+```markdown
+---
+title: "What is 2+2?"
+question_type: multiple_choice_question
+points_possible: 1
+correct: 2
+---
+
+What is the result of adding 2 and 2?
+
+## Answers
+
+1. 3
+2. 4
+3. 5
+```
+
+Example true/false question file:
+
+```markdown
+---
+title: "The sky is blue"
+question_type: true_false_question
+points_possible: 1
+correct: true
+---
+
+The sky appears blue during the day due to Rayleigh scattering.
+```
+
+Example essay question file:
+
+```markdown
+---
+title: "Explain gravity"
+question_type: essay_question
+points_possible: 5
+---
+
+In 3–5 paragraphs, explain the concept of gravity.
 ```
 
 ### Snippets
@@ -386,7 +508,7 @@ Import an existing Canvas course export (`.imscc` file) into a local Markdown re
 github-to-canvas import course-export.imscc ./my-course-repo
 ```
 
-This converts pages, assignments, and discussions to Markdown files and writes a `canvas.toml` skeleton. Quizzes are skipped.
+This converts pages, assignments, discussions, quizzes, question banks, modules, and course settings to local files ready for use with this tool. A `canvas.toml` skeleton is written with the Canvas domain and course ID pre-filled from the export metadata.
 
 ### Verifying the import
 

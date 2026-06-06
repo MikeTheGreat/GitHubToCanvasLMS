@@ -160,3 +160,206 @@ def test_parse_true_false_correct_false(tmp_path):
     true_ans = next(a for a in q["answers"] if a["text"] == "True")
     assert false_ans["weight"] == 100
     assert true_ans["weight"] == 0
+
+
+# ---------------------------------------------------------------------------
+# parse_question_file — multiple_response_question
+# ---------------------------------------------------------------------------
+
+def test_parse_multiple_response_type(tmp_path):
+    md = tmp_path / "q.md"
+    md.write_text(
+        "---\n"
+        "title: Select all primes\n"
+        "question_type: multiple_response_question\n"
+        "points_possible: 2\n"
+        "correct: [1, 3]\n"
+        "---\n\n"
+        "Select all prime numbers.\n\n"
+        "## Answers\n\n"
+        "1. 2\n"
+        "2. 4\n"
+        "3. 7\n"
+        "4. 9\n"
+    )
+    q = parse_question_file(md)
+    assert q["question_type"] == "multiple_response_question"
+
+
+def test_parse_multiple_response_correct_answers_have_weight_100(tmp_path):
+    md = tmp_path / "q.md"
+    md.write_text(
+        "---\n"
+        "title: Select primes\n"
+        "question_type: multiple_response_question\n"
+        "points_possible: 2\n"
+        "correct: [1, 3]\n"
+        "---\n\n"
+        "Pick all primes.\n\n"
+        "## Answers\n\n"
+        "1. 2\n"
+        "2. 4\n"
+        "3. 7\n"
+        "4. 9\n"
+    )
+    q = parse_question_file(md)
+    assert len(q["answers"]) == 4
+    assert q["answers"][0]["weight"] == 100   # index 1 correct
+    assert q["answers"][1]["weight"] == 0
+    assert q["answers"][2]["weight"] == 100   # index 3 correct
+    assert q["answers"][3]["weight"] == 0
+
+
+# ---------------------------------------------------------------------------
+# parse_question_file — fill_in_blank_question
+# ---------------------------------------------------------------------------
+
+def test_parse_fill_in_blank_maps_to_short_answer(tmp_path):
+    md = tmp_path / "q.md"
+    md.write_text(
+        "---\n"
+        "title: Speed of light\n"
+        "question_type: fill_in_blank_question\n"
+        "points_possible: 1\n"
+        "answers: [300000, '3 x 10^5']\n"
+        "---\n\n"
+        "The speed of light is approximately _____ km/s.\n"
+    )
+    q = parse_question_file(md)
+    assert q["question_type"] == "short_answer_question"
+
+
+def test_parse_fill_in_blank_answers_all_weight_100(tmp_path):
+    md = tmp_path / "q.md"
+    md.write_text(
+        "---\n"
+        "title: Speed\n"
+        "question_type: fill_in_blank_question\n"
+        "points_possible: 1\n"
+        "answers: [photosynthesis, Photosynthesis]\n"
+        "---\n\n"
+        "Plants make food by ________.\n"
+    )
+    q = parse_question_file(md)
+    assert all(a["weight"] == 100 for a in q["answers"])
+    assert {a["text"] for a in q["answers"]} == {"photosynthesis", "Photosynthesis"}
+
+
+# ---------------------------------------------------------------------------
+# parse_question_file — pattern_match_question
+# ---------------------------------------------------------------------------
+
+def test_parse_pattern_match_maps_to_short_answer(tmp_path):
+    md = tmp_path / "q.md"
+    md.write_text(
+        "---\n"
+        "title: Name a language\n"
+        "question_type: pattern_match_question\n"
+        "points_possible: 1\n"
+        "answers: [python, r language]\n"
+        "match_type: substring\n"
+        "---\n\n"
+        "Name a data science programming language.\n"
+    )
+    q = parse_question_file(md)
+    assert q["question_type"] == "short_answer_question"
+    assert q["answers"][0]["text"] == "python"
+    assert q["answers"][0]["weight"] == 100
+
+
+# ---------------------------------------------------------------------------
+# parse_question_file — feedback sections
+# ---------------------------------------------------------------------------
+
+def test_parse_question_feedback_correct_incorrect(tmp_path):
+    md = tmp_path / "q.md"
+    md.write_text(
+        "---\n"
+        "title: A question\n"
+        "question_type: multiple_choice_question\n"
+        "points_possible: 1\n"
+        "correct: 2\n"
+        "---\n\n"
+        "What is the answer?\n\n"
+        "## Answers\n\n"
+        "1. Wrong\n"
+        "2. Right\n\n"
+        "## Feedback\n\n"
+        "### Correct\n"
+        "Well done!\n\n"
+        "### Incorrect\n"
+        "Try again.\n"
+    )
+    q = parse_question_file(md)
+    assert q["correct_comments"] == "Well done!"
+    assert q["incorrect_comments"] == "Try again."
+    assert "neutral_comments" not in q
+
+
+def test_parse_question_feedback_general(tmp_path):
+    md = tmp_path / "q.md"
+    md.write_text(
+        "---\n"
+        "title: A question\n"
+        "question_type: essay_question\n"
+        "points_possible: 5\n"
+        "---\n\n"
+        "Explain something.\n\n"
+        "## Feedback\n\n"
+        "### General\n"
+        "General feedback here.\n"
+    )
+    q = parse_question_file(md)
+    assert q["neutral_comments"] == "General feedback here."
+
+
+def test_parse_question_no_feedback_no_comment_keys(tmp_path):
+    md = tmp_path / "q.md"
+    md.write_text(
+        "---\n"
+        "title: A question\n"
+        "question_type: essay_question\n"
+        "points_possible: 5\n"
+        "---\n\n"
+        "Explain something.\n"
+    )
+    q = parse_question_file(md)
+    assert "neutral_comments" not in q
+    assert "correct_comments" not in q
+    assert "incorrect_comments" not in q
+
+
+# ---------------------------------------------------------------------------
+# parse_question_file — essay sample solution → neutral_comments
+# ---------------------------------------------------------------------------
+
+def test_parse_essay_sample_solution_becomes_neutral_comments(tmp_path):
+    md = tmp_path / "q.md"
+    md.write_text(
+        "---\n"
+        "title: Explain gravity\n"
+        "question_type: essay_question\n"
+        "points_possible: 5\n"
+        "---\n\n"
+        "Explain the concept of gravity.\n\n"
+        "## Sample Solution\n\n"
+        "Gravity is a force that attracts two masses toward each other.\n"
+    )
+    q = parse_question_file(md)
+    assert "Gravity is a force" in q["neutral_comments"]
+
+
+def test_parse_essay_sample_solution_does_not_bleed_into_question_text(tmp_path):
+    md = tmp_path / "q.md"
+    md.write_text(
+        "---\n"
+        "title: Explain gravity\n"
+        "question_type: essay_question\n"
+        "points_possible: 5\n"
+        "---\n\n"
+        "Explain the concept of gravity.\n\n"
+        "## Sample Solution\n\n"
+        "Gravity is a force that attracts two masses toward each other.\n"
+    )
+    q = parse_question_file(md)
+    assert "Gravity is a force" not in q["question_text"]
