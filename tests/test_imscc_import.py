@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from github_to_canvas.imscc_import import open_imscc, run_import
+from github_to_canvas.imscc_import import open_imscc, parse_imsmanifest, run_import
 
 FIXTURE_DIR = Path(__file__).parent / "fixtures" / "imscc"
 
@@ -200,6 +200,14 @@ def test_module_discussion_link(output_dir: Path) -> None:
     run_import(FIXTURE_DIR, output_dir)
     text = (output_dir / "modules" / "week-1.md").read_text()
     assert "../discussions/week-01-forum.md" in text
+
+
+def test_module_discussion_topic_link(output_dir: Path) -> None:
+    """DiscussionTopic content_type (Canvas export name) should resolve like Discussion."""
+    run_import(FIXTURE_DIR, output_dir)
+    text = (output_dir / "modules" / "week-1.md").read_text()
+    assert "Week 01 Forum (Canvas Style)" in text
+    assert "week-01-forum.md" in text
 
 
 def test_module_external_url_as_absolute_link(output_dir: Path) -> None:
@@ -451,6 +459,73 @@ def test_no_canvas_manifest_written(output_dir: Path) -> None:
     assert not (output_dir / ".canvas-manifest.toml").exists()
 
 
+# --- Rubrics ---
+
+def test_rubrics_toml_created(output_dir: Path) -> None:
+    run_import(FIXTURE_DIR, output_dir)
+    assert (output_dir / "course_settings" / "rubrics.toml").exists()
+
+
+def test_rubrics_toml_has_rubric_titles(output_dir: Path) -> None:
+    import tomllib
+    run_import(FIXTURE_DIR, output_dir)
+    data = tomllib.loads((output_dir / "course_settings" / "rubrics.toml").read_text())
+    titles = [r["title"] for r in data["rubrics"]]
+    assert "Test Rubric" in titles
+    assert "Participation Rubric" in titles
+
+
+def test_rubrics_toml_has_criteria(output_dir: Path) -> None:
+    import tomllib
+    run_import(FIXTURE_DIR, output_dir)
+    data = tomllib.loads((output_dir / "course_settings" / "rubrics.toml").read_text())
+    rubric = next(r for r in data["rubrics"] if r["title"] == "Test Rubric")
+    assert rubric["criteria"][0]["description"] == "Quality"
+
+
+def test_rubrics_toml_has_ratings(output_dir: Path) -> None:
+    import tomllib
+    run_import(FIXTURE_DIR, output_dir)
+    data = tomllib.loads((output_dir / "course_settings" / "rubrics.toml").read_text())
+    rubric = next(r for r in data["rubrics"] if r["title"] == "Test Rubric")
+    ratings = rubric["criteria"][0]["ratings"]
+    assert ratings[0]["description"] == "Excellent"
+    assert ratings[0]["points"] == 5.0
+
+
+# --- Files meta ---
+
+def test_files_meta_toml_created(output_dir: Path) -> None:
+    run_import(FIXTURE_DIR, output_dir)
+    assert (output_dir / "course_settings" / "files_meta.toml").exists()
+
+
+def test_files_meta_toml_has_folders(output_dir: Path) -> None:
+    import tomllib
+    run_import(FIXTURE_DIR, output_dir)
+    data = tomllib.loads((output_dir / "course_settings" / "files_meta.toml").read_text())
+    assert "folders" in data
+    assert data["folders"][0]["path"] == "hidden_folder"
+
+
+def test_files_meta_toml_has_files(output_dir: Path) -> None:
+    import tomllib
+    run_import(FIXTURE_DIR, output_dir)
+    data = tomllib.loads((output_dir / "course_settings" / "files_meta.toml").read_text())
+    assert "files" in data
+    identifiers = [f["identifier"] for f in data["files"]]
+    assert "gtest_file_locked" in identifiers
+    assert "gtest_file_named" in identifiers
+
+
+def test_files_meta_toml_locked_preserved(output_dir: Path) -> None:
+    import tomllib
+    run_import(FIXTURE_DIR, output_dir)
+    data = tomllib.loads((output_dir / "course_settings" / "files_meta.toml").read_text())
+    locked = next(f for f in data["files"] if f["identifier"] == "gtest_file_locked")
+    assert locked["locked"] is True
+
+
 # ---------------------------------------------------------------------------
 # Full pipeline: zip input
 # ---------------------------------------------------------------------------
@@ -473,3 +548,278 @@ def test_run_import_from_zip(tmp_path: Path) -> None:
     assert (out / "modules" / "week-1.md").exists()
     assert (out / "canvas.toml").exists()
     assert (out / "course_settings.toml").exists()
+
+
+# ---------------------------------------------------------------------------
+# LTI resources
+# ---------------------------------------------------------------------------
+
+
+def test_lti_resource_imscc_path_set(output_dir: Path) -> None:
+    """LTI resource entries should have imscc_path pointing to the XML file."""
+    manifest = parse_imsmanifest(FIXTURE_DIR)
+    lti_entry = manifest.get("g_lti_1")
+    assert lti_entry is not None
+    assert lti_entry.category == "lti"
+    assert lti_entry.imscc_path == "lti_resource_links/g_lti_1.xml"
+
+
+def test_lti_resource_not_in_pages(output_dir: Path) -> None:
+    """LTI resources should not produce a pages/ file."""
+    run_import(FIXTURE_DIR, output_dir)
+    assert not any(output_dir.glob("pages/g_lti_1*"))
+
+
+# ---------------------------------------------------------------------------
+# ContextExternalTool module items
+# ---------------------------------------------------------------------------
+
+
+def test_module_context_external_tool_as_link(output_dir: Path) -> None:
+    """ContextExternalTool items should appear as URL links in the module file."""
+    run_import(FIXTURE_DIR, output_dir)
+    text = (output_dir / "modules" / "week-1.md").read_text()
+    assert "https://video.example.com/watch?v=abc123" in text
+    assert "Video Lecture" in text
+
+
+def test_module_context_external_tool_no_skip_comment(output_dir: Path) -> None:
+    """ContextExternalTool items should not leave a SKIPPED comment."""
+    run_import(FIXTURE_DIR, output_dir)
+    text = (output_dir / "modules" / "week-1.md").read_text()
+    assert "SKIPPED" not in text
+
+
+# ---------------------------------------------------------------------------
+# Canvas export format quiz (href="" + dependency resource)
+# ---------------------------------------------------------------------------
+
+
+def test_quiz_canvas_format_folder_created(output_dir: Path) -> None:
+    """Quiz with Canvas export format (href='') should create its folder."""
+    run_import(FIXTURE_DIR, output_dir)
+    assert (output_dir / "quizzes" / "quiz-two").is_dir()
+
+
+def test_quiz_canvas_format_md_has_correct_title(output_dir: Path) -> None:
+    """Quiz with href='' should get its title from assessment_meta.xml via dependency."""
+    run_import(FIXTURE_DIR, output_dir)
+    text = (output_dir / "quizzes" / "quiz-two" / "quiz-two.md").read_text()
+    assert "title: Quiz Two" in text
+
+
+def test_quiz_canvas_format_md_has_points(output_dir: Path) -> None:
+    """Quiz with Canvas export format should include points_possible from assessment_meta."""
+    run_import(FIXTURE_DIR, output_dir)
+    text = (output_dir / "quizzes" / "quiz-two" / "quiz-two.md").read_text()
+    assert "points_possible: 2.0" in text
+
+
+def test_quiz_canvas_format_question_uses_non_cc_qti(output_dir: Path) -> None:
+    """The non_cc_assessments .xml.qti file (with points_possible) should be preferred."""
+    run_import(FIXTURE_DIR, output_dir)
+    q_dir = output_dir / "quizzes" / "quiz-two" / "questions"
+    assert q_dir.is_dir()
+    q_files = list(q_dir.glob("*.md"))
+    assert len(q_files) == 1
+    text = q_files[0].read_text()
+    assert "points_possible: 2.0" in text   # only present in the .xml.qti file
+
+
+# ---------------------------------------------------------------------------
+# Standalone question banks (should be skipped, not crash or misclassify)
+# ---------------------------------------------------------------------------
+
+
+def test_question_bank_not_in_quizzes(output_dir: Path) -> None:
+    """Standalone QTI objectbank resources should not produce a quizzes/ entry."""
+    run_import(FIXTURE_DIR, output_dir)
+    assert not (output_dir / "quizzes" / "g-bank-1").exists()
+    assert not any(output_dir.glob("quizzes/*bank*"))
+
+
+def test_question_bank_not_in_course_settings(output_dir: Path) -> None:
+    """Standalone question bank should not overwrite course_settings.toml."""
+    import tomllib
+    run_import(FIXTURE_DIR, output_dir)
+    data = tomllib.loads((output_dir / "course_settings.toml").read_text())
+    assert "Test Course" in data["title"]  # file is intact, not corrupted by question bank
+
+
+# ---------------------------------------------------------------------------
+# Item 1: Discussion attachments
+# ---------------------------------------------------------------------------
+
+
+def test_discussion_attachment_md_created(output_dir: Path) -> None:
+    run_import(FIXTURE_DIR, output_dir)
+    assert (output_dir / "discussions" / "discussion-with-attachment.md").exists()
+
+
+def test_discussion_attachment_section_present(output_dir: Path) -> None:
+    run_import(FIXTURE_DIR, output_dir)
+    text = (output_dir / "discussions" / "discussion-with-attachment.md").read_text()
+    assert "## Attachments" in text
+
+
+def test_discussion_attachment_link_prefixed(output_dir: Path) -> None:
+    run_import(FIXTURE_DIR, output_dir)
+    text = (output_dir / "discussions" / "discussion-with-attachment.md").read_text()
+    assert "../assets/media/diagram.png" in text
+
+
+def test_discussion_attachment_multiple_links(output_dir: Path) -> None:
+    run_import(FIXTURE_DIR, output_dir)
+    text = (output_dir / "discussions" / "discussion-with-attachment.md").read_text()
+    assert "../assets/media/notes.pdf" in text
+
+
+def test_discussion_no_attachment_section_when_none(output_dir: Path) -> None:
+    """The original discussion has no attachments — its output should have no ## Attachments."""
+    run_import(FIXTURE_DIR, output_dir)
+    text = (output_dir / "discussions" / "week-01-forum.md").read_text()
+    assert "## Attachments" not in text
+
+
+# ---------------------------------------------------------------------------
+# Item 2: Web link target / windowFeatures in module output
+# ---------------------------------------------------------------------------
+
+
+def test_module_external_url_has_target_comment(output_dir: Path) -> None:
+    run_import(FIXTURE_DIR, output_dir)
+    text = (output_dir / "modules" / "week-1.md").read_text()
+    assert 'target="_blank"' in text
+
+
+def test_module_external_url_has_window_features_comment(output_dir: Path) -> None:
+    run_import(FIXTURE_DIR, output_dir)
+    text = (output_dir / "modules" / "week-1.md").read_text()
+    assert 'windowFeatures="width=800,height=600"' in text
+
+
+def test_module_external_url_comment_is_html_style(output_dir: Path) -> None:
+    run_import(FIXTURE_DIR, output_dir)
+    text = (output_dir / "modules" / "week-1.md").read_text()
+    assert "<!-- " in text and " -->" in text
+
+
+# ---------------------------------------------------------------------------
+# Item 3: QTI new question types (integration: written by _write_question_file)
+# ---------------------------------------------------------------------------
+
+
+def test_quiz_mcq_feedback_section_present(output_dir: Path) -> None:
+    run_import(FIXTURE_DIR, output_dir)
+    text = (output_dir / "quizzes" / "a-quiz" / "questions" / "what-is-22.md").read_text()
+    assert "## Feedback" in text
+
+
+def test_quiz_mcq_general_feedback_text(output_dir: Path) -> None:
+    run_import(FIXTURE_DIR, output_dir)
+    text = (output_dir / "quizzes" / "a-quiz" / "questions" / "what-is-22.md").read_text()
+    assert "Think carefully about number operations." in text
+
+
+def test_quiz_mcq_correct_feedback_subsection(output_dir: Path) -> None:
+    run_import(FIXTURE_DIR, output_dir)
+    text = (output_dir / "quizzes" / "a-quiz" / "questions" / "what-is-22.md").read_text()
+    assert "### Correct" in text
+    assert "That is correct!" in text
+
+
+def test_quiz_mcq_incorrect_feedback_subsection(output_dir: Path) -> None:
+    run_import(FIXTURE_DIR, output_dir)
+    text = (output_dir / "quizzes" / "a-quiz" / "questions" / "what-is-22.md").read_text()
+    assert "### Incorrect" in text
+    assert "Try again." in text
+
+
+def test_quiz_mcq_per_answer_feedback(output_dir: Path) -> None:
+    run_import(FIXTURE_DIR, output_dir)
+    text = (output_dir / "quizzes" / "a-quiz" / "questions" / "what-is-22.md").read_text()
+    assert "### Per-answer" in text
+    assert "3 is not the sum of 2+2." in text
+
+
+def test_quiz_essay_sample_solution_present(output_dir: Path) -> None:
+    run_import(FIXTURE_DIR, output_dir)
+    text = (output_dir / "quizzes" / "a-quiz" / "questions" / "explain-something.md").read_text()
+    assert "## Sample Solution" in text
+    assert "A good answer would discuss the key concepts" in text
+
+
+# ---------------------------------------------------------------------------
+# Item 6: Canvas question banks
+# ---------------------------------------------------------------------------
+
+
+def test_question_bank_folder_created(output_dir: Path) -> None:
+    run_import(FIXTURE_DIR, output_dir)
+    assert (output_dir / "question_banks" / "fixture-question-bank").is_dir()
+
+
+def test_question_bank_toml_created(output_dir: Path) -> None:
+    run_import(FIXTURE_DIR, output_dir)
+    assert (output_dir / "question_banks" / "fixture-question-bank" / "fixture-question-bank.toml").exists()
+
+
+def test_question_bank_toml_has_title(output_dir: Path) -> None:
+    import tomllib
+    run_import(FIXTURE_DIR, output_dir)
+    data = tomllib.loads(
+        (output_dir / "question_banks" / "fixture-question-bank" / "fixture-question-bank.toml").read_text()
+    )
+    assert data["bank_title"] == "Fixture Question Bank"
+
+
+def test_question_bank_toml_has_context_uuid(output_dir: Path) -> None:
+    import tomllib
+    run_import(FIXTURE_DIR, output_dir)
+    data = tomllib.loads(
+        (output_dir / "question_banks" / "fixture-question-bank" / "fixture-question-bank.toml").read_text()
+    )
+    assert data["bank_context_uuid"] == "FIXTURE123UyJjHbdsdzYFn1LYxMYjMYh4GITEORKR"
+
+
+def test_question_bank_toml_has_state(output_dir: Path) -> None:
+    import tomllib
+    run_import(FIXTURE_DIR, output_dir)
+    data = tomllib.loads(
+        (output_dir / "question_banks" / "fixture-question-bank" / "fixture-question-bank.toml").read_text()
+    )
+    assert data["bank_state"] == "active"
+
+
+def test_question_bank_questions_folder_created(output_dir: Path) -> None:
+    run_import(FIXTURE_DIR, output_dir)
+    assert (output_dir / "question_banks" / "fixture-question-bank" / "questions").is_dir()
+
+
+def test_question_bank_mcq_question_file_exists(output_dir: Path) -> None:
+    run_import(FIXTURE_DIR, output_dir)
+    q_dir = output_dir / "question_banks" / "fixture-question-bank" / "questions"
+    assert (q_dir / "bank-mcq-question.md").exists()
+
+
+def test_question_bank_essay_question_file_exists(output_dir: Path) -> None:
+    run_import(FIXTURE_DIR, output_dir)
+    q_dir = output_dir / "question_banks" / "fixture-question-bank" / "questions"
+    assert (q_dir / "bank-essay-question.md").exists()
+
+
+def test_question_bank_mcq_has_original_answer_ids(output_dir: Path) -> None:
+    run_import(FIXTURE_DIR, output_dir)
+    text = (
+        output_dir / "question_banks" / "fixture-question-bank" / "questions" / "bank-mcq-question.md"
+    ).read_text()
+    assert "original_answer_ids" in text
+    assert "1001" in text
+
+
+def test_question_bank_mcq_has_correct_field(output_dir: Path) -> None:
+    run_import(FIXTURE_DIR, output_dir)
+    text = (
+        output_dir / "question_banks" / "fixture-question-bank" / "questions" / "bank-mcq-question.md"
+    ).read_text()
+    assert "correct:" in text

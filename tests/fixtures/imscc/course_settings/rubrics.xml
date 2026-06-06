@@ -1,0 +1,58 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rubrics xmlns="http://canvas.instructure.com/xsd/cccv1p0">
+  <rubric identifier="gtest_rubric_1">
+    <title>Test Rubric</title>
+    <read_only>false</read_only>
+    <reusable>false</reusable>
+    <public>false</public>
+    <points_possible>5.0</points_possible>
+    <hide_score_total>false</hide_score_total>
+    <free_form_criterion_comments>false</free_form_criterion_comments>
+    <rating_order>descending</rating_order>
+    <criteria>
+      <criterion>
+        <criterion_id>_100</criterion_id>
+        <points>5.0</points>
+        <description>Quality</description>
+        <long_description>Measures overall quality of the work.</long_description>
+        <ratings>
+          <rating>
+            <id>blank</id>
+            <description>Excellent</description>
+            <points>5.0</points>
+          </rating>
+          <rating>
+            <id>blank_2</id>
+            <description>Poor</description>
+            <points>0.0</points>
+          </rating>
+        </ratings>
+      </criterion>
+    </criteria>
+  </rubric>
+  <rubric identifier="gtest_rubric_2">
+    <title>Participation Rubric</title>
+    <read_only>true</read_only>
+    <points_possible>2.0</points_possible>
+    <rating_order>descending</rating_order>
+    <criteria>
+      <criterion>
+        <criterion_id>_200</criterion_id>
+        <points>2.0</points>
+        <description>Attendance</description>
+        <ratings>
+          <rating>
+            <id>r1</id>
+            <description>Present</description>
+            <points>2.0</points>
+          </rating>
+          <rating>
+            <id>r2</id>
+            <description>Absent</description>
+            <points>0.0</points>
+          </rating>
+        </ratings>
+      </criterion>
+    </criteria>
+  </rubric>
+</rubrics>

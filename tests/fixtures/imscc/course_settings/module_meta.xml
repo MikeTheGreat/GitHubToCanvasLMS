@@ -55,7 +55,7 @@
         <content_type>ExternalUrl</content_type>
         <workflow_state>active</workflow_state>
         <title>External Resource</title>
-        <identifierref>g_item_4</identifierref>
+        <identifierref>g_exturl_1</identifierref>
         <url>https://example.com/resource</url>
         <position>6</position>
         <new_tab>true</new_tab>
@@ -67,6 +67,25 @@
         <title>A Quiz</title>
         <identifierref>g_quiz_1</identifierref>
         <position>7</position>
+        <new_tab>false</new_tab>
+        <indent>0</indent>
+      </item>
+      <item identifier="g_item_discussion_topic">
+        <content_type>DiscussionTopic</content_type>
+        <workflow_state>active</workflow_state>
+        <title>Week 01 Forum (Canvas Style)</title>
+        <identifierref>g_discussion_1</identifierref>
+        <position>8</position>
+        <new_tab>false</new_tab>
+        <indent>0</indent>
+      </item>
+      <item identifier="g_item_lti">
+        <content_type>ContextExternalTool</content_type>
+        <workflow_state>active</workflow_state>
+        <title>Video Lecture</title>
+        <identifierref>g_lti_1</identifierref>
+        <url>https://video.example.com/watch?v=abc123</url>
+        <position>9</position>
         <new_tab>false</new_tab>
         <indent>0</indent>
       </item>

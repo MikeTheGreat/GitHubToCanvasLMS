@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<topicMeta xmlns="http://canvas.instructure.com/xsd/cccv1p0"
+           xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+  <title>Discussion With Attachment</title>
+  <workflow_state>active</workflow_state>
+  <type>topic</type>
+  <require_initial_post>false</require_initial_post>
+</topicMeta>

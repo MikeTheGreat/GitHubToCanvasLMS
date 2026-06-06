@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<fileMeta xmlns="http://canvas.instructure.com/xsd/cccv1p0">
+  <folders>
+    <folder path="hidden_folder">
+      <hidden>true</hidden>
+    </folder>
+  </folders>
+  <files>
+    <file identifier="gtest_file_locked">
+      <locked>true</locked>
+      <category>uncategorized</category>
+    </file>
+    <file identifier="gtest_file_named">
+      <display_name>lecture-notes.pdf</display_name>
+      <category>uncategorized</category>
+    </file>
+    <file identifier="gtest_file_timed">
+      <unlock_at>2025-10-31T16:00:00</unlock_at>
+      <category>uncategorized</category>
+    </file>
+  </files>
+</fileMeta>

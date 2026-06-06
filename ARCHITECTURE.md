@@ -153,15 +153,29 @@ github-to-canvas import <imscc_path> <output_dir>
 
 ### IMSCC resource classification
 
-| IMSCC type | href location | → category |
+| IMSCC type | href / file location | → category |
 | --- | --- | --- |
 | `webcontent` | `wiki_content/` | `page` |
 | `webcontent` | `web_resources/` | `asset` |
 | `imsdt_xmlv1p1` | `gXXX.xml` | `discussion` |
-| `associatedcontent/...` | `gXXX/` dir | `assignment` |
+| `associatedcontent/...` | `gXXX/*.html` | `assignment` |
 | `imswl_xmlv1p1` | `gXXX.xml` | `external_url` |
-| `imsqti_xmlv1p2/...` | `gXXX/assessment_meta.xml` + `gXXX/gXXX.xml` | `quiz` |
-| `imsbasiclti_xmlv1p3` | any | `lti` (warn + skip) |
+| `imsqti_xmlv1p2/...` | `gXXX/assessment_meta.xml` (standard) or via `<dependency>` (Canvas export) | `quiz` |
+| `imsbasiclti_xmlv1p0/v1p3` | `<file href>` in `lti_resource_links/` or root | `lti` (no local output) |
+| `associatedcontent/...` | `non_cc_assessments/*.xml.qti` (objectbank root child) | `question_bank` |
+| `associatedcontent/...` | `non_cc_assessments/*.xml.qti` (assessment root child) | skipped (quiz-linked QTI, handled via quiz dependency) |
+
+**Quiz detection — two manifest formats:**
+
+Canvas uses two different manifest layouts for quizzes depending on export version:
+
+- **Standard format**: `imsqti_xmlv1p2/` resource with `href="gXXX/assessment_meta.xml"` and a `<file>` child pointing to the QTI questions file. Both `meta_path` and `qti_path` come directly from this one resource.
+
+- **Canvas export format**: `imsqti_xmlv1p2/` resource with `href=""` (empty) and a `<dependency>` child referencing a companion `associatedcontent/` resource. The companion resource's `href` points to `assessment_meta.xml` and its `<file>` children list both the meta file and a `non_cc_assessments/*.xml.qti` QTI file. The `non_cc_assessments/*.xml.qti` is preferred for question parsing because it uses `question_type` and `points_possible` metadata labels (vs. `cc_profile` labels in the CC format QTI in `gXXX/assessment_qti.xml`).
+
+**LTI resources:** Canvas sets `href=""` on `imsbasiclti_` resource elements; the actual file path is in a `<file href="...">` child. The `imscc_path` is read from this child. LTI 1.3 resources cannot be round-tripped into a usable local format (tool installation is platform-specific), so no local output is written. LTI items in modules are handled separately via the module item's own `url` field.
+
+**Question banks:** `non_cc_assessments/*.xml.qti` files whose root child element is `<objectbank>` (Canvas question pools) are classified as `question_bank` and converted to `question_banks/{slug}/`. Files whose root child is `<assessment>` (quiz-linked QTI) are skipped since the quiz's own dependency chain already handles them.
 
 The `_syllabus` resource (`course_settings/syllabus.html`) → `course_settings/syllabus.md`.
 
@@ -172,14 +186,18 @@ The `_syllabus` resource (`course_settings/syllabus.html`) → `course_settings/
 3. Copy `web_resources/` → `assets/`, preserving subdirectory structure
 4. **Pages:** strip `<html>/<head>/<body>` wrapper, rewrite internal links, Pandoc HTML→Markdown, write `pages/{stem}.md` with `title` and `published: true` frontmatter
 5. **Assignments:** read `gXXX/assignment_settings.xml` for title, points_possible, due_at, lock_at, unlock_at, submission_types, grading_type, workflow_state; convert HTML body; write `assignments/{stem}.md`
-6. **Discussions:** parse topic XML body and paired topicMeta for title, published, require_initial_post; skip announcements with warning; write `discussions/{slugify(title)}.md`
+6. **Discussions:** parse topic XML body and paired topicMeta for title, published, require_initial_post; skip announcements with warning; if `<attachments>` block present, append a `## Attachments` section with `../assets/{href}` links; write `discussions/{slugify(title)}.md`
 6b. **Quizzes:** read `gXXX/assessment_meta.xml` for quiz settings; parse QTI 1.2 XML (`gXXX/gXXX.xml`) for questions; write `quizzes/{slug}/{slug}.md` and one file per question under `quizzes/{slug}/questions/`; unsupported question types emit a warning and are skipped
+6c. **Question banks:** parse `non_cc_assessments/*.xml.qti` objectbank files; read bank metadata (bank_title, bank_context_uuid, bank_state) from `<qtimetadata>`; parse all `<item>` children as questions (same QTI format as quizzes, plus `original_answer_ids` metadata); write `question_banks/{slug}/{slug}.toml` and one question file per item under `question_banks/{slug}/questions/`
 7. **Modules:** read `course_settings/module_meta.xml`; emit items in position order (see below); write `modules/{slugify(title)}.md`
 8. **Course settings:** collect data from all `course_settings/*.xml` files and `imsmanifest.xml` metadata; write:
    - `course_settings.toml` (root) — all course-level settings (see below)
    - `course_settings/syllabus.md` — syllabus HTML converted to Markdown
    - `course_settings/events.md` — calendar events (if any exist in `events.xml`)
+   - `course_settings/rubrics.toml` — rubric definitions with criteria and ratings (if any exist in `rubrics.xml`)
+   - `course_settings/files_meta.toml` — file visibility/lock metadata (from `files_meta.xml`)
    - `canvas.toml` (root) — connection config skeleton pre-populated from `context.xml`
+   - `media_tracks.xml` and `canvas_export.txt` are skipped (no useful round-trip content)
 
 ### Internal link rewriting
 
@@ -199,10 +217,10 @@ Unknown `gXXX` not in resource map → warn and remove href, keep link text.
 ### Module file generation
 
 - `ContextModuleSubHeader` → `## Title` heading
-- Page / Assignment / Discussion / Quiz → `- [display_title](../type/file.md)`
-- `ExternalUrl` → `- [display_title](https://url)`
-- `Attachment` (Canvas File) → `- [title](../assets/file.pdf)` — commented warning + printed warning (not yet implemented)
-- `LTI` → commented warning line in file + printed warning
+- `WikiPage` / `Assignment` / `Discussion` / `DiscussionTopic` / `Quizzes::Quiz` → `- [display_title](../type/file.md)` (`DiscussionTopic` is the name used in real Canvas IMSCC exports; `Discussion` is the IMS CC name — both are handled)
+- `ExternalUrl` → `- [display_title](https://url)` — if the linked webLink resource has `target` or `windowFeatures` attributes on its `<url>` element, they are appended as an HTML comment: `<!-- target="_blank" windowFeatures="width=800" -->`
+- `ContextExternalTool` (LTI embedded tool) → `- [display_title](url)` (URL comes from the module item's own `url` field, not the LTI resource XML)
+- `Attachment` (Canvas File) → `# SKIPPED: Attachment - "title"` comment line + printed warning (no local file equivalent)
 
 ### Course settings output (`course_settings.toml`)
 
@@ -216,6 +234,13 @@ A TOML file written at the repo root capturing all course-level metadata. Source
 | `assignment_groups.xml` | `[[assignment_groups]]` — title, position, group_weight, rules (drop_lowest etc.) |
 | `late_policy.xml` | `[late_policy]` — deduction enablement, deduction amounts, interval |
 | `context.xml` | `canvas_domain` → pre-fills `canvas.toml` base_url; `course_id` → pre-fills `canvas.toml` course_id |
+
+### Additional course settings outputs
+
+| Output file | Source | Content |
+| --- | --- | --- |
+| `course_settings/rubrics.toml` | `rubrics.xml` | `[[rubrics]]` — identifier, title, boolean flags, points_possible, rating_order; nested `[[rubrics.criteria]]` with description, long_description, points; nested `[[rubrics.criteria.ratings]]` with id, description, long_description, points |
+| `course_settings/files_meta.toml` | `files_meta.xml` | `[[folders]]` — path, hidden; `[[files]]` — identifier, locked, hidden, display_name, unlock_at |
 
 Boolean fields (`true`/`false`) are stored as TOML booleans. Numeric fields are stored as int or float. Empty elements are omitted. The nested `default_post_policy` element is stored as a TOML inline table.
 
@@ -407,6 +432,63 @@ points_possible: 5
 In 3–5 paragraphs, explain the concept of gravity and how it affects objects with different masses.
 ```
 
+**Multiple-response question** (`question_type: multiple_response_question`):
+
+`correct` is a list of 1-based indices of all correct answers. Answers section is the same format as MCQ.
+
+```yaml
+---
+title: "Select all prime numbers"
+question_type: multiple_response_question
+points_possible: 2
+correct: [1, 2, 4]
+---
+
+Which of the following are prime numbers? Select all that apply.
+
+## Answers
+
+1. 2
+1. 3
+1. 4
+1. 5
+```
+
+**Fill-in-blank question** (`question_type: fill_in_blank_question`):
+
+`answers` is a list of all accepted correct strings (case-insensitive exact match). No `## Answers` section.
+
+```yaml
+---
+title: "Speed of light"
+question_type: fill_in_blank_question
+points_possible: 1
+answers: [300000, 300 000]
+---
+
+The speed of light is approximately _____ km/s.
+```
+
+**Pattern-match question** (`question_type: pattern_match_question`):
+
+`answers` lists accepted patterns (case-insensitive substring match). `match_type: substring` signals the matching mode.
+
+```yaml
+---
+title: "Name a language"
+question_type: pattern_match_question
+points_possible: 1
+answers: [python, r language]
+match_type: substring
+---
+
+Name a programming language used in data science.
+```
+
+**Question feedback** (all types): If the QTI item has `<itemfeedback>` elements, a `## Feedback` section is appended after the question text / answers with subsections `### General`, `### Correct`, `### Incorrect`, and `### Per-answer` (only those present in the source). Per-answer feedback lists each answer by 1-based index.
+
+**Essay sample solution**: If the QTI item has `<itemfeedback ident="solution">`, a `## Sample Solution` section is appended after the question text.
+
 **Quiz manifest entry:**
 
 The manifest key is the quiz-level `.md` path. `canvas_question_ids` maps each question file's path (relative to the quiz folder) to its Canvas question ID.
@@ -425,7 +507,44 @@ canvas_question_ids = {"questions/what-is-2-plus-2.md" = 111, "questions/explain
 - On each sync, all existing Canvas questions are deleted and re-created in the order listed in the quiz `.md`. This keeps question order correct and avoids stale questions after edits.
 - Canvas module items reference the quiz by `canvas_id` and use module item type `"Quiz"`.
 
-**Supported question types:** `multiple_choice_question`, `true_false_question`, `essay_question`. Other types imported from IMSCC emit a warning and are skipped.
+**Supported question types:** `multiple_choice_question`, `true_false_question`, `essay_question`, `multiple_response_question`, `fill_in_blank_question`, `pattern_match_question`. Other types emit a warning and are skipped.
+
+### Question bank file format
+
+Canvas question banks (pools) are written to `question_banks/{slug}/`:
+
+```text
+question_banks/
+└── unfiled-questions/
+    ├── unfiled-questions.toml   # bank metadata
+    └── questions/
+        ├── how-many-exams.md    # one file per question (same format as quiz questions)
+        └── ...
+```
+
+**Bank metadata TOML** (`question_banks/{slug}/{slug}.toml`):
+
+```toml
+bank_title = "Unfiled Questions"
+bank_context_uuid = "SRI51UyJjHbdsdzYFn1LYxMYjMYh4GITEORKR38K"
+bank_state = "active"
+```
+
+**Bank question files** use the same format as quiz question files, with one additional frontmatter field:
+
+`original_answer_ids` — Canvas-internal answer IDs needed to maintain stable answer identity on re-import. Present only on choice-based questions (MCQ, multiple-response) where Canvas assigned them.
+
+```yaml
+---
+title: "How many exams?"
+question_type: multiple_choice_question
+points_possible: 1.0
+correct: 3
+original_answer_ids: [8230, 5348, 7678, 5601]
+---
+```
+
+Note: quizzes that draw from question banks export their questions **inline** in the quiz's own QTI file. There is no "draw N from bank X" reference in the IMSCC output. Question banks and quizzes are independent exports. Deleted banks (`bank_state = "deleted"`) are still imported in deleted state to preserve round-trip fidelity.
 
 ### Module file format
 

@@ -1,5 +1,51 @@
 # Possible Future Features
 
+## Import coverage gaps (found via pool sampling)
+
+Running `check_imscc_coverage.py` with pool sampling against the `it-cs142` course
+revealed real content that doesn't survive the `import` command. Reproduce with:
+
+```sh
+python scripts/check_imscc_coverage.py \
+    it-cs142-imscc-unzipped Test_Import \
+    --pool-samples 100 --seed 7 --categories ""
+```
+
+### Quiz/rubric body text not surfaced as Markdown
+
+Rubric criterion text and quiz question bodies live in QTI XML and quiz rubric XML
+but are not currently imported as any `.md` file. Examples found missing:
+
+- `'Is the code clearly written, consistently and readably formatted, and'`
+- `'Good 1.0 _7898 One or more categories of style are'`
+- `'The assignment specified that you should use methods to finish'`
+- `'is reasonably formatted blank Emerging 15.0 _1517 A few results'`
+- `'Processing File I/O: Processing Complex Files 2024_Winter_Question_1_Example_Solution public class Answer'`
+
+These come from quiz question prompts and assignment rubrics embedded in the IMSCC.
+The rubric importer is not yet implemented; the quiz importer converts questions but
+question body HTML isn't always round-tripping cleanly through Pandoc for all types.
+
+### Page/assignment prose that was silently dropped
+
+Plain prose from pages and assignments that should have been converted but is absent
+from `Test_Import`. These point to either pages that were skipped entirely or content
+inside HTML that the importer's `_extract_html_body` or Pandoc step lost:
+
+- `'for that one other class. How To Find Due Dates'`
+- `'Exam II Study Guide Exam II will be in-class. Please'`
+- `'at the top (which lists your name, class, assignment number,'`
+- `"image below) Once you've found the repo you can confirm"`
+- `'find the Privacy & Security tab . Click on it'`
+- `"don't fill this out then then instructor will assume that"`
+- `"I'd rather receive thoughtful constructive criticism than answers engineered to"`
+- `'Reference vs. value semantics Exam IV Study Guide Exam IV'`
+- `'a merge conflict . For example, if you change the'`
+
+To investigate: grep for a fragment in `it-cs142-imscc-unzipped` to find the source
+file, then check whether the corresponding output file exists in `Test_Import` and
+whether the text is present there.
+
 ## Quiz: link-rewriting in question/description HTML
 
 Currently `_get_file_refs()` returns an empty set for `quizzes/` files, and `_sync_quiz()` uploads quiz description and question text HTML without running it through `rewrite_links()`. This means:

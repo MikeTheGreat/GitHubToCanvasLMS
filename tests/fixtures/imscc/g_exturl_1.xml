@@ -2,5 +2,5 @@
 <webLink xmlns="http://www.imsglobal.org/xsd/imsccv1p1/imswl_v1p1"
          xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
   <title>External Resource</title>
-  <url href="https://example.com/resource"/>
+  <url href="https://example.com/resource" target="_blank" windowFeatures="width=800,height=600"/>
 </webLink>

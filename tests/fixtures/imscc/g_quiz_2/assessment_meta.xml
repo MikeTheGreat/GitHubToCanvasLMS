@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<quiz identifier="g_quiz_2"
+      xmlns="http://canvas.instructure.com/xsd/cccv1p0"
+      xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+  <title>Quiz Two</title>
+  <workflow_state>published</workflow_state>
+  <quiz_type>assignment</quiz_type>
+  <points_possible>2.0</points_possible>
+  <shuffle_answers>false</shuffle_answers>
+  <show_correct_answers>true</show_correct_answers>
+  <allowed_attempts>2</allowed_attempts>
+</quiz>

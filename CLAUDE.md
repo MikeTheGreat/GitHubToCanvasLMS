@@ -100,6 +100,21 @@ github-to-canvas/      ← this tool repo
 - Math support: `pandoc --mathml` if course content includes equations
   - CanvasLMS will remove any JS so we must use static content that is screen-reader accessible
 
+## Reference Documentation
+
+Local copies of the IMS Common Cartridge 1.1 specification (the version Canvas LMS exports) are in **[docs/imscc-1.1-spec/](docs/imscc-1.1-spec/)**:
+
+| File | Contents |
+| --- | --- |
+| `imscc_profilev1p1-Overview.pdf` | High-level overview, what's new in v1.1 vs v1.0 |
+| `imscc_profilev1p1-Implementation.pdf` | **Main reference** — full format details for every content type, QTI question types, feedback, LOM metadata, BLTI |
+| `imscc_profilev1p1-Conformance.pdf` | Conformance requirements |
+| `imscc_profilev1p1-UseCases.pdf` | Use cases |
+| `imscc_profilev1p1-Appendices.pdf` | Appendices |
+| `schemas/` | 11 XSD files — `ccv1p1_imscp_v1p2_v1p0.xsd` (manifest), `ccv1p1_imsdt_v1p1.xsd` (discussions), `ccv1p1_imswl_v1p1.xsd` (web links), `ccv1p1_qtiasiv1p2p1_v1p0.xsd` (QTI), `imsbasiclti_v1p0p1.xsd` (LTI), LOM metadata schemas, and more |
+
+Source: [docs.huihoo.com mirror](https://docs.huihoo.com/ims/specifications/common-cartridge/1.1/) of the IMS GLC originals (June 2011).
+
 ## Testing Strategy
 
 See **[TESTING.md](TESTING.md)** for the full testing strategy, layer breakdown, fixture descriptions, and what to assert on.

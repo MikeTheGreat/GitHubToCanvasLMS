@@ -10,7 +10,7 @@ Test individual functions in isolation, with no network or Canvas dependency. Ea
 - **Link rewriter** (`test_link_rewrite.py`): given an HTML fragment and a manifest dict, assert that `<img src>` and `<a href>` are rewritten to the correct Canvas URLs; test each link type (page, assignment, discussion, asset, quiz, external, anchor).
 - **Manifest** (`test_manifest.py`): TOML round-trips, flush-on-every-write behaviour, create-vs-update lookup logic, `needs_sync` timestamp comparisons.
 - **Quiz parsing** (`test_quiz.py`): quiz-level file parsing (frontmatter, question order, description), MCQ/essay/true-false question file parsing, answer weight assignment, correct-answer detection.
-- **IMSCC parsing** (`test_imscc_convert.py`): unit tests for each XML parser — `_parse_manifest_metadata`, `_parse_course_settings_full`, `_parse_grading_standards`, `_parse_assignment_groups`, `_parse_late_policy`, `_parse_context`, `_parse_events`; HTML body extraction; frontmatter rendering.
+- **IMSCC parsing** (`test_imscc_convert.py`): unit tests for each XML parser — `_parse_manifest_metadata`, `_parse_course_settings_full`, `_parse_grading_standards`, `_parse_assignment_groups`, `_parse_late_policy`, `_parse_context`, `_parse_events`, `_parse_rubrics`, `_parse_files_meta`; HTML body extraction; frontmatter rendering; `parse_qti_questions` with both Canvas-extended format (`question_type` labels) and IMS CC format (`cc_profile` labels).
 - **Processing order**: asset-first, module-last, alphabetical sorting of folders and files within folders.
 - **Frontmatter parsing**: all content types and their specific fields.
 
@@ -44,8 +44,20 @@ The IMSCC fixture (`tests/fixtures/imscc/`) is a synthetic `.imscc`-style direct
 - `course_settings/context.xml` — canvas_domain and course_id (used to pre-fill `canvas.toml`)
 - `course_settings/events.xml` — two events (one all-day, one with HTML description)
 - `course_settings/module_meta.xml` — one module with items of every supported type
+- `course_settings/rubrics.xml` — two rubrics with criteria and ratings (tests extraction to `rubrics.toml`)
+- `course_settings/files_meta.xml` — one hidden folder and three files with varied settings (tests extraction to `files_meta.toml`)
+- `course_settings/media_tracks.xml` — empty (skipped; no round-trip content)
+- `course_settings/canvas_export.txt` — export metadata text (skipped; no round-trip content)
 - `course_settings/syllabus.html` — syllabus HTML content
 - `wiki_content/`, `g_assignment_1/`, `g_discussion_1*.xml`, `g_quiz_1/`, `g_exturl_1.xml`, `web_resources/` — one of each content type
+- `g_exturl_1.xml` — webLink with `target="_blank"` and `windowFeatures` on the `<url>` element (tests §4.8 attribute extraction and module comment output)
+- `g_discussion_attach.xml` + `g_discussion_attach_meta.xml` — discussion with `<attachments>` block (tests §4.7 attachment extraction and `## Attachments` section)
+- `g_quiz_1/g_quiz_1.xml` — updated with `<itemfeedback>` elements on MCQ (general, correct, incorrect, per-answer) and `<itemfeedback ident="solution">` on essay question (tests §4.10.7 feedback and §4.10.11.2 sample solution)
+- `g_quiz_types.xml` — standalone QTI file with `cc.multiple_response.v0p1`, `cc.fib.v0p1`, `cc.pattern_match.v0p1` questions (unit tests for new question type parsing and output format)
+- `lti_resource_links/g_lti_1.xml` — LTI 1.3 resource XML (tests that `imscc_path` is populated from `<file>` children, not from the empty `href=""` attribute)
+- `g_quiz_2/` with `assessment_meta.xml` and `assessment_qti.xml` + `non_cc_assessments/g_quiz_2.xml.qti` — quiz in Canvas export format (tests the `href="" + <dependency>` detection path; also tests that `non_cc_assessments/*.xml.qti` is preferred for question parsing because it carries `points_possible`)
+- `non_cc_assessments/g_bank_1.xml.qti` — QTI objectbank with 2 questions (MCQ with `original_answer_ids`, essay), `bank_context_uuid`, and `bank_state` (tests question bank category detection, metadata extraction, and `question_banks/` output)
+- Module updated to include a `ContextExternalTool` item (tests that it is emitted as a URL link, not as a SKIPPED comment)
 
 **What to assert on:** The integration tests assert on the `canvasapi` calls our code makes — arguments, order, and count. They do *not* assert on Canvas's behaviour (storing, retrieving), because that is Canvas's responsibility, not ours.
 

@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<topic xmlns="http://www.imsglobal.org/xsd/imsccv1p1/imsdt_v1p1"
+       xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+  <title>Discussion With Attachment</title>
+  <text texttype="text/html">&lt;p&gt;See the attached file for details.&lt;/p&gt;</text>
+  <attachments>
+    <attachment href="media/diagram.png"/>
+    <attachment href="media/notes.pdf"/>
+  </attachments>
+</topic>

@@ -117,5 +117,42 @@
     <resource identifier="g_asset_1" type="webcontent" href="web_resources/images/logo.png">
       <file href="web_resources/images/logo.png"/>
     </resource>
+
+    <!-- LTI resource (Canvas export format: href="" + <file> child) -->
+    <resource identifier="g_lti_1" type="imsbasiclti_xmlv1p3" href="">
+      <file href="lti_resource_links/g_lti_1.xml"/>
+    </resource>
+
+    <!-- Quiz 2 using Canvas export format: href="" + <dependency> pointing to meta resource -->
+    <resource identifier="g_quiz_2"
+              type="imsqti_xmlv1p2/imscc_xmlv1p1/assessment"
+              href="">
+      <file href="g_quiz_2/assessment_qti.xml"/>
+      <dependency identifierref="g_quiz_2_meta"/>
+    </resource>
+    <resource identifier="g_quiz_2_meta"
+              type="associatedcontent/imscc_xmlv1p1/learning-application-resource"
+              href="g_quiz_2/assessment_meta.xml">
+      <file href="g_quiz_2/assessment_meta.xml"/>
+      <file href="non_cc_assessments/g_quiz_2.xml.qti"/>
+    </resource>
+
+    <!-- Discussion with attachment -->
+    <resource identifier="g_discussion_attach" type="imsdt_xmlv1p1" href="g_discussion_attach.xml">
+      <file href="g_discussion_attach.xml"/>
+      <dependency identifierref="g_discussion_attach_meta"/>
+    </resource>
+    <resource identifier="g_discussion_attach_meta"
+              type="associatedcontent/imscc_xmlv1p1/learning-application-resource"
+              href="g_discussion_attach_meta.xml">
+      <file href="g_discussion_attach_meta.xml"/>
+    </resource>
+
+    <!-- Standalone QTI question bank (question_bank category via objectbank detection) -->
+    <resource identifier="g_bank_1"
+              type="associatedcontent/imscc_xmlv1p1/learning-application-resource"
+              href="non_cc_assessments/g_bank_1.xml.qti">
+      <file href="non_cc_assessments/g_bank_1.xml.qti"/>
+    </resource>
   </resources>
 </manifest>
