@@ -4,6 +4,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 from typing import Any, Callable
+from urllib.parse import unquote
 
 ManifestDict = dict[str, dict[str, Any]]
 
@@ -45,7 +46,7 @@ def _to_local_key(href: str, source_file: Path, course_root: Path) -> str | None
     """Convert a relative href to a course-root-relative key, or None if external/anchor."""
     if href.startswith(("http://", "https://", "#", "mailto:")):
         return None
-    resolved = (source_file.parent / href).resolve()
+    resolved = (source_file.parent / unquote(href)).resolve()
     try:
         return resolved.relative_to(course_root.resolve()).as_posix()
     except ValueError:
@@ -77,6 +78,7 @@ def rewrite_links(
     manifest: ManifestDict,
     course_id: int,
     stub_creator: Callable[[str, str], dict[str, Any]],
+    errors: list[str] | None = None,
 ) -> str:
     """Rewrite local <img src> and <a href> references to Canvas URLs.
 
@@ -93,6 +95,12 @@ def rewrite_links(
         local_file = course_root / local_key
         if not local_file.exists():
             print(f"  ERROR: local file not found, removing tag: {local_key}")
+            if errors is not None:
+                try:
+                    src = source_file.relative_to(course_root)
+                except ValueError:
+                    src = source_file
+                errors.append(f"  {src}: local file not found, removing tag: {local_key}")
             return local_key, None  # signals removal
         if local_key not in manifest:
             entry = stub_creator(local_key, infer_canvas_type(local_key))

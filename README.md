@@ -52,15 +52,14 @@ uv tool install git+https://github.com/your-org/github-to-canvas
 Then run from anywhere:
 
 ```bash
-github-to-canvas --repo ./my-course --config ./canvas.toml
+github-to-canvas ./my-course
 ```
 
 ### Run without installing (one-off)
 
 ```bash
 uvx --from git+https://github.com/your-org/github-to-canvas github-to-canvas \
-  --repo ./my-course \
-  --config ./canvas.toml
+  ./my-course
 ```
 
 ### Install for development
@@ -75,14 +74,14 @@ uv pip install -e ".[dev]"
 After that, run the CLI directly without activating the venv:
 
 ```bash
-uv run github-to-canvas --repo ./my-course --config ./canvas.toml
+uv run github-to-canvas ./my-course
 ```
 
 Or activate the venv first and then call the command normally:
 
 ```bash
 source .venv/bin/activate
-github-to-canvas --repo ./my-course --config ./canvas.toml
+github-to-canvas ./my-course
 ```
 
 Run the tests the same way:
@@ -121,7 +120,14 @@ Pass it as an environment variable (recommended):
 
 ```bash
 export CANVAS_API_TOKEN="your-token-here"
-github-to-canvas --repo ./my-course
+github-to-canvas ./my-course
+```
+
+Or put it in a `.env` file in your working directory (loaded automatically on startup):
+
+```bash
+# .env
+CANVAS_API_TOKEN=your-token-here
 ```
 
 Or put it in the `[auth]` block of `canvas.toml` for local-only use (add `canvas.toml` to `.gitignore` if you do this).
@@ -131,12 +137,14 @@ Or put it in the `[auth]` block of `canvas.toml` for local-only use (add `canvas
 ## Usage
 
 ```
-Usage: github-to-canvas update [OPTIONS]
+Usage: github-to-canvas update [OPTIONS] REPO
 
   Sync a Markdown course repo to Canvas LMS.
 
+Arguments:
+  REPO                            Path to the course content repo  [required]
+
 Options:
-  --repo PATH                     Path to the course content repo  [required]
   --config PATH                   Path to canvas.toml  [default: <repo>/canvas.toml]
   --force-uploads                 Re-upload all files even if unchanged since last sync
   --force-overwrite               Skip Canvas timestamp check; always overwrite Canvas
@@ -152,14 +160,14 @@ Options:
 Syncs every file in the course repo. Files that haven't changed since their last `last_synced` manifest timestamp are skipped automatically.
 
 ```bash
-# canvas.toml lives inside the repo
-github-to-canvas update --repo ./my-course
+# canvas.toml lives inside the repo (default)
+github-to-canvas update ./my-course
 
 # explicit config path
-github-to-canvas update --repo ./my-course --config ~/secrets/canvas.toml
+github-to-canvas update ./my-course --config ~/secrets/canvas.toml
 
 # force re-upload of everything regardless of timestamps
-github-to-canvas update --repo ./my-course --force-uploads
+github-to-canvas update ./my-course --force-uploads
 ```
 
 ### Typical full-sync workflow
@@ -170,7 +178,7 @@ cd my-course && git pull
 
 # 2. Sync to Canvas (only changed files are uploaded)
 CANVAS_API_TOKEN=your-token-here \
-  github-to-canvas update --repo . --config canvas.toml
+  github-to-canvas update .
 
 # 3. Commit the updated manifest
 git add .canvas-manifest.toml
@@ -190,13 +198,13 @@ Syncs the specified file(s) and every resource they transitively reference, foll
 
 ```bash
 # Re-sync a module and everything it links to
-github-to-canvas update --repo . -t modules/week-1.md
+github-to-canvas update . -t modules/week-1.md
 
 # Re-sync two modules and all their dependencies
-github-to-canvas update --repo . -t modules/week-1.md,modules/week-2.md
+github-to-canvas update . -t modules/week-1.md,modules/week-2.md
 
 # Force re-upload even for unchanged files
-github-to-canvas update --repo . -t modules/week-1.md --force-uploads
+github-to-canvas update . -t modules/week-1.md --force-uploads
 ```
 
 **What counts as a reference:**
@@ -213,10 +221,10 @@ Syncs only the listed file(s), with no recursive traversal. Useful when you know
 
 ```bash
 # Re-sync one page
-github-to-canvas update --repo . -s pages/syllabus.md
+github-to-canvas update . -s pages/syllabus.md
 
 # Re-sync several specific files
-github-to-canvas update --repo . -s assignments/week1.md,discussions/week1-intro.md
+github-to-canvas update . -s assignments/week1.md,discussions/week1-intro.md
 ```
 
 ### Combining `-t` and `-s`
@@ -226,7 +234,7 @@ github-to-canvas update --repo . -s assignments/week1.md,discussions/week1-intro
 ```bash
 # Re-sync a module and all its content (via -t),
 # then also sync an unrelated page (via -s)
-github-to-canvas update --repo . \
+github-to-canvas update . \
   -t modules/week-3.md \
   -s pages/office-hours.md
 ```
@@ -483,7 +491,7 @@ This lets you review the diverged items before deciding what to do:
 - **Keep the local version** — use `--force-overwrite` to overwrite Canvas regardless:
 
 ```bash
-github-to-canvas update --repo . --force-overwrite
+github-to-canvas update . --force-overwrite
 ```
 
 `--force-overwrite` skips the Canvas timestamp check entirely. This is also faster (no extra API calls) when you know the local repo is the authoritative source and don't need the protection.

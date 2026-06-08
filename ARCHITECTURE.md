@@ -102,7 +102,15 @@ Processing: pages/syllabus.md
 Syncing module: modules/week-1.md
 ```
 
-## `update` Subcommand: CLI Options
+## `update` Subcommand
+
+```text
+Usage: github-to-canvas update [OPTIONS] REPO
+```
+
+`REPO` is the only required argument — a positional path to the course content repo. There is no `--repo` flag.
+
+## CLI Options
 
 ### `--force-uploads`
 
@@ -144,7 +152,7 @@ This ordering means: run `-t` on a module to recursively re-sync everything it r
 Paths passed to `-t` and `-s` are resolved as follows:
 
 - Absolute paths: used directly, then made relative to `--repo`
-- Relative paths: resolved relative to the current working directory, then made relative to `--repo`
+- Relative paths: resolved relative to the current working directory, then made relative to `REPO`
 
 Paths that resolve outside the repo root print a warning and are skipped.
 
@@ -295,7 +303,7 @@ course_id = 12345
 api_token = ""
 ```
 
-The API token should be passed via the `CANVAS_API_TOKEN` environment variable rather than committed to the repo.
+The API token should be passed via the `CANVAS_API_TOKEN` environment variable rather than committed to the repo. On startup the tool searches for a `.env` file starting from the current working directory (walking up the directory tree) and loads it automatically, so a `.env` in your course repo or any parent directory is picked up without any extra steps.
 
 ### Content mapping
 

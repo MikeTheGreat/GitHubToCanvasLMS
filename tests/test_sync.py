@@ -326,10 +326,8 @@ def test_missing_local_file_tag_removed_sync_continues(
     out = capsys.readouterr().out
     assert "ERROR" in out
     assert "ghost.md" in out
-    # Page was still uploaded despite the bad link
-    mock_course.create_page.assert_called_once()
-    uploaded_body = mock_course.create_page.call_args[1]["wiki_page"]["body"]
-    assert "ghost" not in uploaded_body  # tag was removed
+    # Page is NOT uploaded when it has broken links — retry on the next run
+    mock_course.create_page.assert_not_called()
 
 
 # ---------------------------------------------------------------------------

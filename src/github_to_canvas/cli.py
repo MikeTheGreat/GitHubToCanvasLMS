@@ -122,15 +122,18 @@ def update(
                 if single_target
                 else []
             )
-            run_targeted_sync(
+            had_errors = run_targeted_sync(
                 cfg, repo, recursive_list, single_list, force_uploads, force_overwrite
             )
         else:
-            run_sync(
+            had_errors = run_sync(
                 cfg, repo, force_uploads=force_uploads, force_overwrite=force_overwrite
             )
 
-        click.secho("Update successful", fg="green")
+        if had_errors:
+            click.secho("Update complete; please check errors listed above.", fg="yellow")
+        else:
+            click.secho("Update successful", fg="green")
     except FileNotFoundError as e:
         die(f"Config file not found: {e.filename}")
     except tomllib.TOMLDecodeError as e:

@@ -91,23 +91,49 @@ def _canvas_is_newer(
     return False
 
 
-def sync_syllabus(course, repo_path: Path, manifest: dict, course_id: int) -> None:
+def sync_syllabus(
+    course, repo_path: Path, manifest: dict, manifest_path: Path, course_id: int,
+    errors: list[str] | None = None,
+    force_uploads: bool = False,
+) -> None:
     """Upload course_settings/syllabus.md as the Canvas course syllabus body."""
     syllabus_md = repo_path / "course_settings" / "syllabus.md"
     if not syllabus_md.exists():
         return
+    local_key = "course_settings/syllabus.md"
+    if not manifest_lib.needs_sync(manifest, local_key, syllabus_md, force_uploads):
+        print(f"Skipping (up-to-date): {local_key}")
+        return
     print("Syncing syllabus...")
     frontmatter, body = parse_frontmatter(syllabus_md.read_text())
     html = markdown_to_html(body.strip()) if body.strip() else ""
+    error_count_before = len(errors) if errors is not None else 0
     # Stub creator is not needed for the syllabus; pass a no-op
-    html = rewrite_links(html, syllabus_md, repo_path, manifest, course_id, lambda *_: {})
+    html = rewrite_links(html, syllabus_md, repo_path, manifest, course_id, lambda *_: {}, errors)
+    if errors is not None and len(errors) > error_count_before:
+        print(f"  Skipping upload due to errors: {local_key}")
+        return
     course.update(course={"syllabus_body": html})
+    manifest_lib.record(manifest, manifest_path, local_key, course_id, "syllabus")
 
 
-def sync_course_settings(course, repo_path: Path, manifest: dict) -> None:
+def sync_course_settings(
+    course, repo_path: Path, manifest: dict, manifest_path: Path,
+    force_uploads: bool = False,
+) -> None:
     """Sync course_settings.toml: metadata, grading standards, assignment groups, policies, rubrics."""
     settings_path = repo_path / "course_settings.toml"
     if not settings_path.exists():
+        return
+    local_key = "course_settings.toml"
+    rubrics_path = repo_path / "course_settings" / "rubrics.toml"
+    # Re-sync if either the main settings file or rubrics.toml is newer than last_synced.
+    settings_stale = manifest_lib.needs_sync(manifest, local_key, settings_path, force_uploads)
+    rubrics_stale = rubrics_path.exists() and manifest_lib.needs_sync(
+        manifest, local_key, rubrics_path, force_uploads
+    )
+    if not settings_stale and not rubrics_stale:
+        print(f"Skipping (up-to-date): {local_key}")
         return
     print("Syncing course settings...")
     with settings_path.open("rb") as fh:
@@ -142,7 +168,6 @@ def sync_course_settings(course, repo_path: Path, manifest: dict) -> None:
             print(f"  WARNING: post policy update failed: {exc}")
 
     # §15: rubrics
-    rubrics_path = repo_path / "course_settings" / "rubrics.toml"
     if rubrics_path.exists():
         with rubrics_path.open("rb") as fh:
             rubrics_data = tomllib.load(fh)
@@ -153,25 +178,28 @@ def sync_course_settings(course, repo_path: Path, manifest: dict) -> None:
             except Exception as exc:
                 print(f"  WARNING: rubrics sync failed: {exc}")
 
+    manifest_lib.record(manifest, manifest_path, local_key, 0, "course_settings")
+
 
 def run_sync(
     config: Config,
     repo_path: Path,
     force_uploads: bool = False,
     force_overwrite: bool = False,
-) -> None:
-    """Main sync pipeline: assets → content → modules."""
+) -> bool:
+    """Main sync pipeline: assets → content → modules. Returns True if any errors occurred."""
     manifest_path = repo_path / ".canvas-manifest.toml"
     manifest = manifest_lib.load(manifest_path)
     course = capi.get_course(config)
     snippets_dir = repo_path / "snippets"
     newer_on_canvas: list[str] = []
+    errors: list[str] = []
 
     # 0. Course settings (metadata, grading standards, assignment groups, policies, rubrics)
-    sync_course_settings(course, repo_path, manifest)
+    sync_course_settings(course, repo_path, manifest, manifest_path, force_uploads)
 
     # 0.5. Syllabus
-    sync_syllabus(course, repo_path, manifest, config.course_id)
+    sync_syllabus(course, repo_path, manifest, manifest_path, config.course_id, errors, force_uploads)
 
     # 1. Assets (depth-first, files before subdirs, alphabetical)
     assets_dir = repo_path / "assets"
@@ -191,7 +219,7 @@ def run_sync(
         for md_file in sorted(content_dir.glob("*.md")):
             _sync_content_file(
                 course, md_file, repo_path, snippets_dir, manifest, manifest_path,
-                config.course_id, force_uploads, force_overwrite, newer_on_canvas,
+                config.course_id, force_uploads, force_overwrite, newer_on_canvas, errors,
             )
 
     # 2.5. Quizzes (each quiz lives in its own sub-folder)
@@ -202,7 +230,7 @@ def run_sync(
             if quiz_md.exists():
                 _sync_quiz(
                     course, quiz_folder, quiz_md, repo_path, manifest, manifest_path,
-                    config.course_id, force_uploads, force_overwrite, newer_on_canvas,
+                    config.course_id, force_uploads, force_overwrite, newer_on_canvas, errors,
                 )
 
     # 2.6. Question banks
@@ -218,6 +246,8 @@ def run_sync(
             )
 
     _print_newer_on_canvas_summary(newer_on_canvas)
+    _print_errors_summary(errors)
+    return bool(errors)
 
 
 def _walk_assets(
@@ -258,6 +288,7 @@ def _sync_content_file(
     force_uploads: bool = False,
     force_overwrite: bool = False,
     newer_on_canvas: list[str] | None = None,
+    errors: list[str] | None = None,
 ) -> None:
     if newer_on_canvas is None:
         newer_on_canvas = []
@@ -290,7 +321,11 @@ def _sync_content_file(
         )
         return entry
 
-    html = rewrite_links(html, md_file, repo_root, manifest, course_id, stub_creator)
+    error_count_before = len(errors) if errors is not None else 0
+    html = rewrite_links(html, md_file, repo_root, manifest, course_id, stub_creator, errors)
+    if errors is not None and len(errors) > error_count_before:
+        print(f"  Skipping upload due to errors: {local_key}")
+        return
 
     existing = manifest.get(local_key)
     title = frontmatter.get("title", md_file.stem)
@@ -418,6 +453,7 @@ def _sync_quiz(
     force_uploads: bool = False,
     force_overwrite: bool = False,
     newer_on_canvas: list[str] | None = None,
+    errors: list[str] | None = None,
 ) -> None:
     if newer_on_canvas is None:
         newer_on_canvas = []
@@ -461,10 +497,12 @@ def _sync_quiz(
         )
         return entry
 
+    error_count_before = len(errors) if errors is not None else 0
+
     # §7: rewrite links in quiz description
     if desc_html:
         desc_html = rewrite_links(desc_html, quiz_md, repo_root, manifest,
-                                  config_course_id, _stub_creator)
+                                  config_course_id, _stub_creator, errors)
 
     questions: list[dict[str, Any]] = []
     for q_path in question_paths:
@@ -477,10 +515,14 @@ def _sync_quiz(
         if q_data.get("question_text"):
             q_data["question_text"] = rewrite_links(
                 q_data["question_text"], q_path, repo_root, manifest,
-                config_course_id, _stub_creator,
+                config_course_id, _stub_creator, errors,
             )
         q_data["rel_path"] = rel_path
         questions.append(q_data)
+
+    if errors is not None and len(errors) > error_count_before:
+        print(f"  Skipping upload due to errors: {local_key}")
+        return
 
     existing = manifest.get(local_key)
     canvas_id = existing["canvas_id"] if existing else None
@@ -578,6 +620,14 @@ def _print_newer_on_canvas_summary(newer_on_canvas: list[str]) -> None:
         print(f"  {key}")
 
 
+def _print_errors_summary(errors: list[str]) -> None:
+    if not errors:
+        return
+    print(f"\nThe following errors occurred during the update ({len(errors)} total):")
+    for msg in errors:
+        print(f"  {msg.strip()}")
+
+
 def run_targeted_sync(
     config: Config,
     repo_path: Path,
@@ -585,8 +635,8 @@ def run_targeted_sync(
     single_targets: list[str],
     force_uploads: bool = False,
     force_overwrite: bool = False,
-) -> None:
-    """Sync only the specified targets.
+) -> bool:
+    """Sync only the specified targets. Returns True if any errors occurred.
 
     -t (recursive_targets) runs first: BFS each target plus all transitively referenced files.
     -s (single_targets) runs second, independently: no BFS, no dependency on -t's visited set.
@@ -598,6 +648,7 @@ def run_targeted_sync(
     snippets_dir = repo_path / "snippets"
     assets_root = repo_path / "assets"
     newer_on_canvas: list[str] = []
+    errors: list[str] = []
 
     visited: set[str] = set()
 
@@ -628,12 +679,12 @@ def run_targeted_sync(
             quiz_folder = file_path.parent
             _sync_quiz(
                 course, quiz_folder, file_path, repo_path, manifest, manifest_path,
-                config.course_id, force_uploads, force_overwrite, newer_on_canvas,
+                config.course_id, force_uploads, force_overwrite, newer_on_canvas, errors,
             )
         else:
             _sync_content_file(
                 course, file_path, repo_path, snippets_dir, manifest, manifest_path,
-                config.course_id, force_uploads, force_overwrite, newer_on_canvas,
+                config.course_id, force_uploads, force_overwrite, newer_on_canvas, errors,
             )
 
     def _warn_missing(target: str) -> None:
@@ -683,3 +734,5 @@ def run_targeted_sync(
         _process(local_key)
 
     _print_newer_on_canvas_summary(newer_on_canvas)
+    _print_errors_summary(errors)
+    return bool(errors)

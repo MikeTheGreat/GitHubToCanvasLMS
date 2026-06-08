@@ -232,6 +232,26 @@ def test_stub_creator_called_once_for_repeated_reference(tmp_path: Path) -> None
 # ---------------------------------------------------------------------------
 
 
+def test_url_encoded_href_resolved_to_file_with_spaces(tmp_path: Path) -> None:
+    """Percent-encoded hrefs (%20) must resolve to the actual file that has spaces."""
+    course_root, source_file = _setup(tmp_path)
+    assets_dir = course_root / "assets" / "syllabus"
+    assets_dir.mkdir(parents=True)
+    (assets_dir / "IT-CS 115 - Panitz - Summer 2026 Syllabus.docx").touch()
+    canvas_file_url = "https://school.instructure.com/files/9999/download"
+    manifest = {
+        "assets/syllabus/IT-CS 115 - Panitz - Summer 2026 Syllabus.docx": {
+            "canvas_type": "file",
+            "canvas_id": 9999,
+            "canvas_url": canvas_file_url,
+        }
+    }
+    html = '<a href="../assets/syllabus/IT-CS%20115%20-%20Panitz%20-%20Summer%202026%20Syllabus.docx">Syllabus</a>'
+    result = rewrite_links(html, source_file, course_root, manifest, COURSE_ID, _no_stub)
+    assert canvas_file_url in result
+    assert "%20" not in result
+
+
 def test_multiple_different_links_all_rewritten(tmp_path: Path) -> None:
     course_root, source_file = _setup(tmp_path)
     manifest = {
