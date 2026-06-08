@@ -10,6 +10,7 @@ from dotenv import find_dotenv, load_dotenv
 load_dotenv(find_dotenv(usecwd=True), override=True, verbose=True)
 
 
+from .canvas_api import get_course
 from .config import load as load_config
 from .imscc_import import run_import
 from .sync import run_sync, run_targeted_sync
@@ -104,6 +105,12 @@ def update(
     try:
         cfg = load_config(config)
 
+        click.echo(f"Repo:      {repo.resolve()}")
+        click.echo(f"Course ID: {cfg.course_id}  ({cfg.base_url})")
+
+        course = get_course(cfg)
+        click.echo(f"Course:    {course.name}")
+
         if target_recursively or single_target:
             recursive_list = (
                 [p.strip() for p in target_recursively.split(",") if p.strip()]
@@ -122,6 +129,8 @@ def update(
             run_sync(
                 cfg, repo, force_uploads=force_uploads, force_overwrite=force_overwrite
             )
+
+        click.secho("Update successful", fg="green")
     except FileNotFoundError as e:
         die(f"Config file not found: {e.filename}")
     except tomllib.TOMLDecodeError as e:
