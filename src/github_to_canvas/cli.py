@@ -3,17 +3,19 @@ import tomllib
 from pathlib import Path
 
 import click
-from dotenv import load_dotenv
 
-load_dotenv()
+#
+from dotenv import find_dotenv, load_dotenv
+
+load_dotenv(find_dotenv(usecwd=True), override=True, verbose=True)
+
 
 from .config import load as load_config
 from .imscc_import import run_import
 from .sync import run_sync, run_targeted_sync
 
-# TODO: all commands must use die() for user-facing errors — no tracebacks, no raw exceptions.
 
-
+# all commands must use die() for user-facing errors — no tracebacks, no raw exceptions.
 def die(msg: str) -> None:
     click.secho(f"Error: {msg}", fg="red", err=True)
     sys.exit(1)
@@ -42,11 +44,9 @@ def import_cmd(imscc_path: Path, output_dir: Path) -> None:
 
 
 @main.command(no_args_is_help=True)
-@click.option(
-    "--repo",
-    required=True,
+@click.argument(
+    "repo",
     type=click.Path(exists=True, file_okay=False, path_type=Path),
-    help="Path to the course content repo",
 )
 @click.option(
     "--config",
@@ -70,7 +70,8 @@ def import_cmd(imscc_path: Path, output_dir: Path) -> None:
     ),
 )
 @click.option(
-    "--target-recursively", "-t",
+    "--target-recursively",
+    "-t",
     default=None,
     metavar="FILE[,FILE...]",
     help=(
@@ -79,7 +80,8 @@ def import_cmd(imscc_path: Path, output_dir: Path) -> None:
     ),
 )
 @click.option(
-    "--single-target", "-s",
+    "--single-target",
+    "-s",
     default=None,
     metavar="FILE[,FILE...]",
     help=(
@@ -99,26 +101,32 @@ def update(
     """Sync a Markdown course repo to Canvas LMS."""
     if config is None:
         config = repo / "canvas.toml"
-    # try:
-    cfg = load_config(config)
+    try:
+        cfg = load_config(config)
 
-    if target_recursively or single_target:
-        recursive_list = (
-            [p.strip() for p in target_recursively.split(",") if p.strip()]
-            if target_recursively else []
-        )
-        single_list = (
-            [p.strip() for p in single_target.split(",") if p.strip()]
-            if single_target else []
-        )
-        run_targeted_sync(cfg, repo, recursive_list, single_list, force_uploads, force_overwrite)
-    else:
-        run_sync(cfg, repo, force_uploads=force_uploads, force_overwrite=force_overwrite)
-    # except FileNotFoundError as e:
-    #     die(f"Config file not found: {e.filename}")
-    # except tomllib.TOMLDecodeError as e:
-    #     die(f"Invalid canvas.toml: {e}")
-    # except (ValueError, KeyError) as e:
-    #     die("KeyError or ValueError:" + str(e))
-    # except Exception as e:
-    #     raise e  # For unknown errors print rich debugging info
+        if target_recursively or single_target:
+            recursive_list = (
+                [p.strip() for p in target_recursively.split(",") if p.strip()]
+                if target_recursively
+                else []
+            )
+            single_list = (
+                [p.strip() for p in single_target.split(",") if p.strip()]
+                if single_target
+                else []
+            )
+            run_targeted_sync(
+                cfg, repo, recursive_list, single_list, force_uploads, force_overwrite
+            )
+        else:
+            run_sync(
+                cfg, repo, force_uploads=force_uploads, force_overwrite=force_overwrite
+            )
+    except FileNotFoundError as e:
+        die(f"Config file not found: {e.filename}")
+    except tomllib.TOMLDecodeError as e:
+        die(f"Invalid canvas.toml: {e}")
+    except (ValueError, KeyError) as e:
+        die("KeyError or ValueError:" + str(e))
+    except Exception as e:
+        raise e  # For unknown errors print rich debugging info

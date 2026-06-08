@@ -1,5 +1,7 @@
 # Possible Future Features
 
+## all commands must use die() for user-facing errors — no tracebacks, no raw exceptions.
+
 ## Import coverage gaps (found via pool sampling)
 
 Running `check_imscc_coverage.py` with pool sampling against the `it-cs142` course

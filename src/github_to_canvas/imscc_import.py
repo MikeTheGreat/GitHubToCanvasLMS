@@ -1740,9 +1740,9 @@ def _write_canvas_toml(context: dict[str, Any], output_dir: Path) -> None:
         f'base_url = "{base_url}"\n'
         + course_id_line
         + "\n"
-        "[auth]\n"
+        "# [auth]\n"
         "# Prefer env var CANVAS_API_TOKEN; this is a fallback for local use only\n"
-        'api_token = ""\n',
+        '# api_token = ""\n',
         encoding="utf-8",
     )
     print("Writing: canvas.toml")
