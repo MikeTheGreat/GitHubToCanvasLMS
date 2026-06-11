@@ -3,6 +3,7 @@ import tomllib
 from pathlib import Path
 
 import click
+import pypandoc
 
 #
 from dotenv import find_dotenv, load_dotenv
@@ -23,9 +24,36 @@ def die(msg: str) -> None:
     sys.exit(1)
 
 
+def _ensure_pandoc() -> None:
+    try:
+        pypandoc.get_pandoc_version()
+    except OSError:
+        die("Pandoc not found. Run `github-to-canvas setup` to install it.")
+
+
 @click.group()
 def main() -> None:
     """Manage Canvas LMS course content from a Markdown GitHub repo."""
+
+
+@main.command(name="setup")
+def setup_cmd() -> None:
+    """Download Pandoc into the current Python environment."""
+    try:
+        version = pypandoc.get_pandoc_version()
+        path = pypandoc.get_pandoc_path()
+        click.echo(f"Pandoc {version} already installed at {path}")
+        return
+    except OSError:
+        pass
+
+    bin_dir = Path(sys.executable).parent
+    click.echo(f"Downloading Pandoc into {bin_dir} ...")
+    try:
+        pypandoc.download_pandoc(targetfolder=str(bin_dir))
+        click.secho("Pandoc installed successfully.", fg="green")
+    except Exception as e:
+        die(f"Failed to download Pandoc: {e}")
 
 
 @main.command(name="import", no_args_is_help=True)
@@ -136,6 +164,7 @@ def update(
     single_target: str | None,
 ) -> None:
     """Sync a Markdown course repo to Canvas LMS."""
+    _ensure_pandoc()
     if config is None:
         config = repo / "canvas.toml"
     try:
