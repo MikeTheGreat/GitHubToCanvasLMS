@@ -288,6 +288,77 @@ Generating module: modules/getting-started.md
 Done. Wrote course repo to: ./my-course/
 ```
 
+## `publish` Subcommand
+
+Generates a public [MkDocs](https://www.mkdocs.org/) + [Material](https://squidfunk.github.io/mkdocs-material/)
+static website from the local course repo and optionally deploys it to GitHub
+Pages. The site mirrors Canvas's left-sidebar navigation model so it feels
+familiar, without exposing any student data. This is a read-only export — it
+never touches Canvas, the API, or `.canvas-manifest.toml`.
+
+```text
+github-to-canvas publish [COURSE_DIR] [--output-dir site] [--deploy] [--emit-workflow]
+```
+
+- `COURSE_DIR`: the course content repo (defaults to `.`)
+- `--output-dir`: where `mkdocs build` writes the static HTML (default: `site/`)
+- `--deploy`: run `mkdocs gh-deploy` (push to the repo's `gh-pages` branch) instead of a local build
+- `--emit-workflow`: also write a starter `.github/workflows/publish.yml` into the course repo
+
+**Implementation:** `src/github_to_canvas/publish.py`
+
+**Optional dependency:** MkDocs and Material are an opt-in extra so the rest of
+the tool installs without them. Install with `uv tool install github-to-canvas[publish]`
+(or `pip install mkdocs mkdocs-material`). If `mkdocs` is not on `PATH`, the
+subcommand exits via `die()` with an install hint. Pandoc is **not** needed for
+the publish flow — page/assignment/discussion bodies are staged as Markdown and
+MkDocs renders them.
+
+### What it does
+
+1. Determine the site name from `course_settings.toml` (`title` / `name` /
+   `course_code`), falling back to the course directory name.
+2. Build the `nav:` tree from `modules/` (alphabetical, matching the sync
+   order). Each module becomes a top-level nav section; the module's own `.md`
+   becomes a clickable overview/index page (Material `navigation.indexes`).
+   SubHeaders (`## Heading` lines) become nested nav groups; `ExternalUrl`
+   items become absolute-URL nav links.
+3. Stage a temporary MkDocs tree (`mkdocs.yml` + `docs/` + `overrides/`) and run
+   `mkdocs build --site-dir <output-dir>` (or `mkdocs gh-deploy --force` with
+   `--deploy`), with the working directory set to `COURSE_DIR` so `gh-deploy`
+   finds the course repo's git remote.
+
+### Content selection
+
+**Only content referenced by a module is published** — orphaned pages,
+assignments, discussions, and quizzes are excluded. Per-content handling:
+
+| Content | Published as |
+| --- | --- |
+| Pages / assignments / discussions | Markdown body, frontmatter stripped, snippet includes expanded inline, an H1 prepended if the body has none. Cross-links and asset links are left as-is (the staged `docs/` mirrors the repo layout, so relative links resolve). |
+| Quizzes | A single readable study-guide page (`docs/quizzes/<slug>.md`) with the description and each question's prompt and answer choices; correct choices are marked `**(correct)**`. The `quizzes/<slug>/<slug>.md` folder structure is flattened, and links pointing at it are rewritten. |
+| Assets | `assets/` is copied wholesale into `docs/assets/` so every referenced image/file resolves. |
+
+### Canvas-like styling
+
+`docs/stylesheets/extra.css` sets Material's CSS variables to Canvas's charcoal
+sidebar (`#2D3B45`) and orange accent (`#E66000`), plus an active-item left
+border. `overrides/main.html` extends Material's `base.html` and prepends the
+course name to the navigation drawer via the `site_nav` block (a no-op on theme
+versions lacking that block, so it never breaks the build).
+
+### Publish console output
+
+```text
+Staging site in: /tmp/g2c-publish-xxxx
+  Staging module: modules/week-1.md
+  Staging content: assignments/week1.md
+  Staging content: pages/syllabus.md
+Site: Intro to CS  (1 module(s), 3 content file(s))
+Running: mkdocs build --site-dir /abs/site -f /tmp/g2c-publish-xxxx/mkdocs.yml
+Built static site: /abs/site
+```
+
 ## Configuration
 
 ### Tool config file (`canvas.toml`)

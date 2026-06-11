@@ -104,7 +104,11 @@ When implemented, the suggested approach:
 - Use `canvasapi` directly in the test assertions to fetch each uploaded item and verify its content, metadata, and published state
 - Run this suite manually or in a separate CI job gated on `CANVAS_API_TOKEN` being present — not on every push
 
-## `publish` subcommand: generate a public MkDocs static site from the course repo
+## ~~`publish` subcommand: generate a public MkDocs static site from the course repo~~ — DONE
+
+Implemented in `src/github_to_canvas/publish.py`; see ARCHITECTURE.md → "`publish`
+Subcommand" for the shipped behaviour. The original design notes are kept below
+for reference.
 
 A `publish` subcommand that converts the local course repo into a static website and deploys it to GitHub Pages (or any static host). The goal is a publicly shareable site that feels familiar to Canvas users — same left-sidebar navigation model, same content sections — without exposing any student data.
 

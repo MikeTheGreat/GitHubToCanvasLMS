@@ -24,6 +24,10 @@ dev = [
     "pytest>=8.0",
     "pytest-mock>=3.14",
 ]
+publish = [
+    "mkdocs>=1.5",
+    "mkdocs-material>=9.5",
+]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/github_to_canvas"]

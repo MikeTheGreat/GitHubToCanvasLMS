@@ -13,6 +13,7 @@ load_dotenv(find_dotenv(usecwd=True), override=True, verbose=True)
 from .canvas_api import get_course
 from .config import load as load_config
 from .imscc_import import run_import
+from .publish import run_publish
 from .sync import run_sync, run_targeted_sync
 
 
@@ -41,6 +42,41 @@ def import_cmd(imscc_path: Path, output_dir: Path) -> None:
     except ValueError as e:
         die(str(e))
     except Exception as e:
+        die(str(e))
+
+
+@main.command(name="publish")
+@click.argument(
+    "course_dir",
+    default=".",
+    type=click.Path(exists=True, file_okay=False, path_type=Path),
+)
+@click.option(
+    "--output-dir",
+    default="site",
+    type=click.Path(path_type=Path),
+    help="Where `mkdocs build` writes the static HTML (default: site/).",
+)
+@click.option(
+    "--deploy",
+    is_flag=True,
+    default=False,
+    help="Run `mkdocs gh-deploy` to push to the gh-pages branch instead of a local build.",
+)
+@click.option(
+    "--emit-workflow",
+    is_flag=True,
+    default=False,
+    help="Write a starter .github/workflows/publish.yml into the course repo.",
+)
+def publish(course_dir: Path, output_dir: Path, deploy: bool, emit_workflow: bool) -> None:
+    """Generate a public MkDocs static site from the course repo.
+
+    COURSE_DIR is the course content repo (defaults to the current directory).
+    """
+    try:
+        run_publish(course_dir, output_dir, deploy=deploy, emit_workflow_flag=emit_workflow)
+    except ValueError as e:
         die(str(e))
 
 
