@@ -35,7 +35,7 @@ On each run the tool:
 6. Rewrites cross-links between files to correct Canvas URLs
 7. Syncs `modules/` last (after all content has Canvas IDs)
 
-Files are skipped if their local modification time is not newer than the `last_synced` timestamp in the manifest — so unchanged files cost nothing on repeat runs.
+Files are skipped if their local modification time is older than the `last_synced` timestamp in the manifest — so unchanged files cost nothing on repeat runs.
 
 A `.canvas-manifest.toml` file is written to your course repo to track Canvas IDs and sync times. Commit it so collaborators share the same mapping.
 
@@ -43,10 +43,17 @@ A `.canvas-manifest.toml` file is written to your course repo to track Canvas ID
 
 ## Installation
 
+### Requirements
+
+- Python 3.11+
+- [uv](https://docs.astral.sh/uv/) (for install/run)
+- Pandoc — either install it system-wide **or** run `github-to-canvas setup` after installing the tool (see below)
+- A Canvas LMS account with API access
+
 ### Recommended: install as a `uv` tool
 
 ```bash
-uv tool install git+https://github.com/your-org/github-to-canvas
+uv tool install git+https://github.com/MikeTheGreat/GitHubToCanvasLMS
 ```
 
 Then run from anywhere:
@@ -58,15 +65,17 @@ github-to-canvas ./my-course
 ### Run without installing (one-off)
 
 ```bash
-uvx --from git+https://github.com/your-org/github-to-canvas github-to-canvas \
+uvx --from git+https://github.com/MikeTheGreat/GitHubToCanvasLMS github-to-canvas \
   ./my-course
 ```
+
+One-off `uvx` runs require a system-wide Pandoc install — `github-to-canvas setup` cannot help here because `uvx` uses a temporary environment that is discarded after the run.
 
 ### Install for development
 
 ```bash
-git clone https://github.com/your-org/github-to-canvas
-cd github-to-canvas
+git clone https://github.com/MikeTheGreat/GitHubToCanvasLMS
+cd GitHubToCanvasLMS
 uv venv
 uv pip install -e ".[dev]"
 ```
@@ -92,7 +101,18 @@ uv run pytest
 pytest
 ```
 
-> **Pandoc required.** Install it from [pandoc.org](https://pandoc.org/installing.html) or via your package manager (`brew install pandoc`, `apt install pandoc`, etc.).
+### Installing Pandoc
+
+You have two options:
+
+- **System-wide install** (required for `uvx` one-off runs): install from [pandoc.org](https://pandoc.org/installing.html) or via your package manager (`brew install pandoc`, `apt install pandoc`, etc.).
+- **Tool-local install** (after `uv tool install` only): run the `setup` subcommand to download Pandoc into the tool's own environment:
+
+  ```bash
+  github-to-canvas setup
+  ```
+
+  This places the Pandoc binary alongside the tool so no separate system installation is needed. It is a no-op if Pandoc is already found.
 
 ---
 
@@ -362,24 +382,26 @@ Read each question carefully.
 
 **Question files** — each question is a separate `.md` file. Every question type shares these fields:
 
-| Field | Default if omitted | Notes |
-| --- | --- | --- |
-| `title` | filename stem | Shown as the question name in Canvas |
-| `question_type` | `essay_question` | See types below |
-| `points_possible` | `0` | |
+
+| Field             | Default if omitted | Notes                                |
+| ------------------- | -------------------- | -------------------------------------- |
+| `title`           | filename stem      | Shown as the question name in Canvas |
+| `question_type`   | `essay_question`   | See types below                      |
+| `points_possible` | `0`                |                                      |
 
 **Supported question types and their required fields:**
 
 > **Note:** None of these fields are required for the *sync to succeed* — a question with missing fields will upload without errors. However, the question will be ungradable in Canvas until the fields are provided.
 
-| Question type | Fields needed to be gradable |
-| --- | --- |
-| `multiple_choice_question` | `correct` (1-based index of the right answer) + `## Answers` section listing choices |
-| `true_false_question` | `correct: true` or `correct: false` |
-| `multiple_response_question` | `correct` (list of 1-based indices, e.g. `[1, 3]`) + `## Answers` section |
-| `fill_in_blank_question` | `answers` list in frontmatter (accepted strings) |
-| `pattern_match_question` | `answers` list in frontmatter (accepted patterns) |
-| `essay_question` | — (manually graded; no `correct` needed) |
+
+| Question type                | Fields needed to be gradable                                                         |
+| ------------------------------ | -------------------------------------------------------------------------------------- |
+| `multiple_choice_question`   | `correct` (1-based index of the right answer) + `## Answers` section listing choices |
+| `true_false_question`        | `correct: true` or `correct: false`                                                  |
+| `multiple_response_question` | `correct` (list of 1-based indices, e.g. `[1, 3]`) + `## Answers` section            |
+| `fill_in_blank_question`     | `answers` list in frontmatter (accepted strings)                                     |
+| `pattern_match_question`     | `answers` list in frontmatter (accepted patterns)                                    |
+| `essay_question`             | — (manually graded; no`correct` needed)                                             |
 
 Example MCQ question file:
 
@@ -498,11 +520,12 @@ github-to-canvas update . --force-overwrite
 
 The two flags are independent:
 
-| | `--force-uploads` | `--force-overwrite` |
-| --- | --- | --- |
-| Bypasses local `mtime` check | Yes | No |
-| Bypasses Canvas timestamp check | No | Yes |
-| Extra Canvas API calls (per item) | Same | Fewer (check skipped) |
+
+|                                   | `--force-uploads` | `--force-overwrite`   |
+| ----------------------------------- | ------------------- | ----------------------- |
+| Bypasses local`mtime` check       | Yes               | No                    |
+| Bypasses Canvas timestamp check   | No                | Yes                   |
+| Extra Canvas API calls (per item) | Same              | Fewer (check skipped) |
 
 Use both flags together to re-upload and overwrite everything unconditionally.
 
@@ -528,11 +551,12 @@ python scripts/check_imscc_coverage.py course-export.imscc ./my-course-repo
 
 Options:
 
-| Flag | Default | Description |
-| --- | --- | --- |
-| `--min-words N` | 10 | Minimum fragment length; increase to reduce coincidental matches |
-| `--seed N` | 42 | Random seed — change to sample different fragments |
-| `--categories LIST` | `assignment,discussion,page,syllabus` | Comma-separated types to check |
+
+| Flag                | Default                               | Description                                                      |
+| --------------------- | --------------------------------------- | ------------------------------------------------------------------ |
+| `--min-words N`     | 10                                    | Minimum fragment length; increase to reduce coincidental matches |
+| `--seed N`          | 42                                    | Random seed — change to sample different fragments              |
+| `--categories LIST` | `assignment,discussion,page,syllabus` | Comma-separated types to check                                   |
 
 Example output:
 
@@ -562,12 +586,3 @@ Results: 44 OK  |  1 MISSING  |  2 skipped (too short)  |  47 total checked
 ```
 
 Exit code 0 means all sampled fragments were found. Exit code 1 means at least one was missing.
-
----
-
-## Requirements
-
-- Python 3.11+
-- [uv](https://docs.astral.sh/uv/) (for install/run)
-- [Pandoc](https://pandoc.org/) (system install)
-- A Canvas LMS account with API access
