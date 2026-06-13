@@ -351,6 +351,17 @@ omitted fields are simply left unchanged in Canvas (and `title` falls back to th
 filename). All dates are ISO 8601 strings; include a timezone offset (e.g. `-08:00`)
 to avoid surprises.
 
+> **Tip — adding comments to Markdown files:** Pandoc's raw attribute block syntax
+> lets you embed text that is completely ignored during conversion and will never
+> appear in Canvas output:
+>
+> ````markdown
+> ```{=comment}
+> This text is completely ignored by Pandoc.
+> It will never appear in any output format.
+> ```
+> ````
+
 ### `course_settings.toml`
 
 Placed at the **repo root** (not inside `course_settings/`). Drives the course's
