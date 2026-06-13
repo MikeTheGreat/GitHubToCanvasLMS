@@ -124,6 +124,11 @@ def sync_assignment_groups(course, groups: list[dict[str, Any]]) -> None:
             course.create_assignment_group(name=name, **kwargs)
 
 
+def get_assignment_group_ids(course) -> dict[str, int]:
+    """Return {name: canvas_id} for all assignment groups in the course."""
+    return {ag.name: ag.id for ag in course.get_assignment_groups()}
+
+
 def update_late_policy(course, late_policy: dict[str, Any]) -> None:
     """Create or update the course late policy via raw API calls."""
     if not late_policy:

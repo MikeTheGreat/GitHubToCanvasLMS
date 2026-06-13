@@ -1,5 +1,8 @@
 # Possible Future Features
 
+## Group sets and group assignments
+Currently we don't manage this, but it would be nice
+
 ## all commands must use die() for user-facing errors — no tracebacks, no raw exceptions.
 
 ## Import coverage gaps (found via pool sampling)

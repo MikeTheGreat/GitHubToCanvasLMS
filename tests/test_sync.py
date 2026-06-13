@@ -981,6 +981,79 @@ def test_assignment_group_grading_peer_review_fields_passed_to_canvas(
     assert call_kwargs["intra_group_peer_reviews"] is True
 
 
+def test_assignment_group_id_numeric_passed_to_canvas(
+    mock_course, course_root, mocker
+) -> None:
+    """assignment_group_id as a numeric value is passed through unchanged."""
+    mocker.patch("github_to_canvas.manifest.flush")
+    _setup_first_sync_mocks(mock_course)
+    mock_course.get_assignment_groups.return_value = []
+    (course_root / "assignments" / "week1.md").write_text(
+        "---\n"
+        "title: \"Week 1 Problem Set\"\n"
+        "assignment_group_id: 99\n"
+        "---\n\n"
+        "Body.\n"
+    )
+
+    run_sync(_config(), course_root)
+
+    call_kwargs = mock_course.create_assignment.call_args[1]["assignment"]
+    assert call_kwargs["assignment_group_id"] == 99
+
+
+def test_assignment_group_id_by_name_resolved_to_canvas_id(
+    mock_course, course_root, mocker
+) -> None:
+    """assignment_group_id as a name string is resolved to the Canvas numeric ID."""
+    mocker.patch("github_to_canvas.manifest.flush")
+    _setup_first_sync_mocks(mock_course)
+    labs_group = MagicMock()
+    labs_group.name = "Labs"
+    labs_group.id = 42
+    mock_course.get_assignment_groups.return_value = [labs_group]
+    (course_root / "assignments" / "week1.md").write_text(
+        "---\n"
+        "title: \"Week 1 Problem Set\"\n"
+        "assignment_group_id: \"Labs\"\n"
+        "---\n\n"
+        "Body.\n"
+    )
+
+    run_sync(_config(), course_root)
+
+    call_kwargs = mock_course.create_assignment.call_args[1]["assignment"]
+    assert call_kwargs["assignment_group_id"] == 42
+
+
+def test_assignment_group_id_unknown_name_skipped(
+    mock_course, course_root, mocker, capsys
+) -> None:
+    """Unknown assignment group name prints a warning and omits the field."""
+    mocker.patch("github_to_canvas.manifest.flush")
+    _setup_first_sync_mocks(mock_course)
+    mock_course.get_assignment_groups.return_value = []
+    (course_root / "assignments" / "week1.md").write_text(
+        "---\n"
+        "title: \"Week 1 Problem Set\"\n"
+        "assignment_group_id: \"NoSuchGroup\"\n"
+        "---\n\n"
+        "Body.\n"
+    )
+
+    had_errors = run_sync(_config(), course_root)
+
+    assert had_errors, "run_sync should return True (errors present)"
+    call_kwargs = mock_course.create_assignment.call_args[1]["assignment"]
+    assert "assignment_group_id" not in call_kwargs
+    captured = capsys.readouterr()
+    # Immediate inline warning
+    assert "WARNING" in captured.out
+    assert "NoSuchGroup" in captured.out
+    # Also reprinted in the end-of-run errors summary
+    assert "errors occurred" in captured.out
+
+
 # ---------------------------------------------------------------------------
 # Scenario 11: Graded discussion fields passed as nested assignment params
 # ---------------------------------------------------------------------------

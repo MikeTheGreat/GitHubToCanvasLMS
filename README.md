@@ -591,6 +591,12 @@ due_at:    "2025-02-01T23:59:00-05:00"   # graded as late after this
 unlock_at: "2025-01-27T00:00:00-05:00"   # becomes available at this time
 lock_at:   "2025-02-08T23:59:00-05:00"   # no submissions accepted after this
 
+# ── Assignment group (grading category) ───────────────────────────────────
+assignment_group_id: "Labs"              # name of an assignment group defined in
+                                         #   course_settings.toml, or a numeric
+                                         #   Canvas ID; controls which grade bucket
+                                         #   this assignment falls under
+
 # ── Group assignment ──────────────────────────────────────────────────────
 group_category_id: 12345                 # numeric ID of an existing group set
                                          #   (see note below); makes this a
@@ -623,10 +629,13 @@ Description goes here
 Submit a PDF of your solutions by the deadline.
 ```
 
-**Group assignments, anonymous/moderated grading, and peer reviews** are all
-settable from the frontmatter above — they map directly to the Canvas Assignments
-API and are passed straight through to Canvas. Two caveats:
+**Assignment group, group assignments, anonymous/moderated grading, and peer
+reviews** are all settable from the frontmatter above. A few caveats:
 
+- **Assignment group:** `assignment_group_id` accepts either the group name as a
+  string (e.g. `"Labs"`) or a numeric Canvas ID. When a name is given the tool
+  resolves it to the Canvas ID using the groups defined in `course_settings.toml`.
+  If the name is not found a warning is printed and the field is skipped.
 - **Group set:** Canvas identifies a group set (group *category*) by numeric ID,
   not by name. This tool does **not** create or manage group sets — create the
   group set in the Canvas UI (or via the API) first, then put its numeric

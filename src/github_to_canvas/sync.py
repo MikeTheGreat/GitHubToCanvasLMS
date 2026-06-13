@@ -198,6 +198,9 @@ def run_sync(
     # 0. Course settings (metadata, grading standards, assignment groups, policies, rubrics)
     sync_course_settings(course, repo_path, manifest, manifest_path, force_uploads)
 
+    # Fetch assignment group IDs once so assignments can reference groups by name
+    assignment_group_ids = capi.get_assignment_group_ids(course)
+
     # 0.5. Syllabus
     sync_syllabus(course, repo_path, manifest, manifest_path, config.course_id, errors, force_uploads)
 
@@ -220,6 +223,7 @@ def run_sync(
             _sync_content_file(
                 course, md_file, repo_path, snippets_dir, manifest, manifest_path,
                 config.course_id, force_uploads, force_overwrite, newer_on_canvas, errors,
+                assignment_group_ids=assignment_group_ids,
             )
 
     # 2.5. Quizzes (each quiz lives in its own sub-folder)
@@ -289,6 +293,7 @@ def _sync_content_file(
     force_overwrite: bool = False,
     newer_on_canvas: list[str] | None = None,
     errors: list[str] | None = None,
+    assignment_group_ids: dict[str, int] | None = None,
 ) -> None:
     if newer_on_canvas is None:
         newer_on_canvas = []
@@ -348,6 +353,8 @@ def _sync_content_file(
         extra: dict[str, Any] = {}
         for key in ("points_possible", "due_at", "lock_at", "unlock_at",
                     "submission_types", "grading_type",
+                    # Assignment group (grading category)
+                    "assignment_group_id",
                     # Group assignment
                     "group_category_id", "grade_group_students_individually",
                     # Anonymous grading
@@ -363,6 +370,19 @@ def _sync_content_file(
                     "intra_group_peer_reviews"):
             if key in frontmatter:
                 extra[key] = frontmatter[key]
+        if "assignment_group_id" in extra and isinstance(extra["assignment_group_id"], str):
+            name = extra["assignment_group_id"]
+            resolved = (assignment_group_ids or {}).get(name)
+            if resolved is None:
+                known = list(assignment_group_ids.keys()) if assignment_group_ids else []
+                msg = (f"WARNING: {local_key}: assignment group '{name}' not found on Canvas "
+                       f"(known: {known}); skipping assignment_group_id")
+                print(f"  {msg}")
+                if errors is not None:
+                    errors.append(msg)
+                del extra["assignment_group_id"]
+            else:
+                extra["assignment_group_id"] = resolved
         entry = capi.create_or_update_assignment(
             course, canvas_id, title, html, published=published, **extra
         )
