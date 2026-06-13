@@ -133,7 +133,7 @@ def update_late_policy(course, late_policy: dict[str, Any]) -> None:
     """Create or update the course late policy via raw API calls."""
     if not late_policy:
         return
-    flat = {f"late_policy[{k}]": v for k, v in late_policy.items()}
+    flat = [(f"late_policy[{k}]", v) for k, v in late_policy.items()]
     try:
         course._requester.request("GET", f"courses/{course.id}/late_policy")
         course._requester.request("PATCH", f"courses/{course.id}/late_policy", _kwargs=flat)
@@ -146,7 +146,7 @@ def update_post_policy(course, post_manually: bool) -> None:
     course._requester.request(
         "PUT",
         f"courses/{course.id}/post_policies",
-        _kwargs={"post_policy[post_manually]": post_manually},
+        _kwargs=[("post_policy[post_manually]", post_manually)],
     )
 
 
@@ -203,6 +203,12 @@ def create_or_update_page(
     else:
         page = course.create_page(wiki_page={"title": title, "body": body, **kwargs})
     return {"canvas_type": "page", "canvas_id": page.page_id, "canvas_url": page.url}
+
+
+def set_front_page(course, page_url: str) -> None:
+    """Designate an existing Canvas page as the course front page."""
+    page = course.get_page(page_url)
+    page.edit(wiki_page={"front_page": True})
 
 
 def create_or_update_assignment(

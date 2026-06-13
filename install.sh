@@ -1,0 +1,1 @@
+uv tool install --reinstall /home/mike/Dropbox/Personal/Tech/GitHubToCanvasLMS/GitHubToCanvasLMS

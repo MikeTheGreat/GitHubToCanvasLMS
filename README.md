@@ -366,6 +366,7 @@ course_code  = "CS 101"                        # short code shown in the UI
 start_at     = "2025-01-06T00:00:00-08:00"     # course start date
 conclude_at  = "2025-03-20T23:59:00-07:00"     # course end date
 default_view = "wiki"   # landing page: feed | wiki | modules | syllabus | assignments
+front_page   = "pages/welcome.md"  # wiki home page (only used when default_view = "wiki")
 license      = "private"  # private | public_domain | cc_by | cc_by_sa | cc_by_nc
                           #   | cc_by_nc_sa | cc_by_nd | cc_by_nc_nd
 

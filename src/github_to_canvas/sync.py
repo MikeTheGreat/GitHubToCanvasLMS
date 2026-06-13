@@ -158,14 +158,15 @@ def sync_course_settings(
         try:
             capi.update_late_policy(course, late_policy)
         except Exception as exc:
-            print(f"  WARNING: late policy update failed: {exc}")
+            print(f"  WARNING: late policy update failed (late_policy={late_policy!r}): {exc}")
 
     # §1b: default post policy
     if "post_manually" in default_post_policy:
+        post_manually = default_post_policy["post_manually"]
         try:
-            capi.update_post_policy(course, default_post_policy["post_manually"])
+            capi.update_post_policy(course, post_manually)
         except Exception as exc:
-            print(f"  WARNING: post policy update failed: {exc}")
+            print(f"  WARNING: post policy update failed (post_manually={post_manually!r}): {exc}")
 
     # §15: rubrics
     if rubrics_path.exists():
@@ -194,6 +195,13 @@ def run_sync(
     snippets_dir = repo_path / "snippets"
     newer_on_canvas: list[str] = []
     errors: list[str] = []
+
+    # Read front_page setting up front so we can apply it after pages are synced.
+    _cs_path = repo_path / "course_settings.toml"
+    _front_page_path: str | None = None
+    if _cs_path.exists():
+        with _cs_path.open("rb") as _fh:
+            _front_page_path = tomllib.load(_fh).get("front_page")
 
     # 0. Course settings (metadata, grading standards, assignment groups, policies, rubrics)
     sync_course_settings(course, repo_path, manifest, manifest_path, force_uploads)
@@ -239,6 +247,29 @@ def run_sync(
 
     # 2.6. Question banks
     _sync_question_banks(course, repo_path, manifest, manifest_path, force_uploads)
+
+    # 2.7. Front page (must run after pages are synced so the manifest entry exists)
+    if _front_page_path:
+        entry = manifest.get(_front_page_path)
+        if entry and "canvas_url" in entry:
+            print(f"Setting front page: {_front_page_path}")
+            try:
+                capi.set_front_page(course, entry["canvas_url"])
+            except Exception as exc:
+                if "unpublished" in str(exc).lower():
+                    msg = (
+                        f"front_page '{_front_page_path}' must be published before it can be set "
+                        f"as the front page. Add the following to its frontmatter and re-run:\n"
+                        f"    published: true"
+                    )
+                else:
+                    msg = f"set front page failed for '{_front_page_path}': {exc}"
+                print(f"  WARNING: {msg}")
+                errors.append(msg)
+        else:
+            msg = f"front_page '{_front_page_path}' not found in manifest — sync the page first"
+            print(f"  WARNING: {msg}")
+            errors.append(msg)
 
     # 3. Modules (alphabetical)
     modules_dir = repo_path / "modules"

@@ -3,6 +3,13 @@
 ## Group sets and group assignments
 Currently we don't manage this, but it would be nice
 
+## Only set front page when relevant files have changed
+
+Currently `run_sync` reads `front_page` from `course_settings.toml` at startup and
+calls `set_front_page` on every run, regardless of whether `course_settings.toml` or
+the target page's `.md` file has actually changed. It should only call `set_front_page`
+when one of those two files has been re-synced in the same run.
+
 ## all commands must use die() for user-facing errors — no tracebacks, no raw exceptions.
 
 ## Import coverage gaps (found via pool sampling)
