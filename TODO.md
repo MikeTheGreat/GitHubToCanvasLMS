@@ -56,6 +56,67 @@ These files are produced by the importer but have no upload path yet:
 - **`course_settings/files_meta.toml`** — File visibility (`locked`, `hidden`, `display_name`, `unlock_at`) and folder visibility. Requires Canvas file IDs from the manifest (needs matching by `local_path` or `display_name`). Import-side fix also needed: `_write_files_meta_toml()` should write `local_path` alongside each file entry. See UPLOADER_CHANGES.md §16.
 - **Tab configuration** in `course_settings.toml` — `tab_configuration` JSON string. Call `tab.update(hidden=...)` per tab via `course.list_tabs()`. See UPLOADER_CHANGES.md §1f.
 
+## Round-trip fidelity gaps (import → sync)
+
+Fields written by the importer that are silently ignored on upload:
+
+### `original_answer_ids` and `### Per-answer` feedback are never re-uploaded
+
+`imscc_import._write_question_file` emits `original_answer_ids` in YAML frontmatter
+and a `### Per-answer` block under `## Feedback`, but neither is consumed on sync:
+
+- `canvas_api._build_question_params` does not pass `original_answer_ids` to Canvas.
+- `quiz._parse_feedback_section` only reads `### General`, `### Correct`, and
+  `### Incorrect`; the `### Per-answer` block is silently ignored.
+
+These fields round-trip through the file but are never re-uploaded. Either consume
+them on upload or document clearly that they are import-only metadata (the README
+currently notes this).
+
+### `pattern_match_question` only uploads the first pattern
+
+`quiz.py:180` uses `patterns[0]` when building the answer list for
+`pattern_match_question`, so only the first entry in `answers:` is ever sent to
+Canvas. If multiple accepted patterns are listed, the rest are silently dropped.
+Decide whether to fix this (iterate over all patterns) or document it as intentional.
+
+### `fill_in_blank_question` and `pattern_match_question` both become `short_answer_question`
+
+Both types are converted to Canvas `short_answer_question` in `quiz.py`. The
+distinctions (`pattern_match_question` uses substring matching; Canvas also has
+`fill_in_multiple_blanks_question`) are lost on upload. This is documented in the
+README. Confirm this is the intended mapping or add separate handling.
+
+## Re-sync is not idempotent for question banks and rubrics
+
+Unlike pages/assignments/discussions/quizzes (which look up the existing Canvas item
+by manifest `canvas_id` and update it in place), question banks and rubrics have no
+update path:
+
+### Question banks create a duplicate on every re-sync
+
+`canvas_api.sync_question_bank` always calls `course.create_question_bank(...)`; it
+never consults the manifest's existing `canvas_id` to update or replace the prior
+bank, and the old bank is never deleted. So whenever a bank is re-synced (its
+`.toml` is newer than `last_synced`, or `--force-uploads` is used) a **second bank
+with the same name is created in Canvas**, leaving the old one behind.
+
+Note also that `_sync_question_banks`'s `needs_sync` check only looks at the bank's
+`.toml` mtime — editing a question `.md` file alone does **not** trigger a re-sync.
+
+Fix options: look up the existing bank via the manifest `canvas_id`, delete it (and
+its questions) before re-creating, or diff questions and update in place. Also
+extend the staleness check to cover the `questions/*.md` files (cf. how
+`_quiz_needs_sync` already does this for quizzes).
+
+### Rubrics are never updated once created
+
+`canvas_api.sync_rubrics` matches rubrics **by title** and skips any whose title
+already exists in Canvas. Editing a rubric's criteria/ratings locally and
+re-syncing has no effect — the existing Canvas rubric is left untouched. To change
+a rubric you must currently delete it in Canvas first (or rename it). Consider an
+update-in-place path matched by manifest id rather than title.
+
 ## Quiz BFS traversal (`-t` with quizzes)
 
 `_get_file_refs()` returns an empty set for `quizzes/` files, so `-t` on a module that includes a quiz will not follow links embedded in quiz description or question HTML. The quiz itself is synced (including link rewriting), but BFS won't pre-upload unreferenced assets or pages that only appear inside quiz content.

@@ -12,4 +12,19 @@
   <workflow_state>published</workflow_state>
   <assignment_group_identifierref>g_default_group</assignment_group_identifierref>
   <omit_from_final_grade>false</omit_from_final_grade>
+  <group_category_id>12345</group_category_id>
+  <grade_group_students_individually>true</grade_group_students_individually>
+  <anonymous_grading>true</anonymous_grading>
+  <moderated_grading>true</moderated_grading>
+  <grader_count>2</grader_count>
+  <final_grader_id>567</final_grader_id>
+  <grader_comments_visible_to_graders>true</grader_comments_visible_to_graders>
+  <graders_anonymous_to_graders>false</graders_anonymous_to_graders>
+  <grader_names_visible_to_final_grader>true</grader_names_visible_to_final_grader>
+  <peer_reviews>true</peer_reviews>
+  <automatic_peer_reviews>true</automatic_peer_reviews>
+  <peer_review_count>3</peer_review_count>
+  <peer_reviews_assign_at>2025-10-05T00:00:00</peer_reviews_assign_at>
+  <anonymous_peer_reviews>false</anonymous_peer_reviews>
+  <intra_group_peer_reviews>true</intra_group_peer_reviews>
 </assignment>

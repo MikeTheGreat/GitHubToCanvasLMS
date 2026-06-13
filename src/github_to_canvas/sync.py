@@ -347,7 +347,20 @@ def _sync_content_file(
         canvas_id = existing["canvas_id"] if existing else None
         extra: dict[str, Any] = {}
         for key in ("points_possible", "due_at", "lock_at", "unlock_at",
-                    "submission_types", "grading_type"):
+                    "submission_types", "grading_type",
+                    # Group assignment
+                    "group_category_id", "grade_group_students_individually",
+                    # Anonymous grading
+                    "anonymous_grading",
+                    # Moderated grading
+                    "moderated_grading", "grader_count", "final_grader_id",
+                    "grader_comments_visible_to_graders",
+                    "graders_anonymous_to_graders",
+                    "grader_names_visible_to_final_grader",
+                    # Peer reviews
+                    "peer_reviews", "automatic_peer_reviews", "peer_review_count",
+                    "peer_reviews_assign_at", "anonymous_peer_reviews",
+                    "intra_group_peer_reviews"):
             if key in frontmatter:
                 extra[key] = frontmatter[key]
         entry = capi.create_or_update_assignment(

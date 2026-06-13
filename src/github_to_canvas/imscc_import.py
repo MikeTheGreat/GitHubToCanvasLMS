@@ -521,6 +521,11 @@ def parse_assignment_settings(xml_path: Path) -> dict[str, Any]:
     tree = ET.parse(xml_path)
     root = tree.getroot()
 
+    def _ns(el: ET.Element) -> str:
+        if el.tag.startswith("{"):
+            return el.tag.split("}")[0][1:]
+        return ""
+
     def _text(tag: str) -> str:
         ns_uri = _ns(root)
         el = root.find(f".//{{{ns_uri}}}{tag}") if ns_uri else None
@@ -528,10 +533,20 @@ def parse_assignment_settings(xml_path: Path) -> dict[str, Any]:
             el = root.find(f".//{tag}")
         return (el.text or "").strip() if el is not None else ""
 
-    def _ns(el: ET.Element) -> str:
-        if el.tag.startswith("{"):
-            return el.tag.split("}")[0][1:]
-        return ""
+    def _bool(tag: str) -> bool | None:
+        raw = _text(tag)
+        if raw.lower() == "true":
+            return True
+        if raw.lower() == "false":
+            return False
+        return None
+
+    def _int(tag: str) -> int | None:
+        raw = _text(tag)
+        try:
+            return int(raw) if raw else None
+        except ValueError:
+            return None
 
     title = _text("title")
     points_raw = _text("points_possible")
@@ -555,7 +570,7 @@ def parse_assignment_settings(xml_path: Path) -> dict[str, Any]:
         else []
     )
 
-    return {
+    result: dict[str, Any] = {
         "title": title,
         "published": workflow == "published",
         "points_possible": points,
@@ -565,6 +580,45 @@ def parse_assignment_settings(xml_path: Path) -> dict[str, Any]:
         "submission_types": submission_types,
         "grading_type": grading_type,
     }
+
+    # Group assignment
+    group_cat = _int("group_category_id")
+    if group_cat:
+        result["group_category_id"] = group_cat
+    for bool_tag in ("grade_group_students_individually",):
+        val = _bool(bool_tag)
+        if val:
+            result[bool_tag] = val
+
+    # Anonymous / moderated grading
+    for bool_tag in ("anonymous_grading", "moderated_grading",
+                     "grader_comments_visible_to_graders",
+                     "graders_anonymous_to_graders",
+                     "grader_names_visible_to_final_grader"):
+        val = _bool(bool_tag)
+        if val:
+            result[bool_tag] = val
+    grader_count = _int("grader_count")
+    if grader_count:
+        result["grader_count"] = grader_count
+    final_grader = _int("final_grader_id")
+    if final_grader:
+        result["final_grader_id"] = final_grader
+
+    # Peer reviews
+    for bool_tag in ("peer_reviews", "automatic_peer_reviews",
+                     "anonymous_peer_reviews", "intra_group_peer_reviews"):
+        val = _bool(bool_tag)
+        if val:
+            result[bool_tag] = val
+    peer_count = _int("peer_review_count")
+    if peer_count:
+        result["peer_review_count"] = peer_count
+    peer_assign_at = _text("peer_reviews_assign_at") or None
+    if peer_assign_at:
+        result["peer_reviews_assign_at"] = peer_assign_at
+
+    return result
 
 
 def convert_assignment(

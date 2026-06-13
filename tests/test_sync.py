@@ -942,6 +942,45 @@ def test_assignment_lock_at_unlock_at_grading_type_passed_to_canvas(
     assert call_kwargs["grading_type"] == "points"
 
 
+def test_assignment_group_grading_peer_review_fields_passed_to_canvas(
+    mock_course, course_root, mocker
+) -> None:
+    """Group, anonymous/moderated grading, and peer-review frontmatter reach canvasapi."""
+    mocker.patch("github_to_canvas.manifest.flush")
+    _setup_first_sync_mocks(mock_course)
+    (course_root / "assignments" / "week1.md").write_text(
+        "---\n"
+        "title: \"Week 1 Problem Set\"\n"
+        "published: true\n"
+        "group_category_id: 12345\n"
+        "grade_group_students_individually: true\n"
+        "anonymous_grading: true\n"
+        "moderated_grading: true\n"
+        "grader_count: 2\n"
+        "final_grader_id: 567\n"
+        "peer_reviews: true\n"
+        "automatic_peer_reviews: true\n"
+        "peer_review_count: 3\n"
+        "intra_group_peer_reviews: true\n"
+        "---\n\n"
+        "Submit your work.\n"
+    )
+
+    run_sync(_config(), course_root)
+
+    call_kwargs = mock_course.create_assignment.call_args[1]["assignment"]
+    assert call_kwargs["group_category_id"] == 12345
+    assert call_kwargs["grade_group_students_individually"] is True
+    assert call_kwargs["anonymous_grading"] is True
+    assert call_kwargs["moderated_grading"] is True
+    assert call_kwargs["grader_count"] == 2
+    assert call_kwargs["final_grader_id"] == 567
+    assert call_kwargs["peer_reviews"] is True
+    assert call_kwargs["automatic_peer_reviews"] is True
+    assert call_kwargs["peer_review_count"] == 3
+    assert call_kwargs["intra_group_peer_reviews"] is True
+
+
 # ---------------------------------------------------------------------------
 # Scenario 11: Graded discussion fields passed as nested assignment params
 # ---------------------------------------------------------------------------

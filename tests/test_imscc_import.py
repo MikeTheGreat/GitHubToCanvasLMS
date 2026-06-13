@@ -139,6 +139,30 @@ def test_assignment_canvas_ref_rewritten(output_dir: Path) -> None:
     assert "../pages/my-page.md" in text
 
 
+def test_assignment_group_and_grading_fields_imported(output_dir: Path) -> None:
+    run_import(FIXTURE_DIR, output_dir)
+    text = (output_dir / "assignments" / "my-assignment.md").read_text()
+    assert "group_category_id: 12345" in text
+    assert "grade_group_students_individually: true" in text
+    assert "anonymous_grading: true" in text
+    assert "moderated_grading: true" in text
+    assert "grader_count: 2" in text
+    assert "final_grader_id: 567" in text
+    assert "grader_comments_visible_to_graders: true" in text
+    assert "grader_names_visible_to_final_grader: true" in text
+
+
+def test_assignment_peer_review_fields_imported(output_dir: Path) -> None:
+    run_import(FIXTURE_DIR, output_dir)
+    text = (output_dir / "assignments" / "my-assignment.md").read_text()
+    assert "peer_reviews: true" in text
+    assert "automatic_peer_reviews: true" in text
+    assert "peer_review_count: 3" in text
+    assert "peer_reviews_assign_at:" in text
+    assert "2025-10-05T00:00:00" in text
+    assert "intra_group_peer_reviews: true" in text
+
+
 # --- Discussions ---
 
 def test_discussion_md_created(output_dir: Path) -> None:
