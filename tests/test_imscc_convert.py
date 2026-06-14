@@ -17,6 +17,7 @@ from github_to_canvas.imscc_import import (
     _parse_late_policy,
     _parse_manifest_metadata,
     _parse_rubrics,
+    _strip_canvas_img_attrs,
     parse_assignment_settings,
     parse_qti_questions,
     parse_topic_meta,
@@ -45,6 +46,61 @@ def test_extract_body_multiline() -> None:
     result = _extract_html_body(html)
     assert "<h1>Title</h1>" in result
     assert "<html>" not in result
+
+
+# ---------------------------------------------------------------------------
+# _strip_canvas_img_attrs
+# ---------------------------------------------------------------------------
+
+
+def test_strip_canvas_img_attrs_removes_api_endpoint() -> None:
+    html = '<img src="img.png" api-endpoint="https://example.com/api/v1/files/123" alt="test">'
+    result = _strip_canvas_img_attrs(html)
+    assert 'api-endpoint' not in result
+    assert 'src="img.png"' in result
+    assert 'alt="test"' in result
+
+
+def test_strip_canvas_img_attrs_removes_api_returntype() -> None:
+    html = '<img src="img.png" api-returntype="File">'
+    result = _strip_canvas_img_attrs(html)
+    assert 'api-returntype' not in result
+    assert 'src="img.png"' in result
+
+
+def test_strip_canvas_img_attrs_removes_loading() -> None:
+    html = '<img src="img.png" loading="lazy">'
+    result = _strip_canvas_img_attrs(html)
+    assert 'loading' not in result
+    assert 'src="img.png"' in result
+
+
+def test_strip_canvas_img_attrs_removes_multiple() -> None:
+    html = (
+        '<img src="img.png" role="presentation" width="366" height="321"'
+        ' api-endpoint="https://example.com/api/v1/files/123"'
+        ' api-returntype="File" loading="lazy">'
+    )
+    result = _strip_canvas_img_attrs(html)
+    assert 'api-endpoint' not in result
+    assert 'api-returntype' not in result
+    assert 'loading' not in result
+    assert 'role="presentation"' in result
+    assert 'width="366"' in result
+    assert 'height="321"' in result
+
+
+def test_strip_canvas_img_attrs_leaves_non_img_tags_alone() -> None:
+    html = '<p api-endpoint="x">text</p><img src="img.png">'
+    result = _strip_canvas_img_attrs(html)
+    assert '<p api-endpoint="x">text</p>' in result
+
+
+def test_strip_canvas_img_attrs_preserves_alt_text() -> None:
+    html = '<img src="img.png" alt="A screenshot of the download dialog" loading="lazy">'
+    result = _strip_canvas_img_attrs(html)
+    assert 'alt="A screenshot of the download dialog"' in result
+    assert 'loading' not in result
 
 
 # ---------------------------------------------------------------------------

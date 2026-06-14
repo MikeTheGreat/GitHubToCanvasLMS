@@ -477,6 +477,22 @@ def rewrite_imscc_links(
 # Group 4: Page converter
 # ---------------------------------------------------------------------------
 
+# Attributes Canvas's RCE injects on <img> tags that have no meaning outside Canvas
+_IMG_TAG_RE = re.compile(r"<img\b[^>]*?/?>", re.IGNORECASE | re.DOTALL)
+_CANVAS_IMG_ATTRS_RE = re.compile(
+    r'\s+(?:api-endpoint|api-returntype|loading|data-api-endpoint|data-api-returntype)'
+    r'(?:="[^"]*"|=\'[^\']*\')?',
+    re.IGNORECASE,
+)
+
+
+def _strip_canvas_img_attrs(html: str) -> str:
+    """Remove Canvas-internal img attributes before Pandoc sees the HTML."""
+    def _clean(m: re.Match) -> str:
+        return _CANVAS_IMG_ATTRS_RE.sub("", m.group(0))
+    return _IMG_TAG_RE.sub(_clean, html)
+
+
 def _extract_html_body(html: str) -> str:
     """Return the contents of <body>...</body>, or the full string if no body tag."""
     m = re.search(r"<body[^>]*>(.*)</body>", html, re.DOTALL | re.IGNORECASE)
@@ -484,6 +500,7 @@ def _extract_html_body(html: str) -> str:
 
 
 def _html_to_markdown(html: str) -> str:
+    html = _strip_canvas_img_attrs(html)
     return pypandoc.convert_text(
         html,
         to="markdown",
