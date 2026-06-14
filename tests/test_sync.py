@@ -386,6 +386,114 @@ def test_module_sync_item_order(mock_course, course_root, mocker) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Scenario 5b: Module re-synced when referenced content is updated
+# ---------------------------------------------------------------------------
+
+
+def test_module_resynced_when_referenced_page_updated(
+    mock_course, course_root, mocker, capsys
+) -> None:
+    """When a page referenced by a module is synced, the module is also re-synced."""
+    _make_old(course_root / "assets" / "images" / "fig.png")
+    _make_old(course_root / "assignments" / "week1.md")
+    _make_old(course_root / "discussions" / "week1-intro.md")
+    # pages/syllabus.md is NOT made old — it has a new mtime (modified by user)
+
+    preloaded = {
+        "assets/images/fig.png": {
+            "canvas_id": 77777, "canvas_type": "file",
+            "canvas_url": "https://school.instructure.com/files/77777/download",
+            "last_synced": "2025-01-01T00:00:00+00:00",
+        },
+        "assignments/week1.md": {
+            "canvas_id": 98765, "canvas_type": "assignment",
+            "last_synced": "2025-01-01T00:00:00+00:00",
+        },
+        "discussions/week1-intro.md": {
+            "canvas_id": 55555, "canvas_type": "discussion",
+            "last_synced": "2025-01-01T00:00:00+00:00",
+        },
+        "pages/syllabus.md": {
+            "canvas_id": 11111, "canvas_type": "page", "canvas_url": "syllabus",
+            "last_synced": "2025-01-01T00:00:00+00:00",
+            # No future timestamp here — page appears modified
+        },
+        # Module has a future last_synced — would normally be skipped
+        "modules/week-1.md": {
+            "canvas_id": 66666, "canvas_type": "module",
+            "canvas_item_ids": {"pages/syllabus.md": 201},
+            "last_synced": _FUTURE_SYNCED,
+        },
+    }
+    mocker.patch("github_to_canvas.manifest.load", return_value=preloaded)
+    mocker.patch("github_to_canvas.manifest.flush")
+
+    real_page = _mock_page(11111, "syllabus")
+    mock_course.get_page.return_value = real_page
+
+    module = _mock_module(66666)
+    mock_course.get_module.return_value = module
+    module.create_module_item.side_effect = [_mock_item(i) for i in range(201, 210)]
+
+    run_sync(_config(), course_root)
+
+    # Page was re-uploaded
+    mock_course.get_page.assert_called()
+    real_page.edit.assert_called()
+
+    # Module was also re-synced despite its own mtime being unchanged
+    mock_course.get_module.assert_called_with(66666)
+    module.edit.assert_called()
+    out = capsys.readouterr().out
+    assert "Syncing module: modules/week-1.md" in out
+
+
+def test_module_not_resynced_when_referenced_content_unchanged(
+    mock_course, course_root, mocker, capsys
+) -> None:
+    """A module whose referenced content was not updated is NOT re-synced."""
+    _make_old(course_root / "assets" / "images" / "fig.png")
+    _make_old(course_root / "assignments" / "week1.md")
+    _make_old(course_root / "discussions" / "week1-intro.md")
+    _make_old(course_root / "pages" / "syllabus.md")
+    _make_old(course_root / "modules" / "week-1.md")
+
+    preloaded = {
+        "assets/images/fig.png": {
+            "canvas_id": 77777, "canvas_type": "file",
+            "canvas_url": "https://school.instructure.com/files/77777/download",
+            "last_synced": "2025-01-01T00:00:00+00:00",
+        },
+        "assignments/week1.md": {
+            "canvas_id": 98765, "canvas_type": "assignment",
+            "last_synced": "2025-01-01T00:00:00+00:00",
+        },
+        "discussions/week1-intro.md": {
+            "canvas_id": 55555, "canvas_type": "discussion",
+            "last_synced": "2025-01-01T00:00:00+00:00",
+        },
+        "pages/syllabus.md": {
+            "canvas_id": 11111, "canvas_type": "page", "canvas_url": "syllabus",
+            "last_synced": "2025-01-01T00:00:00+00:00",
+        },
+        "modules/week-1.md": {
+            "canvas_id": 66666, "canvas_type": "module",
+            "canvas_item_ids": {},
+            "last_synced": "2025-01-01T00:00:00+00:00",
+        },
+    }
+    mocker.patch("github_to_canvas.manifest.load", return_value=preloaded)
+    mocker.patch("github_to_canvas.manifest.flush")
+
+    run_sync(_config(), course_root)
+
+    mock_course.create_module.assert_not_called()
+    mock_course.get_module.assert_not_called()
+    out = capsys.readouterr().out
+    assert "Skipping (up-to-date): modules/week-1.md" in out
+
+
+# ---------------------------------------------------------------------------
 # Scenario 6: Timestamp skip — up-to-date content file is skipped
 # ---------------------------------------------------------------------------
 

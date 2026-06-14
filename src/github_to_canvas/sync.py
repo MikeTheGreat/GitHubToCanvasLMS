@@ -221,6 +221,7 @@ def run_sync(
         )
 
     # 2. Content folders (alphabetical, excl. assets, modules, quizzes, snippets, course_settings, hidden)
+    synced_content_keys: set[str] = set()
     skip = {"assets", "modules", "quizzes", "snippets", "course_settings", "question_banks"}
     content_dirs = sorted(
         d for d in repo_path.iterdir()
@@ -232,6 +233,7 @@ def run_sync(
                 course, md_file, repo_path, snippets_dir, manifest, manifest_path,
                 config.course_id, force_uploads, force_overwrite, newer_on_canvas, errors,
                 assignment_group_ids=assignment_group_ids,
+                synced_keys=synced_content_keys,
             )
 
     # 2.5. Quizzes (each quiz lives in its own sub-folder)
@@ -243,6 +245,7 @@ def run_sync(
                 _sync_quiz(
                     course, quiz_folder, quiz_md, repo_path, manifest, manifest_path,
                     config.course_id, force_uploads, force_overwrite, newer_on_canvas, errors,
+                    synced_keys=synced_content_keys,
                 )
 
     # 2.6. Question banks
@@ -280,9 +283,23 @@ def run_sync(
     )
     modules_dir = repo_path / "modules"
     if modules_dir.exists():
+        # Determine which modules reference content that was just synced this run.
+        modules_with_updated_refs: set[Path] = set()
+        if synced_content_keys:
+            for md_file in modules_dir.glob("*.md"):
+                _, body = parse_frontmatter(md_file.read_text())
+                items = parse_module_body(body, md_file, repo_path)
+                refs = {i["local_path"] for i in items if i["type"] == "content"}
+                if refs & synced_content_keys:
+                    modules_with_updated_refs.add(md_file)
+
         for md_file in sorted(modules_dir.glob("*.md")):
             position = position_map.get(md_file.name)
-            force_this = force_uploads or (order_changed and md_file.name in position_map)
+            force_this = (
+                force_uploads
+                or (order_changed and md_file.name in position_map)
+                or md_file in modules_with_updated_refs
+            )
             _sync_module(
                 course, md_file, repo_path, manifest, manifest_path,
                 force_this, force_overwrite, newer_on_canvas,
@@ -336,6 +353,7 @@ def _sync_content_file(
     newer_on_canvas: list[str] | None = None,
     errors: list[str] | None = None,
     assignment_group_ids: dict[str, int] | None = None,
+    synced_keys: set[str] | None = None,
 ) -> None:
     if newer_on_canvas is None:
         newer_on_canvas = []
@@ -390,6 +408,8 @@ def _sync_content_file(
             manifest, manifest_path, local_key,
             entry["canvas_id"], "page", extra={"canvas_url": entry["canvas_url"]},
         )
+        if synced_keys is not None:
+            synced_keys.add(local_key)
     elif canvas_type == "assignment":
         canvas_id = existing["canvas_id"] if existing else None
         extra: dict[str, Any] = {}
@@ -429,6 +449,8 @@ def _sync_content_file(
             course, canvas_id, title, html, published=published, **extra
         )
         manifest_lib.record(manifest, manifest_path, local_key, entry["canvas_id"], "assignment")
+        if synced_keys is not None:
+            synced_keys.add(local_key)
     elif canvas_type == "discussion":
         canvas_id = existing["canvas_id"] if existing else None
         extra = {}
@@ -442,6 +464,8 @@ def _sync_content_file(
             course, canvas_id, title, html, published=published, **extra
         )
         manifest_lib.record(manifest, manifest_path, local_key, entry["canvas_id"], "discussion")
+        if synced_keys is not None:
+            synced_keys.add(local_key)
 
 
 def _load_module_order(repo_path: Path) -> dict[str, int]:
@@ -542,6 +566,7 @@ def _sync_quiz(
     force_overwrite: bool = False,
     newer_on_canvas: list[str] | None = None,
     errors: list[str] | None = None,
+    synced_keys: set[str] | None = None,
 ) -> None:
     if newer_on_canvas is None:
         newer_on_canvas = []
@@ -625,6 +650,8 @@ def _sync_quiz(
         manifest, manifest_path, local_key,
         result["canvas_id"], "quiz", extra={"canvas_question_ids": q_id_map},
     )
+    if synced_keys is not None:
+        synced_keys.add(local_key)
 
 
 def _sync_question_banks(
