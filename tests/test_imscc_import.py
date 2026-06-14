@@ -12,8 +12,8 @@ from github_to_canvas.imscc_import import (
     open_imscc,
     parse_imsmanifest,
     run_import,
-    _write_course_id_snippet,
-    _replace_course_id_in_md_files,
+    _write_canvas_course_reference_snippet,
+    _replace_canvas_course_url_in_md_files,
 )
 
 FIXTURE_DIR = Path(__file__).parent / "fixtures" / "imscc"
@@ -895,79 +895,106 @@ def test_question_bank_mcq_has_correct_field(output_dir: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# CANVAS_COURSE_ID snippet helpers
+# CANVAS_COURSE_REFERENCE snippet helpers
 # ---------------------------------------------------------------------------
 
-def test_write_course_id_snippet_creates_file(tmp_path: Path) -> None:
-    _write_course_id_snippet(12345, tmp_path)
-    snippet = tmp_path / "snippets" / "inline" / "CANVAS_COURSE_ID.md"
+BASE_URL = "https://test.instructure.com/courses/12345"
+
+
+def test_write_canvas_course_reference_snippet_creates_file(tmp_path: Path) -> None:
+    _write_canvas_course_reference_snippet(BASE_URL, tmp_path)
+    snippet = tmp_path / "snippets" / "inline" / "CANVAS_COURSE_REFERENCE.md"
     assert snippet.exists()
-    assert snippet.read_text() == "12345"
+    assert snippet.read_text() == BASE_URL
 
 
-def test_write_course_id_snippet_string_id(tmp_path: Path) -> None:
-    _write_course_id_snippet("99999", tmp_path)
-    snippet = tmp_path / "snippets" / "inline" / "CANVAS_COURSE_ID.md"
-    assert snippet.read_text() == "99999"
-
-
-def test_replace_course_id_in_url_within_md(tmp_path: Path) -> None:
+def test_replace_canvas_course_url_in_md(tmp_path: Path) -> None:
     (tmp_path / "pages").mkdir()
     md = tmp_path / "pages" / "test.md"
-    md.write_text("[Modules](https://test.instructure.com/courses/12345/modules)\n")
-    _replace_course_id_in_md_files(tmp_path, "12345")
+    md.write_text(f"[Modules]({BASE_URL}/modules)\n")
+    _replace_canvas_course_url_in_md_files(tmp_path, BASE_URL)
     text = md.read_text()
-    assert "12345" not in text
-    assert "$../snippets/inline/CANVAS_COURSE_ID.md$" in text
-    assert "courses/$../snippets/inline/CANVAS_COURSE_ID.md$/modules" in text
+    assert BASE_URL not in text
+    assert "$../snippets/inline/CANVAS_COURSE_REFERENCE.md$" in text
+    assert '[Modules]($../snippets/inline/CANVAS_COURSE_REFERENCE.md$/modules "Modules")' in text
 
 
-def test_replace_course_id_depth_adjusted(tmp_path: Path) -> None:
+def test_replace_canvas_course_url_includes_link_title(tmp_path: Path) -> None:
+    """The link text is added as a Markdown title on the rewritten link."""
+    (tmp_path / "pages").mkdir()
+    md = tmp_path / "pages" / "test.md"
+    md.write_text(f"[My Grades]({BASE_URL}/grades)\n")
+    _replace_canvas_course_url_in_md_files(tmp_path, BASE_URL)
+    text = md.read_text()
+    assert '"My Grades"' in text
+    assert '$../snippets/inline/CANVAS_COURSE_REFERENCE.md$/grades "My Grades"' in text
+
+
+def test_replace_canvas_course_url_depth_adjusted(tmp_path: Path) -> None:
     """Files at depth 2 get ../../ prefix in the snippet ref."""
     (tmp_path / "quizzes" / "my-quiz").mkdir(parents=True)
     md = tmp_path / "quizzes" / "my-quiz" / "my-quiz.md"
-    md.write_text("[Go](https://x.com/courses/12345/grades)\n")
-    _replace_course_id_in_md_files(tmp_path, "12345")
+    md.write_text(f"[Go]({BASE_URL}/grades)\n")
+    _replace_canvas_course_url_in_md_files(tmp_path, BASE_URL)
     text = md.read_text()
-    assert "$../../snippets/inline/CANVAS_COURSE_ID.md$" in text
+    assert "$../../snippets/inline/CANVAS_COURSE_REFERENCE.md$" in text
 
 
-def test_replace_course_id_skips_non_url_occurrences(tmp_path: Path) -> None:
-    """The course ID in frontmatter (not in a courses/ URL) is not replaced."""
+def test_replace_canvas_course_url_skips_non_matching_domain(tmp_path: Path) -> None:
+    """Links to a different Canvas domain are not replaced."""
+    (tmp_path / "pages").mkdir()
+    md = tmp_path / "pages" / "test.md"
+    original = "[Grades](https://other.instructure.com/courses/12345/grades)\n"
+    md.write_text(original)
+    _replace_canvas_course_url_in_md_files(tmp_path, BASE_URL)
+    assert md.read_text() == original
+
+
+def test_replace_canvas_course_url_skips_frontmatter_values(tmp_path: Path) -> None:
+    """Plain-text occurrences of the URL in frontmatter are not touched."""
     (tmp_path / "assignments").mkdir()
     md = tmp_path / "assignments" / "hw.md"
-    md.write_text("---\ngroup_category_id: 12345\n---\n\nSome text.\n")
-    _replace_course_id_in_md_files(tmp_path, "12345")
-    text = md.read_text()
-    assert "group_category_id: 12345" in text
+    md.write_text(f"---\ngroup_category_id: 12345\n---\n\nSome text.\n")
+    _replace_canvas_course_url_in_md_files(tmp_path, BASE_URL)
+    assert "group_category_id: 12345" in md.read_text()
 
 
-def test_replace_course_id_skips_file_without_match(tmp_path: Path) -> None:
-    """Files that don't contain the course ID are unchanged."""
+def test_replace_canvas_course_url_multiple_links(tmp_path: Path) -> None:
+    """All matching links in a file are replaced."""
     (tmp_path / "pages").mkdir()
-    md = tmp_path / "pages" / "no-id.md"
+    md = tmp_path / "pages" / "nav.md"
+    md.write_text(f"[Modules]({BASE_URL}/modules)\n[Grades]({BASE_URL}/grades)\n")
+    _replace_canvas_course_url_in_md_files(tmp_path, BASE_URL)
+    text = md.read_text()
+    assert text.count("$../snippets/inline/CANVAS_COURSE_REFERENCE.md$") == 2
+
+
+def test_replace_canvas_course_url_skips_file_without_match(tmp_path: Path) -> None:
+    (tmp_path / "pages").mkdir()
+    md = tmp_path / "pages" / "no-url.md"
     original = "No canvas URLs here.\n"
     md.write_text(original)
-    _replace_course_id_in_md_files(tmp_path, "12345")
+    _replace_canvas_course_url_in_md_files(tmp_path, BASE_URL)
     assert md.read_text() == original
 
 
 # ---------------------------------------------------------------------------
-# Integration: snippet created and course ID replaced end-to-end
+# Integration: snippet created and course URL replaced end-to-end
 # ---------------------------------------------------------------------------
 
-def test_run_import_creates_course_id_snippet(output_dir: Path) -> None:
+def test_run_import_creates_canvas_course_reference_snippet(output_dir: Path) -> None:
     run_import(FIXTURE_DIR, output_dir)
-    snippet = output_dir / "snippets" / "inline" / "CANVAS_COURSE_ID.md"
+    snippet = output_dir / "snippets" / "inline" / "CANVAS_COURSE_REFERENCE.md"
     assert snippet.exists()
-    assert snippet.read_text() == "12345"
+    assert snippet.read_text() == "https://test.instructure.com/courses/12345"
 
 
-def test_run_import_replaces_course_id_in_page_url(output_dir: Path) -> None:
+def test_run_import_replaces_course_url_in_page(output_dir: Path) -> None:
     run_import(FIXTURE_DIR, output_dir)
     text = (output_dir / "pages" / "my-page.md").read_text()
-    assert "12345" not in text
-    assert "$../snippets/inline/CANVAS_COURSE_ID.md$" in text
+    assert "https://test.instructure.com/courses/12345" not in text
+    assert "$../snippets/inline/CANVAS_COURSE_REFERENCE.md$" in text
+    assert '"course modules"' in text
 
 
 def test_run_import_does_not_replace_course_id_outside_url(output_dir: Path) -> None:
@@ -975,19 +1002,6 @@ def test_run_import_does_not_replace_course_id_outside_url(output_dir: Path) -> 
     run_import(FIXTURE_DIR, output_dir)
     text = (output_dir / "assignments" / "my-assignment.md").read_text()
     assert "group_category_id: 12345" in text
-
-
-def test_replace_course_id_multiple_urls_in_one_file(tmp_path: Path) -> None:
-    """All matching URLs in a file are replaced, not just the first."""
-    (tmp_path / "pages").mkdir()
-    md = tmp_path / "pages" / "nav.md"
-    md.write_text(
-        "[Modules](https://x.com/courses/12345/modules)\n"
-        "[Grades](https://x.com/courses/12345/grades)\n"
-    )
-    _replace_course_id_in_md_files(tmp_path, "12345")
-    text = md.read_text()
-    assert text.count("$../snippets/inline/CANVAS_COURSE_ID.md$") == 2
 
 
 def test_run_import_snippet_roundtrip(output_dir: Path) -> None:
@@ -1000,9 +1014,29 @@ def test_run_import_snippet_roundtrip(output_dir: Path) -> None:
     snippets_dir = output_dir / "snippets"
     result = preprocess_snippets(page.read_text(), page, snippets_dir)
 
-    assert "12345" in result
+    assert "https://test.instructure.com/courses/12345" in result
     assert "$../snippets" not in result
-    assert "courses/12345/modules" in result
+    assert "https://test.instructure.com/courses/12345/modules" in result
+
+
+def test_run_import_no_domain_no_snippet(tmp_path: Path) -> None:
+    """When context.xml has no canvas_domain, no snippet file is created."""
+    import shutil
+
+    fixture_copy = tmp_path / "imscc"
+    shutil.copytree(FIXTURE_DIR, fixture_copy)
+
+    ctx = fixture_copy / "course_settings" / "context.xml"
+    ctx.write_text(
+        '<?xml version="1.0" encoding="UTF-8"?>\n'
+        '<context_info xmlns="http://canvas.instructure.com/xsd/cccv1p0">\n'
+        '  <course_id>12345</course_id>\n'
+        '</context_info>\n'
+    )
+
+    output = tmp_path / "output"
+    run_import(fixture_copy, output)
+    assert not (output / "snippets" / "inline" / "CANVAS_COURSE_REFERENCE.md").exists()
 
 
 def test_run_import_no_course_id_no_snippet(tmp_path: Path) -> None:
@@ -1012,7 +1046,6 @@ def test_run_import_no_course_id_no_snippet(tmp_path: Path) -> None:
     fixture_copy = tmp_path / "imscc"
     shutil.copytree(FIXTURE_DIR, fixture_copy)
 
-    # Remove the course_id element so _parse_context returns no course_id
     ctx = fixture_copy / "course_settings" / "context.xml"
     ctx.write_text(
         '<?xml version="1.0" encoding="UTF-8"?>\n'
@@ -1023,4 +1056,4 @@ def test_run_import_no_course_id_no_snippet(tmp_path: Path) -> None:
 
     output = tmp_path / "output"
     run_import(fixture_copy, output)
-    assert not (output / "snippets" / "inline" / "CANVAS_COURSE_ID.md").exists()
+    assert not (output / "snippets" / "inline" / "CANVAS_COURSE_REFERENCE.md").exists()

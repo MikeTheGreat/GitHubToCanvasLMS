@@ -1908,41 +1908,57 @@ def create_course_settings(
 
 
 # ---------------------------------------------------------------------------
-# Course ID snippet helpers
+# Canvas course reference snippet helpers
 # ---------------------------------------------------------------------------
 
-_CANVAS_COURSE_PATH_RE_TEMPLATE = r"(courses/){course_id}(?=/)"
+def _write_canvas_course_reference_snippet(base_url: str, output_dir: Path) -> None:
+    """Write snippets/inline/CANVAS_COURSE_REFERENCE.md containing the full course base URL.
 
-
-def _write_course_id_snippet(course_id: int | str, output_dir: Path) -> None:
-    """Write snippets/inline/CANVAS_COURSE_ID.md containing just the course ID."""
+    The base URL is ``https://<canvas_domain>/courses/<course_id>``.
+    """
     snippet_dir = output_dir / "snippets" / "inline"
     snippet_dir.mkdir(parents=True, exist_ok=True)
-    (snippet_dir / "CANVAS_COURSE_ID.md").write_text(str(course_id), encoding="utf-8")
-    print("Writing: snippets/inline/CANVAS_COURSE_ID.md")
+    (snippet_dir / "CANVAS_COURSE_REFERENCE.md").write_text(base_url, encoding="utf-8")
+    print("Writing: snippets/inline/CANVAS_COURSE_REFERENCE.md")
 
 
-def _replace_course_id_in_md_files(output_dir: Path, course_id: str) -> None:
-    """Replace the course ID in Canvas course URLs in all .md files with a snippet ref.
+def _replace_canvas_course_url_in_md_files(output_dir: Path, base_url: str) -> None:
+    """Replace Canvas course links in all .md files with a CANVAS_COURSE_REFERENCE snippet ref.
 
-    Only replaces occurrences inside URL path segments like ``courses/{id}/``
-    to avoid false positives on unrelated numeric IDs in frontmatter.
+    Converts Markdown links of the form::
+
+        [link text](https://domain/courses/ID/path)
+
+    to::
+
+        [link text]($depth_prefix/snippets/inline/CANVAS_COURSE_REFERENCE.md$/path "link text")
+
+    The link text is repeated as a Markdown link title so the destination remains
+    human-readable in editors where the snippet ref is not expanded.
     """
-    pattern = re.compile(_CANVAS_COURSE_PATH_RE_TEMPLATE.format(course_id=re.escape(course_id)))
+    pattern = re.compile(
+        r"\[([^\]]+)\]\(" + re.escape(base_url) + r"(/[^\s)\"]*|)\)"
+    )
     count = 0
     for md_file in sorted(output_dir.rglob("*.md")):
         text = md_file.read_text(encoding="utf-8")
-        if not pattern.search(text):
+        if base_url not in text:
             continue
         rel = md_file.relative_to(output_dir)
         depth = len(rel.parts) - 1
-        prefix = "../" * depth
-        snippet_ref = f"${prefix}snippets/inline/CANVAS_COURSE_ID.md$"
-        new_text = pattern.sub(lambda m, r=snippet_ref: m.group(1) + r, text)
+        snippet_path = f"{'../' * depth}snippets/inline/CANVAS_COURSE_REFERENCE.md"
+
+        def _sub(m: re.Match, _sp: str = snippet_path) -> str:
+            link_text = m.group(1)
+            path_suffix = m.group(2)
+            title = link_text.replace('"', '\\"')
+            return f'[{link_text}](${_sp}${path_suffix} "{title}")'
+
+        new_text = pattern.sub(_sub, text)
         md_file.write_text(new_text, encoding="utf-8")
         count += 1
     if count:
-        print(f"Parameterized course_id in {count} file(s) via CANVAS_COURSE_ID snippet")
+        print(f"Parameterized Canvas course URL in {count} file(s) via CANVAS_COURSE_REFERENCE snippet")
 
 
 # ---------------------------------------------------------------------------
@@ -1986,8 +2002,9 @@ def run_import(imscc_path: Path, output_dir: Path) -> None:
         if tmp is not None:
             print(f"Extracting: {imscc_path.name} → {imscc_dir}")
 
-        # Extract course ID early so we can parameterize it after all files are written
+        # Extract domain + course ID early so we can parameterize URLs after all files are written
         context = _parse_context(imscc_dir / "course_settings" / "context.xml")
+        canvas_domain = context.get("canvas_domain", "")
         course_id = context.get("course_id")
 
         print("Parsing IMSCC manifest...")
@@ -2036,10 +2053,11 @@ def run_import(imscc_path: Path, output_dir: Path) -> None:
         # Phase 7: course settings
         create_course_settings(imscc_dir, temp_manifest, output_dir)
 
-        # Phase 8: parameterize course ID via snippet
-        if course_id:
-            _replace_course_id_in_md_files(output_dir, str(course_id))
-            _write_course_id_snippet(course_id, output_dir)
+        # Phase 8: parameterize Canvas course URL via snippet
+        if canvas_domain and course_id:
+            base_url = f"https://{canvas_domain}/courses/{course_id}"
+            _replace_canvas_course_url_in_md_files(output_dir, base_url)
+            _write_canvas_course_reference_snippet(base_url, output_dir)
 
         print(f"\nDone. Wrote course repo to: {output_dir}")
     finally:

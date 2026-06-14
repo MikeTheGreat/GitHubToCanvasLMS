@@ -981,27 +981,29 @@ $path/to/snippet.md$
 
 The path is relative to the file that contains the reference. Before conversion the tool replaces the whole `$…$` token with the snippet's content (whitespace-stripped), making it safe to embed inside a Markdown link URL or anywhere else in text.
 
-The most common use is `snippets/inline/CANVAS_COURSE_ID.md`, which holds the numeric Canvas course ID. Links that point into your own Canvas course (e.g. Modules or Grades) can reference it so the ID is defined in one place:
+The most common use is `snippets/inline/CANVAS_COURSE_REFERENCE.md`, which holds the full Canvas course base URL (protocol, institution hostname, and course ID). Links that point into your own course can reference it, keeping the institution name and course ID in one place:
 
 ```markdown
 <!-- in pages/overview.md -->
-See the [course modules](https://cascadia.instructure.com/courses/$../snippets/inline/CANVAS_COURSE_ID.md$/modules) page.
+Go through the list of your [Grades]($../snippets/inline/CANVAS_COURSE_REFERENCE.md$/grades "Grades") here in Canvas.
 ```
 
 ```markdown
-<!-- snippets/inline/CANVAS_COURSE_ID.md -->
-2735320
+<!-- snippets/inline/CANVAS_COURSE_REFERENCE.md -->
+https://cascadia.instructure.com/courses/2735320
 ```
 
-Before conversion, `$../snippets/inline/CANVAS_COURSE_ID.md$` is replaced with `2735320`, producing:
+Before conversion, `$../snippets/inline/CANVAS_COURSE_REFERENCE.md$` is replaced with the snippet content, producing:
 
 ```markdown
-See the [course modules](https://cascadia.instructure.com/courses/2735320/modules) page.
+Go through the list of your [Grades](https://cascadia.instructure.com/courses/2735320/grades "Grades") here in Canvas.
 ```
+
+The snippet file name is written in ALL CAPS to make it visually distinct from regular (lowercase) snippet files.
 
 > **Note on `$` in links** — Inside a Markdown link URL, `$` has no special meaning and is valid in HTML `href` attributes (RFC 3986 sub-delimiter). The preprocessing step runs before Pandoc, so there is no conflict with Pandoc's `$…$` math syntax. The link will appear broken in a Markdown editor preview, but the Markdown structure itself is unaffected.
 
-**The `import` subcommand creates this snippet automatically.** When you import a `.imscc` file, the tool reads the course ID from the export metadata, writes `snippets/inline/CANVAS_COURSE_ID.md`, and replaces every occurrence of the course ID in Canvas course URL path segments throughout the imported Markdown files with the `$path$` snippet reference.
+**The `import` subcommand creates this snippet automatically.** When you import a `.imscc` file, the tool reads the institution hostname and course ID from the export metadata and writes `snippets/inline/CANVAS_COURSE_REFERENCE.md` with the full base URL. Every Markdown link whose URL starts with that base URL is rewritten to use the `$path$` snippet reference, with the link text added as a hover title.
 
 ---
 
