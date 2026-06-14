@@ -714,6 +714,22 @@ The module body uses three kinds of lines:
 
 The `<!-- target="_blank" -->` comment sets `new_tab: true` on the Canvas ExternalUrl item (opens in a new tab). Lines without a comment default to `new_tab: false`.
 
+**Module display order** is controlled by `course_settings/module_order.toml`. Without this file, modules are synced in alphabetical filename order. Create the file to assign explicit Canvas positions:
+
+```toml
+# course_settings/module_order.toml
+# Lists module filenames in the order they should appear in Canvas (position 1 = top).
+# Filenames are relative to the modules/ directory.
+# Modules not listed here are placed after all listed ones by Canvas.
+order = [
+    "week-1.md",
+    "week-2.md",
+    "final-exam.md",
+]
+```
+
+When this file is modified, the tool re-syncs all listed modules on the next run to apply their new positions. This file is also generated automatically by the `import` subcommand, preserving the module order from the original Canvas export.
+
 ### Quiz (`quizzes/`)
 
 Each quiz lives in its own sub-folder. The folder name becomes the quiz slug.

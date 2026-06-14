@@ -271,14 +271,25 @@ def run_sync(
             print(f"  WARNING: {msg}")
             errors.append(msg)
 
-    # 3. Modules (alphabetical)
+    # 3. Modules (alphabetical, with optional explicit position from module_order.toml)
+    _order_key = "course_settings/module_order.toml"
+    _order_path = repo_path / _order_key
+    position_map = _load_module_order(repo_path)
+    order_changed = _order_path.exists() and manifest_lib.needs_sync(
+        manifest, _order_key, _order_path, force_uploads
+    )
     modules_dir = repo_path / "modules"
     if modules_dir.exists():
         for md_file in sorted(modules_dir.glob("*.md")):
+            position = position_map.get(md_file.name)
+            force_this = force_uploads or (order_changed and md_file.name in position_map)
             _sync_module(
                 course, md_file, repo_path, manifest, manifest_path,
-                force_uploads, force_overwrite, newer_on_canvas,
+                force_this, force_overwrite, newer_on_canvas,
+                position=position,
             )
+    if order_changed:
+        manifest_lib.record(manifest, manifest_path, _order_key, 0, "module_order")
 
     _print_newer_on_canvas_summary(newer_on_canvas)
     _print_errors_summary(errors)
@@ -433,11 +444,22 @@ def _sync_content_file(
         manifest_lib.record(manifest, manifest_path, local_key, entry["canvas_id"], "discussion")
 
 
+def _load_module_order(repo_path: Path) -> dict[str, int]:
+    """Return a filename→1-based-position map from course_settings/module_order.toml."""
+    order_path = repo_path / "course_settings" / "module_order.toml"
+    if not order_path.exists():
+        return {}
+    with order_path.open("rb") as fh:
+        data = tomllib.load(fh)
+    return {name: i for i, name in enumerate(data.get("order", []), start=1)}
+
+
 def _sync_module(
     course, md_file: Path, repo_root: Path, manifest, manifest_path,
     force_uploads: bool = False,
     force_overwrite: bool = False,
     newer_on_canvas: list[str] | None = None,
+    position: int | None = None,
 ) -> None:
     if newer_on_canvas is None:
         newer_on_canvas = []
@@ -464,6 +486,8 @@ def _sync_module(
     for key in ("published", "unlock_at", "require_sequential_progress"):
         if key in frontmatter:
             module_kwargs[key] = frontmatter[key]
+    if position is not None:
+        module_kwargs["position"] = position
 
     module = capi.create_or_update_module(
         course, existing["canvas_id"] if existing else None, title, **module_kwargs
@@ -713,6 +737,7 @@ def run_targeted_sync(
     assets_root = repo_path / "assets"
     newer_on_canvas: list[str] = []
     errors: list[str] = []
+    _targeted_position_map = _load_module_order(repo_path)
 
     visited: set[str] = set()
 
@@ -738,6 +763,7 @@ def run_targeted_sync(
             _sync_module(
                 course, file_path, repo_path, manifest, manifest_path,
                 force_uploads, force_overwrite, newer_on_canvas,
+                position=_targeted_position_map.get(file_path.name),
             )
         elif folder == "quizzes":
             quiz_folder = file_path.parent

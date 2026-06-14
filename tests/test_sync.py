@@ -1314,3 +1314,151 @@ def test_content_file_without_frontmatter_still_uploads(
     call_kwargs = mock_course.create_page.call_args[1]["wiki_page"]
     assert call_kwargs["title"] == "my-notes"
     assert "Notes" in call_kwargs["body"]
+
+
+# ---------------------------------------------------------------------------
+# Scenario: module_order.toml — explicit module positions
+# ---------------------------------------------------------------------------
+
+
+def _make_minimal_module_repo(root: Path, module_names: list[str]) -> None:
+    """Write a course repo with empty content dirs and one module file per name."""
+    (root / "modules").mkdir(parents=True)
+    for name in module_names:
+        (root / "modules" / name).write_text(
+            f'---\ntitle: "{name}"\npublished: true\n---\n'
+        )
+
+
+def test_module_position_passed_when_order_file_present(
+    mock_course, mocker, tmp_path
+) -> None:
+    """Position is passed to create_module when module_order.toml lists the module."""
+    mocker.patch("github_to_canvas.manifest.flush")
+    root = tmp_path / "course"
+    _make_minimal_module_repo(root, ["week-1.md", "week-2.md"])
+    (root / "course_settings").mkdir()
+    (root / "course_settings" / "module_order.toml").write_text(
+        'order = ["week-1.md", "week-2.md"]\n'
+    )
+
+    mod1 = _mock_module(101)
+    mod2 = _mock_module(102)
+    mock_course.create_module.side_effect = [mod1, mod2]
+
+    run_sync(_config(), root)
+
+    calls = mock_course.create_module.call_args_list
+    assert len(calls) == 2
+    # week-1.md is position 1, week-2.md is position 2
+    assert calls[0][1]["module"]["position"] == 1
+    assert calls[1][1]["module"]["position"] == 2
+
+
+def test_module_without_order_file_has_no_position(
+    mock_course, mocker, tmp_path
+) -> None:
+    """No position kwarg is sent to Canvas when module_order.toml does not exist."""
+    mocker.patch("github_to_canvas.manifest.flush")
+    root = tmp_path / "course"
+    _make_minimal_module_repo(root, ["week-1.md"])
+
+    module = _mock_module(101)
+    mock_course.create_module.return_value = module
+
+    run_sync(_config(), root)
+
+    call_kwargs = mock_course.create_module.call_args[1]["module"]
+    assert "position" not in call_kwargs
+
+
+def test_module_order_change_triggers_resync(
+    mock_course, mocker, tmp_path
+) -> None:
+    """Modules listed in module_order.toml are re-synced when that file changes."""
+    root = tmp_path / "course"
+    _make_minimal_module_repo(root, ["week-1.md"])
+    order_path = root / "course_settings" / "module_order.toml"
+    order_path.parent.mkdir()
+    order_path.write_text('order = ["week-1.md"]\n')
+
+    # Manifest shows week-1.md synced recently (future timestamp) — would normally skip
+    preloaded = {
+        "modules/week-1.md": {
+            "canvas_id": 101, "canvas_type": "module",
+            "canvas_item_ids": {},
+            "last_synced": _FUTURE_SYNCED,
+        },
+        # order file has no manifest entry → needs_sync returns True
+    }
+    mocker.patch("github_to_canvas.manifest.load", return_value=preloaded)
+    mocker.patch("github_to_canvas.manifest.flush")
+
+    module = _mock_module(101)
+    mock_course.get_module.return_value = module
+
+    run_sync(_config(), root)
+
+    # Module was re-synced (updated, not created) with position=1
+    mock_course.create_module.assert_not_called()
+    edit_kwargs = module.edit.call_args[1]["module"]
+    assert edit_kwargs["position"] == 1
+
+
+def test_module_order_up_to_date_skips_resync(
+    mock_course, mocker, tmp_path, capsys
+) -> None:
+    """Modules are NOT re-synced when module_order.toml itself is unchanged."""
+    root = tmp_path / "course"
+    _make_minimal_module_repo(root, ["week-1.md"])
+    order_path = root / "course_settings" / "module_order.toml"
+    order_path.parent.mkdir()
+    order_path.write_text('order = ["week-1.md"]\n')
+    _make_old(root / "modules" / "week-1.md")
+    _make_old(order_path)
+
+    preloaded = {
+        "modules/week-1.md": {
+            "canvas_id": 101, "canvas_type": "module",
+            "canvas_item_ids": {},
+            "last_synced": "2025-01-01T00:00:00+00:00",
+        },
+        "course_settings/module_order.toml": {
+            "canvas_id": 0, "canvas_type": "module_order",
+            "last_synced": "2025-01-01T00:00:00+00:00",
+        },
+    }
+    mocker.patch("github_to_canvas.manifest.load", return_value=preloaded)
+    mocker.patch("github_to_canvas.manifest.flush")
+
+    run_sync(_config(), root)
+
+    mock_course.create_module.assert_not_called()
+    mock_course.get_module.assert_not_called()
+    out = capsys.readouterr().out
+    assert "Skipping (up-to-date): modules/week-1.md" in out
+
+
+def test_targeted_sync_passes_position_from_order_file(
+    mock_course, mocker, tmp_path
+) -> None:
+    """run_targeted_sync applies position from module_order.toml when syncing a module."""
+    mocker.patch("github_to_canvas.manifest.flush")
+    root = tmp_path / "course"
+    _make_minimal_module_repo(root, ["week-1.md", "week-2.md"])
+    (root / "course_settings").mkdir()
+    (root / "course_settings" / "module_order.toml").write_text(
+        'order = ["week-1.md", "week-2.md"]\n'
+    )
+
+    module = _mock_module(101)
+    mock_course.create_module.return_value = module
+
+    run_targeted_sync(
+        _config(), root,
+        recursive_targets=[],
+        single_targets=[str(root / "modules" / "week-2.md")],
+    )
+
+    call_kwargs = mock_course.create_module.call_args[1]["module"]
+    assert call_kwargs["position"] == 2

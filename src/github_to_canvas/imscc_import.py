@@ -1966,6 +1966,13 @@ def run_import(imscc_path: Path, output_dir: Path) -> None:
         modules = parse_module_meta(imscc_dir)
         for module in modules:
             generate_module_file(module, temp_manifest, output_dir)
+        if modules:
+            order_entries = [f'    "{_slugify(m.title)}.md"' for m in modules]
+            order_toml = "order = [\n" + ",\n".join(order_entries) + ",\n]\n"
+            cs_dir = output_dir / "course_settings"
+            cs_dir.mkdir(parents=True, exist_ok=True)
+            (cs_dir / "module_order.toml").write_text(order_toml, encoding="utf-8")
+            print(f"Generating module order: course_settings/module_order.toml")
 
         # Phase 7: course settings
         create_course_settings(imscc_dir, temp_manifest, output_dir)

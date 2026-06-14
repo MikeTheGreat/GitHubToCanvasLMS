@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import shutil
+import tomllib
 import zipfile
 from pathlib import Path
 
@@ -245,6 +246,44 @@ def test_module_quiz_included_as_link(output_dir: Path) -> None:
     text = (output_dir / "modules" / "week-1.md").read_text()
     assert "# SKIPPED" not in text
     assert "../quizzes/a-quiz/a-quiz.md" in text
+
+
+def test_module_order_toml_created(output_dir: Path) -> None:
+    """import generates course_settings/module_order.toml."""
+    run_import(FIXTURE_DIR, output_dir)
+    assert (output_dir / "course_settings" / "module_order.toml").exists()
+
+
+def test_module_order_toml_is_valid_toml(output_dir: Path) -> None:
+    """module_order.toml is parseable TOML with an 'order' list."""
+    run_import(FIXTURE_DIR, output_dir)
+    text = (output_dir / "course_settings" / "module_order.toml").read_text()
+    data = tomllib.loads(text)
+    assert "order" in data
+    assert isinstance(data["order"], list)
+    assert len(data["order"]) > 0
+
+
+def test_module_order_toml_lists_module_files(output_dir: Path) -> None:
+    """Every filename in module_order.toml matches an actual module .md file."""
+    run_import(FIXTURE_DIR, output_dir)
+    data = tomllib.loads(
+        (output_dir / "course_settings" / "module_order.toml").read_text()
+    )
+    for filename in data["order"]:
+        assert (output_dir / "modules" / filename).exists(), (
+            f"module_order.toml lists {filename!r} but no such file was generated"
+        )
+
+
+def test_module_order_toml_preserves_position_order(output_dir: Path) -> None:
+    """Filenames in module_order.toml appear in the same order as the IMSCC positions."""
+    run_import(FIXTURE_DIR, output_dir)
+    data = tomllib.loads(
+        (output_dir / "course_settings" / "module_order.toml").read_text()
+    )
+    # The fixture has exactly one module ("Week 1") at position 1
+    assert data["order"][0] == "week-1.md"
 
 
 # --- Quizzes ---
