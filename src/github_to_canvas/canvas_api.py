@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from canvasapi import Canvas
+from canvasapi.exceptions import BadRequest, ResourceDoesNotExist
 
 from .config import Config
 
@@ -345,13 +346,21 @@ def add_module_item(module, item: dict[str, Any], manifest: dict) -> int | None:
     if canvas_type is None:
         print(f"  WARNING: unsupported canvas_type for module item (skipping): {local_path}")
         return None
-    mi = module.create_module_item(
-        module_item={
-            "type": canvas_type,
-            "content_id": entry["canvas_id"],
-            "title": item["title"],
-        }
-    )
+    try:
+        mi = module.create_module_item(
+            module_item={
+                "type": canvas_type,
+                "content_id": entry["canvas_id"],
+                "title": item["title"],
+            }
+        )
+    except (BadRequest, ResourceDoesNotExist) as exc:
+        print(
+            f"  WARNING: could not add module item '{item['title']}' ({local_path}): {exc}\n"
+            f"  The Canvas ID {entry['canvas_id']!r} may be stale or belong to a different course.\n"
+            f"  Re-sync '{local_path}' first, then re-sync this module."
+        )
+        return None
     return mi.id
 
 
