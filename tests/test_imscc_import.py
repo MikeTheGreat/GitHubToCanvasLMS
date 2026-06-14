@@ -8,7 +8,13 @@ from pathlib import Path
 
 import pytest
 
-from github_to_canvas.imscc_import import open_imscc, parse_imsmanifest, run_import
+from github_to_canvas.imscc_import import (
+    open_imscc,
+    parse_imsmanifest,
+    run_import,
+    _write_course_id_snippet,
+    _replace_course_id_in_md_files,
+)
 
 FIXTURE_DIR = Path(__file__).parent / "fixtures" / "imscc"
 
@@ -886,3 +892,135 @@ def test_question_bank_mcq_has_correct_field(output_dir: Path) -> None:
         output_dir / "question_banks" / "fixture-question-bank" / "questions" / "bank-mcq-question.md"
     ).read_text()
     assert "correct:" in text
+
+
+# ---------------------------------------------------------------------------
+# CANVAS_COURSE_ID snippet helpers
+# ---------------------------------------------------------------------------
+
+def test_write_course_id_snippet_creates_file(tmp_path: Path) -> None:
+    _write_course_id_snippet(12345, tmp_path)
+    snippet = tmp_path / "snippets" / "inline" / "CANVAS_COURSE_ID.md"
+    assert snippet.exists()
+    assert snippet.read_text() == "12345"
+
+
+def test_write_course_id_snippet_string_id(tmp_path: Path) -> None:
+    _write_course_id_snippet("99999", tmp_path)
+    snippet = tmp_path / "snippets" / "inline" / "CANVAS_COURSE_ID.md"
+    assert snippet.read_text() == "99999"
+
+
+def test_replace_course_id_in_url_within_md(tmp_path: Path) -> None:
+    (tmp_path / "pages").mkdir()
+    md = tmp_path / "pages" / "test.md"
+    md.write_text("[Modules](https://test.instructure.com/courses/12345/modules)\n")
+    _replace_course_id_in_md_files(tmp_path, "12345")
+    text = md.read_text()
+    assert "12345" not in text
+    assert "[CANVAS_COURSE_ID](../snippets/inline/CANVAS_COURSE_ID.md)" in text
+    assert "courses/[CANVAS_COURSE_ID](../snippets/inline/CANVAS_COURSE_ID.md)/modules" in text
+
+
+def test_replace_course_id_depth_adjusted(tmp_path: Path) -> None:
+    """Files at depth 2 get ../../ prefix in the snippet ref."""
+    (tmp_path / "quizzes" / "my-quiz").mkdir(parents=True)
+    md = tmp_path / "quizzes" / "my-quiz" / "my-quiz.md"
+    md.write_text("[Go](https://x.com/courses/12345/grades)\n")
+    _replace_course_id_in_md_files(tmp_path, "12345")
+    text = md.read_text()
+    assert "../../snippets/inline/CANVAS_COURSE_ID.md" in text
+
+
+def test_replace_course_id_skips_non_url_occurrences(tmp_path: Path) -> None:
+    """The course ID in frontmatter (not in a courses/ URL) is not replaced."""
+    (tmp_path / "assignments").mkdir()
+    md = tmp_path / "assignments" / "hw.md"
+    md.write_text("---\ngroup_category_id: 12345\n---\n\nSome text.\n")
+    _replace_course_id_in_md_files(tmp_path, "12345")
+    text = md.read_text()
+    assert "group_category_id: 12345" in text
+
+
+def test_replace_course_id_skips_file_without_match(tmp_path: Path) -> None:
+    """Files that don't contain the course ID are unchanged."""
+    (tmp_path / "pages").mkdir()
+    md = tmp_path / "pages" / "no-id.md"
+    original = "No canvas URLs here.\n"
+    md.write_text(original)
+    _replace_course_id_in_md_files(tmp_path, "12345")
+    assert md.read_text() == original
+
+
+# ---------------------------------------------------------------------------
+# Integration: snippet created and course ID replaced end-to-end
+# ---------------------------------------------------------------------------
+
+def test_run_import_creates_course_id_snippet(output_dir: Path) -> None:
+    run_import(FIXTURE_DIR, output_dir)
+    snippet = output_dir / "snippets" / "inline" / "CANVAS_COURSE_ID.md"
+    assert snippet.exists()
+    assert snippet.read_text() == "12345"
+
+
+def test_run_import_replaces_course_id_in_page_url(output_dir: Path) -> None:
+    run_import(FIXTURE_DIR, output_dir)
+    text = (output_dir / "pages" / "my-page.md").read_text()
+    assert "12345" not in text
+    assert "[CANVAS_COURSE_ID](../snippets/inline/CANVAS_COURSE_ID.md)" in text
+
+
+def test_run_import_does_not_replace_course_id_outside_url(output_dir: Path) -> None:
+    """group_category_id in assignment frontmatter must not be replaced."""
+    run_import(FIXTURE_DIR, output_dir)
+    text = (output_dir / "assignments" / "my-assignment.md").read_text()
+    assert "group_category_id: 12345" in text
+
+
+def test_replace_course_id_multiple_urls_in_one_file(tmp_path: Path) -> None:
+    """All matching URLs in a file are replaced, not just the first."""
+    (tmp_path / "pages").mkdir()
+    md = tmp_path / "pages" / "nav.md"
+    md.write_text(
+        "[Modules](https://x.com/courses/12345/modules)\n"
+        "[Grades](https://x.com/courses/12345/grades)\n"
+    )
+    _replace_course_id_in_md_files(tmp_path, "12345")
+    text = md.read_text()
+    assert text.count("[CANVAS_COURSE_ID](../snippets/inline/CANVAS_COURSE_ID.md)") == 2
+
+
+def test_run_import_snippet_roundtrip(output_dir: Path) -> None:
+    """After import, preprocess_snippets on a generated page produces the real Canvas URL."""
+    from github_to_canvas.convert import preprocess_snippets
+
+    run_import(FIXTURE_DIR, output_dir)
+
+    page = output_dir / "pages" / "my-page.md"
+    snippets_dir = output_dir / "snippets"
+    result = preprocess_snippets(page.read_text(), page, snippets_dir)
+
+    assert "12345" in result
+    assert "[CANVAS_COURSE_ID](" not in result
+    assert "courses/12345/modules" in result
+
+
+def test_run_import_no_course_id_no_snippet(tmp_path: Path) -> None:
+    """When context.xml has no course_id, no snippet file is created."""
+    import shutil
+
+    fixture_copy = tmp_path / "imscc"
+    shutil.copytree(FIXTURE_DIR, fixture_copy)
+
+    # Remove the course_id element so _parse_context returns no course_id
+    ctx = fixture_copy / "course_settings" / "context.xml"
+    ctx.write_text(
+        '<?xml version="1.0" encoding="UTF-8"?>\n'
+        '<context_info xmlns="http://canvas.instructure.com/xsd/cccv1p0">\n'
+        '  <canvas_domain>test.instructure.com</canvas_domain>\n'
+        '</context_info>\n'
+    )
+
+    output = tmp_path / "output"
+    run_import(fixture_copy, output)
+    assert not (output / "snippets" / "inline" / "CANVAS_COURSE_ID.md").exists()

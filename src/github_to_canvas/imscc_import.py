@@ -1891,6 +1891,44 @@ def create_course_settings(
 
 
 # ---------------------------------------------------------------------------
+# Course ID snippet helpers
+# ---------------------------------------------------------------------------
+
+_CANVAS_COURSE_PATH_RE_TEMPLATE = r"(courses/){course_id}(?=/)"
+
+
+def _write_course_id_snippet(course_id: int | str, output_dir: Path) -> None:
+    """Write snippets/inline/CANVAS_COURSE_ID.md containing just the course ID."""
+    snippet_dir = output_dir / "snippets" / "inline"
+    snippet_dir.mkdir(parents=True, exist_ok=True)
+    (snippet_dir / "CANVAS_COURSE_ID.md").write_text(str(course_id), encoding="utf-8")
+    print("Writing: snippets/inline/CANVAS_COURSE_ID.md")
+
+
+def _replace_course_id_in_md_files(output_dir: Path, course_id: str) -> None:
+    """Replace the course ID in Canvas course URLs in all .md files with a snippet ref.
+
+    Only replaces occurrences inside URL path segments like ``courses/{id}/``
+    to avoid false positives on unrelated numeric IDs in frontmatter.
+    """
+    pattern = re.compile(_CANVAS_COURSE_PATH_RE_TEMPLATE.format(course_id=re.escape(course_id)))
+    count = 0
+    for md_file in sorted(output_dir.rglob("*.md")):
+        text = md_file.read_text(encoding="utf-8")
+        if not pattern.search(text):
+            continue
+        rel = md_file.relative_to(output_dir)
+        depth = len(rel.parts) - 1
+        prefix = "../" * depth
+        snippet_ref = f"[CANVAS_COURSE_ID]({prefix}snippets/inline/CANVAS_COURSE_ID.md)"
+        new_text = pattern.sub(lambda m, r=snippet_ref: m.group(1) + r, text)
+        md_file.write_text(new_text, encoding="utf-8")
+        count += 1
+    if count:
+        print(f"Parameterized course_id in {count} file(s) via CANVAS_COURSE_ID snippet")
+
+
+# ---------------------------------------------------------------------------
 # Frontmatter helper
 # ---------------------------------------------------------------------------
 
@@ -1930,6 +1968,10 @@ def run_import(imscc_path: Path, output_dir: Path) -> None:
     try:
         if tmp is not None:
             print(f"Extracting: {imscc_path.name} → {imscc_dir}")
+
+        # Extract course ID early so we can parameterize it after all files are written
+        context = _parse_context(imscc_dir / "course_settings" / "context.xml")
+        course_id = context.get("course_id")
 
         print("Parsing IMSCC manifest...")
         temp_manifest = parse_imsmanifest(imscc_dir)
@@ -1976,6 +2018,11 @@ def run_import(imscc_path: Path, output_dir: Path) -> None:
 
         # Phase 7: course settings
         create_course_settings(imscc_dir, temp_manifest, output_dir)
+
+        # Phase 8: parameterize course ID via snippet
+        if course_id:
+            _replace_course_id_in_md_files(output_dir, str(course_id))
+            _write_course_id_snippet(course_id, output_dir)
 
         print(f"\nDone. Wrote course repo to: {output_dir}")
     finally:

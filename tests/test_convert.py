@@ -132,6 +132,42 @@ def test_non_snippet_links_in_fixture_unchanged() -> None:
     assert "[Week 1 Assignment](../assignments/week1.md)" in result
 
 
+def test_snippet_ref_embedded_in_link_url_expanded(tmp_path: Path) -> None:
+    """A snippet ref embedded inside a surrounding link URL is expanded correctly."""
+    snippets_dir = tmp_path / "snippets"
+    (snippets_dir / "inline").mkdir(parents=True)
+    (snippets_dir / "inline" / "course_id.md").write_text("99999")
+    source = tmp_path / "pages" / "notes.md"
+    source.parent.mkdir()
+    text = "[Modules](https://example.com/courses/[COURSE](../snippets/inline/course_id.md)/modules)"
+    result = preprocess_snippets(text, source, snippets_dir)
+    assert result == "[Modules](https://example.com/courses/99999/modules)"
+
+
+def test_snippet_ref_embedded_at_end_of_link_url(tmp_path: Path) -> None:
+    """Snippet ref at the very end of a link URL (no suffix after the ref)."""
+    snippets_dir = tmp_path / "snippets"
+    (snippets_dir / "inline").mkdir(parents=True)
+    (snippets_dir / "inline" / "course_id.md").write_text("99999")
+    source = tmp_path / "pages" / "notes.md"
+    source.parent.mkdir()
+    text = "[Grades](https://example.com/courses/[COURSE](../snippets/inline/course_id.md)/grades)"
+    result = preprocess_snippets(text, source, snippets_dir)
+    assert "99999" in result
+    assert "[COURSE](" not in result
+
+
+def test_non_snippet_link_url_unchanged_no_embedded_ref(tmp_path: Path) -> None:
+    """A regular external link with no embedded snippet ref is left as-is."""
+    snippets_dir = tmp_path / "snippets"
+    snippets_dir.mkdir()
+    source = tmp_path / "pages" / "notes.md"
+    source.parent.mkdir()
+    text = "[Go](https://example.com/courses/99999/modules)"
+    result = preprocess_snippets(text, source, snippets_dir)
+    assert result == text
+
+
 # ---------------------------------------------------------------------------
 # markdown_to_html
 # ---------------------------------------------------------------------------
