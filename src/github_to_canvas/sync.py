@@ -26,7 +26,7 @@ def parse_frontmatter(text: str) -> tuple[dict[str, Any], str]:
         end = text.index("\n---\n", 4)
     except ValueError:
         return {}, text
-    return yaml.safe_load(text[4:end]) or {}, text[end + 5:]
+    return yaml.safe_load(text[4:end]) or {}, text[end + 5 :]
 
 
 _MODULE_LINK_RE = re.compile(r"^\s*-\s+\[([^\]]+)\]\(([^)]+)\)")
@@ -40,7 +40,9 @@ def _parse_exturl_attrs(comment_text: str) -> dict[str, str]:
     return {m.group(1): m.group(2) for m in _EXTURL_ATTR_KV_RE.finditer(comment_text)}
 
 
-def parse_module_body(body: str, module_file: Path, course_root: Path) -> list[dict[str, Any]]:
+def parse_module_body(
+    body: str, module_file: Path, course_root: Path
+) -> list[dict[str, Any]]:
     """Parse a module body into an ordered list of item dicts."""
     items: list[dict[str, Any]] = []
     for line in body.splitlines():
@@ -52,11 +54,20 @@ def parse_module_body(body: str, module_file: Path, course_root: Path) -> list[d
                 attrs_m = _EXTURL_ATTRS_RE.search(line)
                 attrs = _parse_exturl_attrs(attrs_m.group(1)) if attrs_m else {}
                 new_tab = attrs.get("target", "") in ("_blank", "_new")
-                items.append({"type": "ExternalUrl", "title": title, "url": href, "new_tab": new_tab})
+                items.append(
+                    {
+                        "type": "ExternalUrl",
+                        "title": title,
+                        "url": href,
+                        "new_tab": new_tab,
+                    }
+                )
             else:
                 resolved = (module_file.parent / href).resolve()
                 local_path = resolved.relative_to(course_root.resolve()).as_posix()
-                items.append({"type": "content", "title": title, "local_path": local_path})
+                items.append(
+                    {"type": "content", "title": title, "local_path": local_path}
+                )
             continue
         header_m = _MODULE_HEADER_RE.match(line)
         if header_m:
@@ -80,7 +91,9 @@ def _canvas_is_newer(
     if entry is None:
         return False
     canvas_type = entry.get("canvas_type")
-    identifier = entry.get("canvas_url") if canvas_type == "page" else entry.get("canvas_id")
+    identifier = (
+        entry.get("canvas_url") if canvas_type == "page" else entry.get("canvas_id")
+    )
     if identifier is None:
         return False
     canvas_ts = capi.get_canvas_updated_at(course, canvas_type, identifier)
@@ -92,7 +105,11 @@ def _canvas_is_newer(
 
 
 def sync_syllabus(
-    course, repo_path: Path, manifest: dict, manifest_path: Path, course_id: int,
+    course,
+    repo_path: Path,
+    manifest: dict,
+    manifest_path: Path,
+    course_id: int,
     errors: list[str] | None = None,
     force_uploads: bool = False,
 ) -> None:
@@ -109,7 +126,9 @@ def sync_syllabus(
     html = markdown_to_html(body.strip()) if body.strip() else ""
     error_count_before = len(errors) if errors is not None else 0
     # Stub creator is not needed for the syllabus; pass a no-op
-    html = rewrite_links(html, syllabus_md, repo_path, manifest, course_id, lambda *_: {}, errors)
+    html = rewrite_links(
+        html, syllabus_md, repo_path, manifest, course_id, lambda *_: {}, errors
+    )
     if errors is not None and len(errors) > error_count_before:
         print(f"  Skipping upload due to errors: {local_key}")
         return
@@ -118,7 +137,10 @@ def sync_syllabus(
 
 
 def sync_course_settings(
-    course, repo_path: Path, manifest: dict, manifest_path: Path,
+    course,
+    repo_path: Path,
+    manifest: dict,
+    manifest_path: Path,
     force_uploads: bool = False,
 ) -> None:
     """Sync course_settings.toml: metadata, grading standards, assignment groups, policies, rubrics."""
@@ -128,7 +150,9 @@ def sync_course_settings(
     local_key = "course_settings.toml"
     rubrics_path = repo_path / "course_settings" / "rubrics.toml"
     # Re-sync if either the main settings file or rubrics.toml is newer than last_synced.
-    settings_stale = manifest_lib.needs_sync(manifest, local_key, settings_path, force_uploads)
+    settings_stale = manifest_lib.needs_sync(
+        manifest, local_key, settings_path, force_uploads
+    )
     rubrics_stale = rubrics_path.exists() and manifest_lib.needs_sync(
         manifest, local_key, rubrics_path, force_uploads
     )
@@ -158,7 +182,9 @@ def sync_course_settings(
         try:
             capi.update_late_policy(course, late_policy)
         except Exception as exc:
-            print(f"  WARNING: late policy update failed (late_policy={late_policy!r}): {exc}")
+            print(
+                f"  WARNING: late policy update failed (late_policy={late_policy!r}): {exc}"
+            )
 
     # §1b: default post policy
     if "post_manually" in default_post_policy:
@@ -166,7 +192,9 @@ def sync_course_settings(
         try:
             capi.update_post_policy(course, post_manually)
         except Exception as exc:
-            print(f"  WARNING: post policy update failed (post_manually={post_manually!r}): {exc}")
+            print(
+                f"  WARNING: post policy update failed (post_manually={post_manually!r}): {exc}"
+            )
 
     # §15: rubrics
     if rubrics_path.exists():
@@ -210,28 +238,60 @@ def run_sync(
     assignment_group_ids = capi.get_assignment_group_ids(course)
 
     # 0.5. Syllabus
-    sync_syllabus(course, repo_path, manifest, manifest_path, config.course_id, errors, force_uploads)
+    sync_syllabus(
+        course,
+        repo_path,
+        manifest,
+        manifest_path,
+        config.course_id,
+        errors,
+        force_uploads,
+    )
 
     # 1. Assets (depth-first, files before subdirs, alphabetical)
     assets_dir = repo_path / "assets"
     if assets_dir.exists():
         _walk_assets(
-            course, assets_dir, assets_dir, repo_path, manifest, manifest_path,
-            force_uploads, force_overwrite, newer_on_canvas,
+            course,
+            assets_dir,
+            assets_dir,
+            repo_path,
+            manifest,
+            manifest_path,
+            force_uploads,
+            force_overwrite,
+            newer_on_canvas,
         )
 
     # 2. Content folders (alphabetical, excl. assets, modules, quizzes, snippets, course_settings, hidden)
     synced_content_keys: set[str] = set()
-    skip = {"assets", "modules", "quizzes", "snippets", "course_settings", "question_banks"}
+    skip = {
+        "assets",
+        "modules",
+        "quizzes",
+        "snippets",
+        "course_settings",
+        "question_banks",
+    }
     content_dirs = sorted(
-        d for d in repo_path.iterdir()
+        d
+        for d in repo_path.iterdir()
         if d.is_dir() and not d.name.startswith(".") and d.name not in skip
     )
     for content_dir in content_dirs:
         for md_file in sorted(content_dir.glob("*.md")):
             _sync_content_file(
-                course, md_file, repo_path, snippets_dir, manifest, manifest_path,
-                config.course_id, force_uploads, force_overwrite, newer_on_canvas, errors,
+                course,
+                md_file,
+                repo_path,
+                snippets_dir,
+                manifest,
+                manifest_path,
+                config.course_id,
+                force_uploads,
+                force_overwrite,
+                newer_on_canvas,
+                errors,
                 assignment_group_ids=assignment_group_ids,
                 synced_keys=synced_content_keys,
             )
@@ -243,8 +303,17 @@ def run_sync(
             quiz_md = quiz_folder / f"{quiz_folder.name}.md"
             if quiz_md.exists():
                 _sync_quiz(
-                    course, quiz_folder, quiz_md, repo_path, manifest, manifest_path,
-                    config.course_id, force_uploads, force_overwrite, newer_on_canvas, errors,
+                    course,
+                    quiz_folder,
+                    quiz_md,
+                    repo_path,
+                    manifest,
+                    manifest_path,
+                    config.course_id,
+                    force_uploads,
+                    force_overwrite,
+                    newer_on_canvas,
+                    errors,
                     synced_keys=synced_content_keys,
                 )
 
@@ -301,8 +370,14 @@ def run_sync(
                 or md_file in modules_with_updated_refs
             )
             _sync_module(
-                course, md_file, repo_path, manifest, manifest_path,
-                force_this, force_overwrite, newer_on_canvas,
+                course,
+                md_file,
+                repo_path,
+                manifest,
+                manifest_path,
+                force_this,
+                force_overwrite,
+                newer_on_canvas,
                 position=position,
             )
     if order_changed:
@@ -314,7 +389,12 @@ def run_sync(
 
 
 def _walk_assets(
-    course, dir_path: Path, assets_root: Path, repo_root: Path, manifest, manifest_path,
+    course,
+    dir_path: Path,
+    assets_root: Path,
+    repo_root: Path,
+    manifest,
+    manifest_path,
     force_uploads: bool = False,
     force_overwrite: bool = False,
     newer_on_canvas: list[str] | None = None,
@@ -328,26 +408,45 @@ def _walk_assets(
             if not manifest_lib.needs_sync(manifest, local_key, entry, force_uploads):
                 continue
             if not force_overwrite:
-                local_mtime = datetime.fromtimestamp(entry.stat().st_mtime, tz=timezone.utc)
-                if _canvas_is_newer(course, local_key, local_mtime, manifest, newer_on_canvas):
+                local_mtime = datetime.fromtimestamp(
+                    entry.stat().st_mtime, tz=timezone.utc
+                )
+                if _canvas_is_newer(
+                    course, local_key, local_mtime, manifest, newer_on_canvas
+                ):
                     continue
             print(f"Uploading asset: {local_key}")
             canvas_entry = capi.upload_asset(course, entry, assets_root)
             manifest_lib.record(
-                manifest, manifest_path, local_key,
-                canvas_entry["canvas_id"], "file",
+                manifest,
+                manifest_path,
+                local_key,
+                canvas_entry["canvas_id"],
+                "file",
                 extra={"canvas_url": canvas_entry["canvas_url"]},
             )
         elif entry.is_dir():
             _walk_assets(
-                course, entry, assets_root, repo_root, manifest, manifest_path,
-                force_uploads, force_overwrite, newer_on_canvas,
+                course,
+                entry,
+                assets_root,
+                repo_root,
+                manifest,
+                manifest_path,
+                force_uploads,
+                force_overwrite,
+                newer_on_canvas,
             )
 
 
 def _sync_content_file(
-    course, md_file: Path, repo_root: Path, snippets_dir: Path,
-    manifest, manifest_path, course_id: int,
+    course,
+    md_file: Path,
+    repo_root: Path,
+    snippets_dir: Path,
+    manifest,
+    manifest_path,
+    course_id: int,
     force_uploads: bool = False,
     force_overwrite: bool = False,
     newer_on_canvas: list[str] | None = None,
@@ -379,15 +478,23 @@ def _sync_content_file(
         title = Path(ref_local_path).stem.replace("-", " ").replace("_", " ").title()
         print(f"  Stub-creating: {ref_local_path} (referenced but not yet synced)")
         entry = capi.create_stub(course, ref_canvas_type, title)
-        extra = {k: v for k, v in entry.items() if k not in ("canvas_id", "canvas_type")}
+        extra = {
+            k: v for k, v in entry.items() if k not in ("canvas_id", "canvas_type")
+        }
         manifest_lib.record(
-            manifest, manifest_path, ref_local_path,
-            entry["canvas_id"], ref_canvas_type, extra=extra or None,
+            manifest,
+            manifest_path,
+            ref_local_path,
+            entry["canvas_id"],
+            ref_canvas_type,
+            extra=extra or None,
         )
         return entry
 
     error_count_before = len(errors) if errors is not None else 0
-    html = rewrite_links(html, md_file, repo_root, manifest, course_id, stub_creator, errors)
+    html = rewrite_links(
+        html, md_file, repo_root, manifest, course_id, stub_creator, errors
+    )
     if errors is not None and len(errors) > error_count_before:
         print(f"  Skipping upload due to errors: {local_key}")
         return
@@ -400,45 +507,70 @@ def _sync_content_file(
     if canvas_type == "page":
         canvas_url = existing.get("canvas_url") if existing else None
         entry = capi.create_or_update_page(
-            course, canvas_url, title, html,
+            course,
+            canvas_url,
+            title,
+            html,
             published=published,
             editing_roles=frontmatter.get("editing_roles", "teachers"),
         )
         manifest_lib.record(
-            manifest, manifest_path, local_key,
-            entry["canvas_id"], "page", extra={"canvas_url": entry["canvas_url"]},
+            manifest,
+            manifest_path,
+            local_key,
+            entry["canvas_id"],
+            "page",
+            extra={"canvas_url": entry["canvas_url"]},
         )
         if synced_keys is not None:
             synced_keys.add(local_key)
     elif canvas_type == "assignment":
         canvas_id = existing["canvas_id"] if existing else None
         extra: dict[str, Any] = {}
-        for key in ("points_possible", "due_at", "lock_at", "unlock_at",
-                    "submission_types", "grading_type",
-                    # Assignment group (grading category)
-                    "assignment_group_id",
-                    # Group assignment
-                    "group_category_id", "grade_group_students_individually",
-                    # Anonymous grading
-                    "anonymous_grading",
-                    # Moderated grading
-                    "moderated_grading", "grader_count", "final_grader_id",
-                    "grader_comments_visible_to_graders",
-                    "graders_anonymous_to_graders",
-                    "grader_names_visible_to_final_grader",
-                    # Peer reviews
-                    "peer_reviews", "automatic_peer_reviews", "peer_review_count",
-                    "peer_reviews_assign_at", "anonymous_peer_reviews",
-                    "intra_group_peer_reviews"):
+        for key in (
+            "points_possible",
+            "due_at",
+            "lock_at",
+            "unlock_at",
+            "submission_types",
+            "grading_type",
+            # Assignment group (grading category)
+            "assignment_group_id",
+            # Group assignment
+            "group_category_id",
+            "grade_group_students_individually",
+            # Anonymous grading
+            "anonymous_grading",
+            # Moderated grading
+            "moderated_grading",
+            "grader_count",
+            "final_grader_id",
+            "grader_comments_visible_to_graders",
+            "graders_anonymous_to_graders",
+            "grader_names_visible_to_final_grader",
+            # Peer reviews
+            "peer_reviews",
+            "automatic_peer_reviews",
+            "peer_review_count",
+            "peer_reviews_assign_at",
+            "anonymous_peer_reviews",
+            "intra_group_peer_reviews",
+        ):
             if key in frontmatter:
                 extra[key] = frontmatter[key]
-        if "assignment_group_id" in extra and isinstance(extra["assignment_group_id"], str):
+        if "assignment_group_id" in extra and isinstance(
+            extra["assignment_group_id"], str
+        ):
             name = extra["assignment_group_id"]
             resolved = (assignment_group_ids or {}).get(name)
             if resolved is None:
-                known = list(assignment_group_ids.keys()) if assignment_group_ids else []
-                msg = (f"WARNING: {local_key}: assignment group '{name}' not found on Canvas "
-                       f"(known: {known}); skipping assignment_group_id")
+                known = (
+                    list(assignment_group_ids.keys()) if assignment_group_ids else []
+                )
+                msg = (
+                    f"WARNING: {local_key}: assignment group '{name}' not found on Canvas "
+                    f"(known: {known}); skipping assignment_group_id"
+                )
                 print(f"  {msg}")
                 if errors is not None:
                     errors.append(msg)
@@ -448,7 +580,9 @@ def _sync_content_file(
         entry = capi.create_or_update_assignment(
             course, canvas_id, title, html, published=published, **extra
         )
-        manifest_lib.record(manifest, manifest_path, local_key, entry["canvas_id"], "assignment")
+        manifest_lib.record(
+            manifest, manifest_path, local_key, entry["canvas_id"], "assignment"
+        )
         if synced_keys is not None:
             synced_keys.add(local_key)
     elif canvas_type == "discussion":
@@ -463,7 +597,9 @@ def _sync_content_file(
         entry = capi.create_or_update_discussion(
             course, canvas_id, title, html, published=published, **extra
         )
-        manifest_lib.record(manifest, manifest_path, local_key, entry["canvas_id"], "discussion")
+        manifest_lib.record(
+            manifest, manifest_path, local_key, entry["canvas_id"], "discussion"
+        )
         if synced_keys is not None:
             synced_keys.add(local_key)
 
@@ -479,7 +615,11 @@ def _load_module_order(repo_path: Path) -> dict[str, int]:
 
 
 def _sync_module(
-    course, md_file: Path, repo_root: Path, manifest, manifest_path,
+    course,
+    md_file: Path,
+    repo_root: Path,
+    manifest,
+    manifest_path,
     force_uploads: bool = False,
     force_overwrite: bool = False,
     newer_on_canvas: list[str] | None = None,
@@ -525,8 +665,12 @@ def _sync_module(
             canvas_item_ids[item["local_path"]] = item_id
 
     manifest_lib.record(
-        manifest, manifest_path, local_key,
-        module.id, "module", extra={"canvas_item_ids": canvas_item_ids},
+        manifest,
+        manifest_path,
+        local_key,
+        module.id,
+        "module",
+        extra={"canvas_item_ids": canvas_item_ids},
     )
 
 
@@ -582,9 +726,12 @@ def _sync_quiz(
         if questions_dir.exists():
             all_files.extend(questions_dir.glob("*.md"))
         local_max_mtime = max(
-            datetime.fromtimestamp(f.stat().st_mtime, tz=timezone.utc) for f in all_files
+            datetime.fromtimestamp(f.stat().st_mtime, tz=timezone.utc)
+            for f in all_files
         )
-        if _canvas_is_newer(course, local_key, local_max_mtime, manifest, newer_on_canvas):
+        if _canvas_is_newer(
+            course, local_key, local_max_mtime, manifest, newer_on_canvas
+        ):
             return
 
     print(f"Processing quiz: {local_key}")
@@ -594,19 +741,33 @@ def _sync_quiz(
     published = frontmatter.get("published", False)
 
     quiz_kwargs: dict[str, Any] = {}
-    for key in ("quiz_type", "time_limit", "allowed_attempts", "shuffle_answers",
-                "show_correct_answers", "points_possible"):
+    for key in (
+        "quiz_type",
+        "time_limit",
+        "allowed_attempts",
+        "shuffle_answers",
+        "show_correct_answers",
+        "points_possible",
+    ):
         if key in frontmatter:
             quiz_kwargs[key] = frontmatter[key]
 
     def _stub_creator(ref_local_path: str, ref_canvas_type: str) -> dict[str, Any]:
-        title_stub = Path(ref_local_path).stem.replace("-", " ").replace("_", " ").title()
+        title_stub = (
+            Path(ref_local_path).stem.replace("-", " ").replace("_", " ").title()
+        )
         print(f"  Stub-creating: {ref_local_path} (referenced from quiz)")
         entry = capi.create_stub(course, ref_canvas_type, title_stub)
-        extra = {k: v for k, v in entry.items() if k not in ("canvas_id", "canvas_type")}
+        extra = {
+            k: v for k, v in entry.items() if k not in ("canvas_id", "canvas_type")
+        }
         manifest_lib.record(
-            manifest, manifest_path, ref_local_path,
-            entry["canvas_id"], ref_canvas_type, extra=extra or None,
+            manifest,
+            manifest_path,
+            ref_local_path,
+            entry["canvas_id"],
+            ref_canvas_type,
+            extra=extra or None,
         )
         return entry
 
@@ -614,8 +775,15 @@ def _sync_quiz(
 
     # §7: rewrite links in quiz description
     if desc_html:
-        desc_html = rewrite_links(desc_html, quiz_md, repo_root, manifest,
-                                  config_course_id, _stub_creator, errors)
+        desc_html = rewrite_links(
+            desc_html,
+            quiz_md,
+            repo_root,
+            manifest,
+            config_course_id,
+            _stub_creator,
+            errors,
+        )
 
     questions: list[dict[str, Any]] = []
     for q_path in question_paths:
@@ -627,8 +795,13 @@ def _sync_quiz(
         # §7: rewrite links in question text
         if q_data.get("question_text"):
             q_data["question_text"] = rewrite_links(
-                q_data["question_text"], q_path, repo_root, manifest,
-                config_course_id, _stub_creator, errors,
+                q_data["question_text"],
+                q_path,
+                repo_root,
+                manifest,
+                config_course_id,
+                _stub_creator,
+                errors,
             )
         q_data["rel_path"] = rel_path
         questions.append(q_data)
@@ -641,14 +814,19 @@ def _sync_quiz(
     canvas_id = existing["canvas_id"] if existing else None
 
     print(f"  Uploading: {local_key}")
-    result = capi.create_or_update_quiz(course, canvas_id, title, desc_html, published=published,
-                                        **quiz_kwargs)
+    result = capi.create_or_update_quiz(
+        course, canvas_id, title, desc_html, published=published, **quiz_kwargs
+    )
     quiz_obj = course.get_quiz(result["canvas_id"])
     q_id_map = capi.sync_quiz_questions(course, quiz_obj, questions)
 
     manifest_lib.record(
-        manifest, manifest_path, local_key,
-        result["canvas_id"], "quiz", extra={"canvas_question_ids": q_id_map},
+        manifest,
+        manifest_path,
+        local_key,
+        result["canvas_id"],
+        "quiz",
+        extra={"canvas_question_ids": q_id_map},
     )
     if synced_keys is not None:
         synced_keys.add(local_key)
@@ -670,7 +848,9 @@ def _sync_question_banks(
         if not toml_path.exists():
             continue
         local_key = toml_path.relative_to(repo_root).as_posix()
-        if not force_uploads and not manifest_lib.needs_sync(manifest, local_key, toml_path, False):
+        if not force_uploads and not manifest_lib.needs_sync(
+            manifest, local_key, toml_path, False
+        ):
             print(f"Skipping (up-to-date): {local_key}")
             continue
         with toml_path.open("rb") as fh:
@@ -685,7 +865,9 @@ def _sync_question_banks(
                 questions.append(q_data)
         print(f"  Uploading question bank: {local_key}")
         canvas_id = capi.sync_question_bank(course, bank_title, questions)
-        manifest_lib.record(manifest, manifest_path, local_key, canvas_id, "question_bank")
+        manifest_lib.record(
+            manifest, manifest_path, local_key, canvas_id, "question_bank"
+        )
 
 
 def _get_file_refs(
@@ -774,34 +956,65 @@ def run_targeted_sync(
         if folder == "assets":
             if manifest_lib.needs_sync(manifest, local_key, file_path, force_uploads):
                 if not force_overwrite:
-                    local_mtime = datetime.fromtimestamp(file_path.stat().st_mtime, tz=timezone.utc)
-                    if _canvas_is_newer(course, local_key, local_mtime, manifest, newer_on_canvas):
+                    local_mtime = datetime.fromtimestamp(
+                        file_path.stat().st_mtime, tz=timezone.utc
+                    )
+                    if _canvas_is_newer(
+                        course, local_key, local_mtime, manifest, newer_on_canvas
+                    ):
                         return
                 print(f"Uploading asset: {local_key}")
                 canvas_entry = capi.upload_asset(course, file_path, assets_root)
                 manifest_lib.record(
-                    manifest, manifest_path, local_key,
-                    canvas_entry["canvas_id"], "file",
+                    manifest,
+                    manifest_path,
+                    local_key,
+                    canvas_entry["canvas_id"],
+                    "file",
                     extra={"canvas_url": canvas_entry["canvas_url"]},
                 )
             else:
                 print(f"Skipping (up-to-date): {local_key}")
         elif folder == "modules":
             _sync_module(
-                course, file_path, repo_path, manifest, manifest_path,
-                force_uploads, force_overwrite, newer_on_canvas,
+                course,
+                file_path,
+                repo_path,
+                manifest,
+                manifest_path,
+                force_uploads,
+                force_overwrite,
+                newer_on_canvas,
                 position=_targeted_position_map.get(file_path.name),
             )
         elif folder == "quizzes":
             quiz_folder = file_path.parent
             _sync_quiz(
-                course, quiz_folder, file_path, repo_path, manifest, manifest_path,
-                config.course_id, force_uploads, force_overwrite, newer_on_canvas, errors,
+                course,
+                quiz_folder,
+                file_path,
+                repo_path,
+                manifest,
+                manifest_path,
+                config.course_id,
+                force_uploads,
+                force_overwrite,
+                newer_on_canvas,
+                errors,
             )
         else:
             _sync_content_file(
-                course, file_path, repo_path, snippets_dir, manifest, manifest_path,
-                config.course_id, force_uploads, force_overwrite, newer_on_canvas, errors,
+                course,
+                file_path,
+                repo_path,
+                snippets_dir,
+                manifest,
+                manifest_path,
+                config.course_id,
+                force_uploads,
+                force_overwrite,
+                newer_on_canvas,
+                errors,
             )
 
     def _warn_missing(target: str) -> None:

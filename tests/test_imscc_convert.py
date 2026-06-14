@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from github_to_canvas.imscc_import import (
+    TempEntry,
     _build_frontmatter,
     _extract_html_body,
     _parse_assignment_groups,
@@ -21,6 +22,7 @@ from github_to_canvas.imscc_import import (
     parse_assignment_settings,
     parse_qti_questions,
     parse_topic_meta,
+    rewrite_imscc_links,
 )
 
 FIXTURE_DIR = Path(__file__).parent / "fixtures" / "imscc"
@@ -1008,3 +1010,115 @@ def test_question_bank_essay_no_original_answer_ids() -> None:
     questions = parse_qti_questions(path)
     essay = next(q for q in questions if q["question_type"] == "essay_question")
     assert essay["original_answer_ids"] == []
+
+
+# ---------------------------------------------------------------------------
+# rewrite_imscc_links — $CANVAS_COURSE_ID$ token handling
+# ---------------------------------------------------------------------------
+
+
+def test_rewrite_imscc_links_canvas_course_id_replaced() -> None:
+    """$CANVAS_COURSE_ID$ in an href is replaced with the numeric course ID."""
+    html = '<a href="https://example.com/courses/$CANVAS_COURSE_ID$/grades">Grades</a>'
+    result = rewrite_imscc_links(html, {}, "pages/test.md", course_id=12345)
+    assert "$CANVAS_COURSE_ID$" not in result
+    assert "https://example.com/courses/12345/grades" in result
+
+
+def test_rewrite_imscc_links_canvas_course_id_no_course_id_preserves_token() -> None:
+    """When course_id is None, $CANVAS_COURSE_ID$ is left as-is (no crash)."""
+    html = '<a href="https://example.com/courses/$CANVAS_COURSE_ID$/grades">Grades</a>'
+    result = rewrite_imscc_links(html, {}, "pages/test.md", course_id=None)
+    assert "$CANVAS_COURSE_ID$" in result
+
+
+def test_rewrite_imscc_links_canvas_course_id_str_course_id() -> None:
+    """course_id given as a string is substituted correctly."""
+    html = '<a href="https://example.com/courses/$CANVAS_COURSE_ID$/modules">Modules</a>'
+    result = rewrite_imscc_links(html, {}, "pages/test.md", course_id="99")
+    assert "courses/99/modules" in result
+
+
+def test_rewrite_imscc_links_canvas_course_id_multiple_occurrences() -> None:
+    """All occurrences of $CANVAS_COURSE_ID$ in the HTML are replaced."""
+    html = (
+        '<a href="https://example.com/courses/$CANVAS_COURSE_ID$/grades">Grades</a>'
+        '<a href="https://example.com/courses/$CANVAS_COURSE_ID$/modules">Modules</a>'
+    )
+    result = rewrite_imscc_links(html, {}, "pages/test.md", course_id=42)
+    assert "$CANVAS_COURSE_ID$" not in result
+    assert result.count("courses/42/") == 2
+
+
+def test_rewrite_imscc_links_canvas_course_id_and_object_ref_together() -> None:
+    """$CANVAS_COURSE_ID$ and $CANVAS_OBJECT_REFERENCE$ tokens are both handled."""
+    manifest = {
+        "g_assign_1": TempEntry(
+            imscc_id="g_assign_1",
+            category="assignment",
+            imscc_path="g_assign_1/body.html",
+            local_path="assignments/hw.md",
+        )
+    }
+    html = (
+        '<a href="https://example.com/courses/$CANVAS_COURSE_ID$/grades">Grades</a>'
+        '<a href="$CANVAS_OBJECT_REFERENCE$/assignments/g_assign_1">HW</a>'
+    )
+    result = rewrite_imscc_links(html, manifest, "pages/test.md", course_id=7)
+    assert "$CANVAS_COURSE_ID$" not in result
+    assert "courses/7/grades" in result
+    assert "$CANVAS_OBJECT_REFERENCE$" not in result
+    assert "../assignments/hw.md" in result
+
+
+# rewrite_imscc_links — $CANVAS_COURSE_REFERENCE$ token handling
+# ---------------------------------------------------------------------------
+
+
+def test_rewrite_imscc_links_canvas_course_reference_replaced() -> None:
+    """$CANVAS_COURSE_REFERENCE$ at the start of an href is replaced with base_url."""
+    html = '<a href="$CANVAS_COURSE_REFERENCE$/grades">Gradebook</a>'
+    result = rewrite_imscc_links(
+        html, {}, "pages/test.md", base_url="https://example.com/courses/42"
+    )
+    assert "$CANVAS_COURSE_REFERENCE$" not in result
+    assert "https://example.com/courses/42/grades" in result
+
+
+def test_rewrite_imscc_links_canvas_course_reference_no_base_url_preserves_token() -> None:
+    """When base_url is None, $CANVAS_COURSE_REFERENCE$ is left as-is (no crash)."""
+    html = '<a href="$CANVAS_COURSE_REFERENCE$/grades">Gradebook</a>'
+    result = rewrite_imscc_links(html, {}, "pages/test.md", base_url=None)
+    assert "$CANVAS_COURSE_REFERENCE$" in result
+
+
+def test_rewrite_imscc_links_canvas_course_reference_multiple_occurrences() -> None:
+    """All occurrences of $CANVAS_COURSE_REFERENCE$ in the HTML are replaced."""
+    html = (
+        '<a href="$CANVAS_COURSE_REFERENCE$/grades">Grades</a>'
+        '<a href="$CANVAS_COURSE_REFERENCE$/modules">Modules</a>'
+    )
+    result = rewrite_imscc_links(
+        html, {}, "pages/test.md", base_url="https://school.instructure.com/courses/5"
+    )
+    assert "$CANVAS_COURSE_REFERENCE$" not in result
+    assert result.count("https://school.instructure.com/courses/5/") == 2
+
+
+def test_rewrite_imscc_links_canvas_course_reference_and_course_id_together() -> None:
+    """$CANVAS_COURSE_REFERENCE$ and $CANVAS_COURSE_ID$ are both handled in the same HTML."""
+    html = (
+        '<a href="$CANVAS_COURSE_REFERENCE$/grades">Grades</a>'
+        '<a href="https://school.instructure.com/courses/$CANVAS_COURSE_ID$/modules">Modules</a>'
+    )
+    result = rewrite_imscc_links(
+        html,
+        {},
+        "pages/test.md",
+        course_id=99,
+        base_url="https://school.instructure.com/courses/99",
+    )
+    assert "$CANVAS_COURSE_REFERENCE$" not in result
+    assert "$CANVAS_COURSE_ID$" not in result
+    assert "https://school.instructure.com/courses/99/grades" in result
+    assert "https://school.instructure.com/courses/99/modules" in result

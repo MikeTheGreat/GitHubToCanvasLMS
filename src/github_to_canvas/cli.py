@@ -97,13 +97,17 @@ def import_cmd(imscc_path: Path, output_dir: Path) -> None:
     default=False,
     help="Write a starter .github/workflows/publish.yml into the course repo.",
 )
-def publish(course_dir: Path, output_dir: Path, deploy: bool, emit_workflow: bool) -> None:
+def publish(
+    course_dir: Path, output_dir: Path, deploy: bool, emit_workflow: bool
+) -> None:
     """Generate a public MkDocs static site from the course repo.
 
     COURSE_DIR is the course content repo (defaults to the current directory).
     """
     try:
-        run_publish(course_dir, output_dir, deploy=deploy, emit_workflow_flag=emit_workflow)
+        run_publish(
+            course_dir, output_dir, deploy=deploy, emit_workflow_flag=emit_workflow
+        )
     except ValueError as e:
         die(str(e))
 
@@ -196,7 +200,9 @@ def update(
             )
 
         if had_errors:
-            click.secho("Update complete; please check errors listed above.", fg="yellow")
+            click.secho(
+                "Update complete; please check errors listed above.", fg="yellow"
+            )
         else:
             click.secho("Update successful", fg="green")
     except FileNotFoundError as e:

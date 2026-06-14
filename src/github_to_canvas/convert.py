@@ -1,11 +1,11 @@
 """Markdown → HTML conversion and snippet preprocessing."""
+
 from __future__ import annotations
 
 import re
 from pathlib import Path
 
 import pypandoc
-
 
 _SNIPPET_LINK_RE = re.compile(r"\[([^\]]*)\]\(([^)]+)\)")
 

@@ -1,4 +1,5 @@
 """Post-Pandoc HTML link/img rewriting."""
+
 from __future__ import annotations
 
 import re
@@ -100,7 +101,9 @@ def rewrite_links(
                     src = source_file.relative_to(course_root)
                 except ValueError:
                     src = source_file
-                errors.append(f"  {src}: local file not found, removing tag: {local_key}")
+                errors.append(
+                    f"  {src}: local file not found, removing tag: {local_key}"
+                )
             return local_key, None  # signals removal
         if local_key not in manifest:
             entry = stub_creator(local_key, infer_canvas_type(local_key))

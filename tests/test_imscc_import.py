@@ -1057,3 +1057,100 @@ def test_run_import_no_course_id_no_snippet(tmp_path: Path) -> None:
     output = tmp_path / "output"
     run_import(fixture_copy, output)
     assert not (output / "snippets" / "inline" / "CANVAS_COURSE_REFERENCE.md").exists()
+
+
+# ---------------------------------------------------------------------------
+# $CANVAS_COURSE_ID$ placeholder token — end-to-end handling
+# ---------------------------------------------------------------------------
+
+
+def test_run_import_canvas_course_id_token_replaced_in_page(output_dir: Path) -> None:
+    """$CANVAS_COURSE_ID$ nav links in page HTML are converted to CANVAS_COURSE_REFERENCE snippet."""
+    run_import(FIXTURE_DIR, output_dir)
+    text = (output_dir / "pages" / "my-page.md").read_text()
+    # The placeholder must not survive into the final markdown
+    assert "$CANVAS_COURSE_ID$" not in text
+
+
+def test_run_import_canvas_course_id_token_becomes_snippet(output_dir: Path) -> None:
+    """A $CANVAS_COURSE_ID$ href is rewritten to use the CANVAS_COURSE_REFERENCE snippet."""
+    run_import(FIXTURE_DIR, output_dir)
+    text = (output_dir / "pages" / "my-page.md").read_text()
+    # Both the numeric URL (from the hardcoded link) and the token URL (from
+    # $CANVAS_COURSE_ID$) should ultimately become snippet references.
+    assert "$../snippets/inline/CANVAS_COURSE_REFERENCE.md$" in text
+    assert "https://test.instructure.com/courses/12345" not in text
+
+
+def test_run_import_canvas_course_id_snippet_roundtrip(output_dir: Path) -> None:
+    """After import, preprocess_snippets expands the $CANVAS_COURSE_ID$-derived link to the real URL."""
+    from github_to_canvas.convert import preprocess_snippets
+
+    run_import(FIXTURE_DIR, output_dir)
+
+    page = output_dir / "pages" / "my-page.md"
+    snippets_dir = output_dir / "snippets"
+    result = preprocess_snippets(page.read_text(), page, snippets_dir)
+
+    # Both the /modules and the /grades (from $CANVAS_COURSE_ID$) links expand
+    assert "https://test.instructure.com/courses/12345/modules" in result
+    assert "https://test.instructure.com/courses/12345/grades" in result
+
+
+# _replace_canvas_course_url — title attribute handling
+# ---------------------------------------------------------------------------
+
+
+def test_replace_canvas_course_url_with_pandoc_title_attr(tmp_path: Path) -> None:
+    """Links with a Pandoc-generated title attribute ([text](url "title")) are matched and rewritten."""
+    (tmp_path / "pages").mkdir()
+    md = tmp_path / "pages" / "test.md"
+    md.write_text(f'[Syllabus]({BASE_URL}/assignments/syllabus "Syllabus")\n')
+    _replace_canvas_course_url_in_md_files(tmp_path, BASE_URL)
+    text = md.read_text()
+    assert BASE_URL not in text
+    assert "$../snippets/inline/CANVAS_COURSE_REFERENCE.md$" in text
+    assert "/assignments/syllabus" in text
+
+
+def test_replace_canvas_course_url_converts_bare_token(tmp_path: Path) -> None:
+    """A bare $CANVAS_COURSE_REFERENCE$ token (no resolved URL) is converted to the snippet ref."""
+    (tmp_path / "pages").mkdir()
+    md = tmp_path / "pages" / "test.md"
+    md.write_text('[Gradebook]($CANVAS_COURSE_REFERENCE$/grades "Grades")\n')
+    _replace_canvas_course_url_in_md_files(tmp_path, BASE_URL)
+    text = md.read_text()
+    assert "$CANVAS_COURSE_REFERENCE$/grades" not in text
+    assert '[Gradebook]($../snippets/inline/CANVAS_COURSE_REFERENCE.md$/grades "Gradebook")' in text
+
+
+# $CANVAS_COURSE_REFERENCE$ placeholder token — end-to-end handling
+# ---------------------------------------------------------------------------
+
+
+def test_run_import_canvas_course_reference_token_replaced_in_page(output_dir: Path) -> None:
+    """$CANVAS_COURSE_REFERENCE$ nav links in page HTML are converted to CANVAS_COURSE_REFERENCE snippet."""
+    run_import(FIXTURE_DIR, output_dir)
+    text = (output_dir / "pages" / "my-page.md").read_text()
+    assert "$CANVAS_COURSE_REFERENCE$" not in text
+
+
+def test_run_import_canvas_course_reference_token_becomes_snippet(output_dir: Path) -> None:
+    """A $CANVAS_COURSE_REFERENCE$ href is rewritten to use the CANVAS_COURSE_REFERENCE snippet."""
+    run_import(FIXTURE_DIR, output_dir)
+    text = (output_dir / "pages" / "my-page.md").read_text()
+    # The Syllabus link (from $CANVAS_COURSE_REFERENCE$ fixture) must become a snippet ref
+    assert "$../snippets/inline/CANVAS_COURSE_REFERENCE.md$/assignments/syllabus" in text
+
+
+def test_run_import_canvas_course_reference_snippet_roundtrip(output_dir: Path) -> None:
+    """After import, preprocess_snippets expands the $CANVAS_COURSE_REFERENCE$-derived link."""
+    from github_to_canvas.convert import preprocess_snippets
+
+    run_import(FIXTURE_DIR, output_dir)
+
+    page = output_dir / "pages" / "my-page.md"
+    snippets_dir = output_dir / "snippets"
+    result = preprocess_snippets(page.read_text(), page, snippets_dir)
+
+    assert "https://test.instructure.com/courses/12345/assignments/syllabus" in result

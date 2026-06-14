@@ -425,6 +425,9 @@ _CANVAS_REF_RE = re.compile(
 _FILEBASE_RE = re.compile(
     r'\$IMS-CC-FILEBASE\$/([^"\'?\s]+?)(?:\?[^"\']*)?(?=["\'\s])',
 )
+# Canvas placeholder tokens used in navigation link hrefs
+_CANVAS_COURSE_ID_TOKEN_RE = re.compile(r'\$CANVAS_COURSE_ID\$')
+_CANVAS_COURSE_REFERENCE_TOKEN_RE = re.compile(r'\$CANVAS_COURSE_REFERENCE\$')
 
 # Map from module_meta content_type path fragment to canonical content dir
 _CONTENT_TYPE_TO_DIR: dict[str, str] = {
@@ -440,12 +443,29 @@ def rewrite_imscc_links(
     html: str,
     temp_manifest: dict[str, TempEntry],
     output_local_path: str,
+    course_id: int | str | None = None,
+    base_url: str | None = None,
 ) -> str:
-    """Rewrite $CANVAS_OBJECT_REFERENCE$ and $IMS-CC-FILEBASE$ tokens.
+    """Rewrite $CANVAS_OBJECT_REFERENCE$, $IMS-CC-FILEBASE$, and Canvas course tokens.
 
     output_local_path is the relative output path of the file being converted
     (e.g. 'pages/my-page.md').  Used to compute relative '../' prefix.
+
+    Canvas embeds two placeholder tokens in navigation link hrefs during IMSCC export:
+    - $CANVAS_COURSE_REFERENCE$ — the full course base URL; replaced with base_url.
+    - $CANVAS_COURSE_ID$        — the numeric course ID; replaced with course_id.
+
+    After replacement the resulting full URLs are matched by
+    _replace_canvas_course_url_in_md_files which converts them to snippet references.
     """
+    # $CANVAS_COURSE_REFERENCE$ → full base URL (replace first so $CANVAS_COURSE_ID$
+    # inside the replacement can be handled on the same pass if needed)
+    if base_url is not None:
+        html = _CANVAS_COURSE_REFERENCE_TOKEN_RE.sub(base_url, html)
+    # $CANVAS_COURSE_ID$ → bare numeric course ID
+    if course_id is not None:
+        html = _CANVAS_COURSE_ID_TOKEN_RE.sub(str(course_id), html)
+
     depth = len(Path(output_local_path).parts) - 1
     prefix = "../" * depth  # e.g. '../' for files one dir deep
 
@@ -514,12 +534,14 @@ def convert_page(
     imscc_dir: Path,
     temp_manifest: dict[str, TempEntry],
     output_dir: Path,
+    course_id: int | str | None = None,
+    base_url: str | None = None,
 ) -> None:
     """Convert a wiki_content page HTML file to pages/{stem}.md."""
     html_path = imscc_dir / entry.imscc_path
     raw_html = html_path.read_text(encoding="utf-8", errors="replace")
     body_html = _extract_html_body(raw_html)
-    body_html = rewrite_imscc_links(body_html, temp_manifest, entry.local_path)
+    body_html = rewrite_imscc_links(body_html, temp_manifest, entry.local_path, course_id, base_url)
     markdown = _html_to_markdown(body_html)
 
     frontmatter = _build_frontmatter({"title": entry.title, "published": True})
@@ -643,6 +665,8 @@ def convert_assignment(
     imscc_dir: Path,
     temp_manifest: dict[str, TempEntry],
     output_dir: Path,
+    course_id: int | str | None = None,
+    base_url: str | None = None,
 ) -> None:
     """Convert an assignment HTML + settings XML to assignments/{stem}.md."""
     settings_path = imscc_dir / entry.metadata["settings_path"]
@@ -651,7 +675,7 @@ def convert_assignment(
     html_path = imscc_dir / entry.imscc_path
     raw_html = html_path.read_text(encoding="utf-8", errors="replace")
     body_html = _extract_html_body(raw_html)
-    body_html = rewrite_imscc_links(body_html, temp_manifest, entry.local_path)
+    body_html = rewrite_imscc_links(body_html, temp_manifest, entry.local_path, course_id, base_url)
     markdown = _html_to_markdown(body_html)
 
     frontmatter = _build_frontmatter(fm_fields)
@@ -717,6 +741,8 @@ def convert_discussion(
     imscc_dir: Path,
     temp_manifest: dict[str, TempEntry],
     output_dir: Path,
+    course_id: int | str | None = None,
+    base_url: str | None = None,
 ) -> None:
     """Convert a discussion topic + topicMeta to discussions/{slug}.md."""
     meta_path_str = entry.metadata.get("meta_path", "")
@@ -739,7 +765,7 @@ def convert_discussion(
     )
     body_html = (text_el.text or "") if text_el is not None else ""
 
-    body_html = rewrite_imscc_links(body_html, temp_manifest, entry.local_path)
+    body_html = rewrite_imscc_links(body_html, temp_manifest, entry.local_path, course_id, base_url)
     markdown = _html_to_markdown(body_html)
 
     # Extract attachments (spec §4.7)
@@ -1823,6 +1849,8 @@ def _write_events_md(
     events: list[dict[str, Any]],
     temp_manifest: dict[str, TempEntry],
     output_dir: Path,
+    course_id: int | str | None = None,
+    base_url: str | None = None,
 ) -> None:
     """Write course_settings/events.md from parsed course calendar events."""
     cs_dir = output_dir / "course_settings"
@@ -1848,7 +1876,7 @@ def _write_events_md(
 
         if description_html:
             body_html = rewrite_imscc_links(
-                description_html, temp_manifest, "course_settings/events.md"
+                description_html, temp_manifest, "course_settings/events.md", course_id, base_url
             )
             md = _html_to_markdown(body_html).strip()
             if md:
@@ -1863,6 +1891,8 @@ def create_course_settings(
     imscc_dir: Path,
     temp_manifest: dict[str, TempEntry],
     output_dir: Path,
+    course_id: int | str | None = None,
+    base_url: str | None = None,
 ) -> None:
     """Write course_settings.toml (root), course_settings/syllabus.md, events.md, canvas.toml."""
     cs_dir = output_dir / "course_settings"
@@ -1873,7 +1903,7 @@ def create_course_settings(
     if syllabus_src.exists():
         raw_html = syllabus_src.read_text(encoding="utf-8", errors="replace")
         body_html = _extract_html_body(raw_html)
-        body_html = rewrite_imscc_links(body_html, temp_manifest, "course_settings/syllabus.md")
+        body_html = rewrite_imscc_links(body_html, temp_manifest, "course_settings/syllabus.md", course_id, base_url)
         markdown = _html_to_markdown(body_html)
         fm = _build_frontmatter({"title": "Syllabus", "published": True})
         (cs_dir / "syllabus.md").write_text(fm + "\n" + markdown + "\n", encoding="utf-8")
@@ -1896,7 +1926,7 @@ def create_course_settings(
     )
 
     if events:
-        _write_events_md(events, temp_manifest, output_dir)
+        _write_events_md(events, temp_manifest, output_dir, course_id, base_url)
 
     if rubrics:
         _write_rubrics_toml(rubrics, output_dir)
@@ -1935,14 +1965,23 @@ def _replace_canvas_course_url_in_md_files(output_dir: Path, base_url: str) -> N
 
     The link text is repeated as a Markdown link title so the destination remains
     human-readable in editors where the snippet ref is not expanded.
+
+    As a safety net, any bare ``$CANVAS_COURSE_REFERENCE$`` placeholder token that
+    survived into the Markdown (e.g. if Pandoc mangled the in-HTML substitution) is
+    converted the same way, so the sync/update step never sees an unresolved token.
     """
-    pattern = re.compile(
-        r"\[([^\]]+)\]\(" + re.escape(base_url) + r"(/[^\s)\"]*|)\)"
+    # Full resolved URL form: [text](https://domain/courses/ID/path "title")
+    url_pattern = re.compile(
+        r"\[([^\]]+)\]\(" + re.escape(base_url) + r"(/[^\s)\"]*|)(?:\s+\"[^\"]*\")?\)"
+    )
+    # Bare placeholder token form: [text]($CANVAS_COURSE_REFERENCE$/path "title")
+    token_pattern = re.compile(
+        r"\[([^\]]+)\]\(\$CANVAS_COURSE_REFERENCE\$(/[^\s)\"]*|)(?:\s+\"[^\"]*\")?\)"
     )
     count = 0
     for md_file in sorted(output_dir.rglob("*.md")):
         text = md_file.read_text(encoding="utf-8")
-        if base_url not in text:
+        if base_url not in text and "$CANVAS_COURSE_REFERENCE$" not in text:
             continue
         rel = md_file.relative_to(output_dir)
         depth = len(rel.parts) - 1
@@ -1954,7 +1993,8 @@ def _replace_canvas_course_url_in_md_files(output_dir: Path, base_url: str) -> N
             title = link_text.replace('"', '\\"')
             return f'[{link_text}](${_sp}${path_suffix} "{title}")'
 
-        new_text = pattern.sub(_sub, text)
+        new_text = url_pattern.sub(_sub, text)
+        new_text = token_pattern.sub(_sub, new_text)
         md_file.write_text(new_text, encoding="utf-8")
         count += 1
     if count:
@@ -2006,6 +2046,7 @@ def run_import(imscc_path: Path, output_dir: Path) -> None:
         context = _parse_context(imscc_dir / "course_settings" / "context.xml")
         canvas_domain = context.get("canvas_domain", "")
         course_id = context.get("course_id")
+        base_url = f"https://{canvas_domain}/courses/{course_id}" if canvas_domain and course_id else None
 
         print("Parsing IMSCC manifest...")
         temp_manifest = parse_imsmanifest(imscc_dir)
@@ -2016,17 +2057,17 @@ def run_import(imscc_path: Path, output_dir: Path) -> None:
         # Phase 3: pages
         for entry in temp_manifest.values():
             if entry.category == "page":
-                convert_page(entry, imscc_dir, temp_manifest, output_dir)
+                convert_page(entry, imscc_dir, temp_manifest, output_dir, course_id, base_url)
 
         # Phase 4: assignments
         for entry in temp_manifest.values():
             if entry.category == "assignment":
-                convert_assignment(entry, imscc_dir, temp_manifest, output_dir)
+                convert_assignment(entry, imscc_dir, temp_manifest, output_dir, course_id, base_url)
 
         # Phase 5: discussions
         for entry in temp_manifest.values():
             if entry.category == "discussion":
-                convert_discussion(entry, imscc_dir, temp_manifest, output_dir)
+                convert_discussion(entry, imscc_dir, temp_manifest, output_dir, course_id, base_url)
 
         # Phase 5b: quizzes
         for entry in temp_manifest.values():
@@ -2051,11 +2092,10 @@ def run_import(imscc_path: Path, output_dir: Path) -> None:
             print(f"Generating module order: course_settings/module_order.toml")
 
         # Phase 7: course settings
-        create_course_settings(imscc_dir, temp_manifest, output_dir)
+        create_course_settings(imscc_dir, temp_manifest, output_dir, course_id, base_url)
 
         # Phase 8: parameterize Canvas course URL via snippet
-        if canvas_domain and course_id:
-            base_url = f"https://{canvas_domain}/courses/{course_id}"
+        if base_url:
             _replace_canvas_course_url_in_md_files(output_dir, base_url)
             _write_canvas_course_reference_snippet(base_url, output_dir)
 
