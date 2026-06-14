@@ -973,13 +973,19 @@ Office hours are Tuesdays 2–4 pm in Building 7, Room 201.
 
 #### Inline snippets and the `CANVAS_COURSE_ID` snippet
 
-Snippets can also be used inline — embedded inside the URL of a surrounding Markdown link. This lets a single file parameterize a value that appears in URLs throughout your content.
+Snippets can also be embedded *inline* using a dollar-sign-fenced path:
 
-The most common use is `snippets/inline/CANVAS_COURSE_ID.md`, which holds the numeric Canvas course ID. Any link that points into your own Canvas course (e.g. to the Modules or Grades page) can reference this snippet so the ID is defined in one place:
+```text
+$path/to/snippet.md$
+```
+
+The path is relative to the file that contains the reference. Before conversion the tool replaces the whole `$…$` token with the snippet's content (whitespace-stripped), making it safe to embed inside a Markdown link URL or anywhere else in text.
+
+The most common use is `snippets/inline/CANVAS_COURSE_ID.md`, which holds the numeric Canvas course ID. Links that point into your own Canvas course (e.g. Modules or Grades) can reference it so the ID is defined in one place:
 
 ```markdown
 <!-- in pages/overview.md -->
-See the [course modules](https://cascadia.instructure.com/courses/[CANVAS_COURSE_ID](../snippets/inline/CANVAS_COURSE_ID.md)/modules) page.
+See the [course modules](https://cascadia.instructure.com/courses/$../snippets/inline/CANVAS_COURSE_ID.md$/modules) page.
 ```
 
 ```markdown
@@ -987,13 +993,15 @@ See the [course modules](https://cascadia.instructure.com/courses/[CANVAS_COURSE
 2735320
 ```
 
-Before conversion, the tool replaces `[CANVAS_COURSE_ID](../snippets/inline/CANVAS_COURSE_ID.md)` with `2735320`, producing:
+Before conversion, `$../snippets/inline/CANVAS_COURSE_ID.md$` is replaced with `2735320`, producing:
 
 ```markdown
 See the [course modules](https://cascadia.instructure.com/courses/2735320/modules) page.
 ```
 
-**The `import` subcommand creates this snippet automatically.** When you import a `.imscc` file, the tool reads the course ID from the export metadata, writes `snippets/inline/CANVAS_COURSE_ID.md`, and replaces every occurrence of the course ID in Canvas course URLs throughout the imported Markdown files with the snippet reference.
+> **Note on `$` in links** — Inside a Markdown link URL, `$` has no special meaning and is valid in HTML `href` attributes (RFC 3986 sub-delimiter). The preprocessing step runs before Pandoc, so there is no conflict with Pandoc's `$…$` math syntax. The link will appear broken in a Markdown editor preview, but the Markdown structure itself is unaffected.
+
+**The `import` subcommand creates this snippet automatically.** When you import a `.imscc` file, the tool reads the course ID from the export metadata, writes `snippets/inline/CANVAS_COURSE_ID.md`, and replaces every occurrence of the course ID in Canvas course URL path segments throughout the imported Markdown files with the `$path$` snippet reference.
 
 ---
 

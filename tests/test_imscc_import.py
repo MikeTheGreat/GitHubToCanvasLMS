@@ -918,8 +918,8 @@ def test_replace_course_id_in_url_within_md(tmp_path: Path) -> None:
     _replace_course_id_in_md_files(tmp_path, "12345")
     text = md.read_text()
     assert "12345" not in text
-    assert "[CANVAS_COURSE_ID](../snippets/inline/CANVAS_COURSE_ID.md)" in text
-    assert "courses/[CANVAS_COURSE_ID](../snippets/inline/CANVAS_COURSE_ID.md)/modules" in text
+    assert "$../snippets/inline/CANVAS_COURSE_ID.md$" in text
+    assert "courses/$../snippets/inline/CANVAS_COURSE_ID.md$/modules" in text
 
 
 def test_replace_course_id_depth_adjusted(tmp_path: Path) -> None:
@@ -929,7 +929,7 @@ def test_replace_course_id_depth_adjusted(tmp_path: Path) -> None:
     md.write_text("[Go](https://x.com/courses/12345/grades)\n")
     _replace_course_id_in_md_files(tmp_path, "12345")
     text = md.read_text()
-    assert "../../snippets/inline/CANVAS_COURSE_ID.md" in text
+    assert "$../../snippets/inline/CANVAS_COURSE_ID.md$" in text
 
 
 def test_replace_course_id_skips_non_url_occurrences(tmp_path: Path) -> None:
@@ -967,7 +967,7 @@ def test_run_import_replaces_course_id_in_page_url(output_dir: Path) -> None:
     run_import(FIXTURE_DIR, output_dir)
     text = (output_dir / "pages" / "my-page.md").read_text()
     assert "12345" not in text
-    assert "[CANVAS_COURSE_ID](../snippets/inline/CANVAS_COURSE_ID.md)" in text
+    assert "$../snippets/inline/CANVAS_COURSE_ID.md$" in text
 
 
 def test_run_import_does_not_replace_course_id_outside_url(output_dir: Path) -> None:
@@ -987,7 +987,7 @@ def test_replace_course_id_multiple_urls_in_one_file(tmp_path: Path) -> None:
     )
     _replace_course_id_in_md_files(tmp_path, "12345")
     text = md.read_text()
-    assert text.count("[CANVAS_COURSE_ID](../snippets/inline/CANVAS_COURSE_ID.md)") == 2
+    assert text.count("$../snippets/inline/CANVAS_COURSE_ID.md$") == 2
 
 
 def test_run_import_snippet_roundtrip(output_dir: Path) -> None:
@@ -1001,7 +1001,7 @@ def test_run_import_snippet_roundtrip(output_dir: Path) -> None:
     result = preprocess_snippets(page.read_text(), page, snippets_dir)
 
     assert "12345" in result
-    assert "[CANVAS_COURSE_ID](" not in result
+    assert "$../snippets" not in result
     assert "courses/12345/modules" in result
 
 

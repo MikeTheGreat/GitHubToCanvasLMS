@@ -1937,7 +1937,7 @@ def _replace_course_id_in_md_files(output_dir: Path, course_id: str) -> None:
         rel = md_file.relative_to(output_dir)
         depth = len(rel.parts) - 1
         prefix = "../" * depth
-        snippet_ref = f"[CANVAS_COURSE_ID]({prefix}snippets/inline/CANVAS_COURSE_ID.md)"
+        snippet_ref = f"${prefix}snippets/inline/CANVAS_COURSE_ID.md$"
         new_text = pattern.sub(lambda m, r=snippet_ref: m.group(1) + r, text)
         md_file.write_text(new_text, encoding="utf-8")
         count += 1

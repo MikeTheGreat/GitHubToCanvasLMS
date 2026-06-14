@@ -132,33 +132,54 @@ def test_non_snippet_links_in_fixture_unchanged() -> None:
     assert "[Week 1 Assignment](../assignments/week1.md)" in result
 
 
-def test_snippet_ref_embedded_in_link_url_expanded(tmp_path: Path) -> None:
-    """A snippet ref embedded inside a surrounding link URL is expanded correctly."""
+def test_inline_snippet_in_link_url_expanded(tmp_path: Path) -> None:
+    """A $path.md$ ref inside a link URL is replaced with the snippet content."""
     snippets_dir = tmp_path / "snippets"
     (snippets_dir / "inline").mkdir(parents=True)
     (snippets_dir / "inline" / "course_id.md").write_text("99999")
     source = tmp_path / "pages" / "notes.md"
     source.parent.mkdir()
-    text = "[Modules](https://example.com/courses/[COURSE](../snippets/inline/course_id.md)/modules)"
+    text = "[Modules](https://example.com/courses/$../snippets/inline/course_id.md$/modules)"
     result = preprocess_snippets(text, source, snippets_dir)
     assert result == "[Modules](https://example.com/courses/99999/modules)"
 
 
-def test_snippet_ref_embedded_at_end_of_link_url(tmp_path: Path) -> None:
-    """Snippet ref at the very end of a link URL (no suffix after the ref)."""
+def test_inline_snippet_in_link_url_end(tmp_path: Path) -> None:
+    """$path.md$ at the very end of a URL (nothing after it inside the parens)."""
     snippets_dir = tmp_path / "snippets"
     (snippets_dir / "inline").mkdir(parents=True)
     (snippets_dir / "inline" / "course_id.md").write_text("99999")
     source = tmp_path / "pages" / "notes.md"
     source.parent.mkdir()
-    text = "[Grades](https://example.com/courses/[COURSE](../snippets/inline/course_id.md)/grades)"
+    text = "[Grades](https://example.com/courses/$../snippets/inline/course_id.md$/grades)"
     result = preprocess_snippets(text, source, snippets_dir)
     assert "99999" in result
-    assert "[COURSE](" not in result
+    assert "$../snippets" not in result
 
 
-def test_non_snippet_link_url_unchanged_no_embedded_ref(tmp_path: Path) -> None:
-    """A regular external link with no embedded snippet ref is left as-is."""
+def test_inline_snippet_in_plain_text(tmp_path: Path) -> None:
+    """$path.md$ in prose (not inside a URL) is also replaced."""
+    snippets_dir, _ = _make_snippet(tmp_path, "val.md", "42\n")
+    source = tmp_path / "pages" / "notes.md"
+    source.parent.mkdir()
+    text = "The answer is $../snippets/val.md$ items."
+    result = preprocess_snippets(text, source, snippets_dir)
+    assert result == "The answer is 42 items."
+
+
+def test_inline_snippet_non_snippet_path_unchanged(tmp_path: Path) -> None:
+    """$path.md$ that does not resolve into snippets/ is left as-is."""
+    snippets_dir = tmp_path / "snippets"
+    snippets_dir.mkdir()
+    source = tmp_path / "pages" / "notes.md"
+    source.parent.mkdir()
+    text = "[Go](https://example.com/courses/$../other/file.md$/page)"
+    result = preprocess_snippets(text, source, snippets_dir)
+    assert result == text
+
+
+def test_non_snippet_external_link_unchanged(tmp_path: Path) -> None:
+    """A regular external link with no snippet ref is left as-is."""
     snippets_dir = tmp_path / "snippets"
     snippets_dir.mkdir()
     source = tmp_path / "pages" / "notes.md"

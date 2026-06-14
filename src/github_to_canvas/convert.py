@@ -9,18 +9,26 @@ import pypandoc
 
 _SNIPPET_LINK_RE = re.compile(r"\[([^\]]*)\]\(([^)]+)\)")
 
-# Matches [outer](prefix[inner](inner-url)suffix) — used to expand snippet refs
-# that are embedded inside the URL of a surrounding Markdown link.
-_URL_EMBEDDED_SNIPPET_RE = re.compile(
-    r"\[([^\]]*)\]\(([^\[\]]*)\[([^\]]*)\]\(([^)]+)\)([^)]*)\)"
-)
+# Matches $path.md$ — an inline snippet ref embedded anywhere in text, including
+# inside Markdown link URLs.  Requiring the .md suffix avoids false positives on
+# math expressions ($x^2$) and currency values ($5.99$).
+_INLINE_SNIPPET_RE = re.compile(r"\$([^$\n]+\.md)\$")
 
 
 def preprocess_snippets(text: str, source_file: Path, snippets_dir: Path) -> str:
-    """Replace [text](../snippets/foo.md) links with the snippet file contents.
+    """Replace snippet references with the snippet file's contents.
 
-    Also handles snippet refs embedded inside link URLs, e.g.:
-      [Go to modules](https://example.com/courses/[CANVAS_COURSE_ID](../snippets/inline/CANVAS_COURSE_ID.md)/modules)
+    Two forms are supported:
+
+    1. **Inline** — ``$path.md$`` anywhere in text (path relative to source file).
+       The content is stripped of leading/trailing whitespace, making it safe
+       to embed inside a Markdown link URL::
+
+           [Modules](https://example.com/courses/$../snippets/inline/CANVAS_COURSE_ID.md$/modules)
+
+    2. **Block** — ``[display text](path.md)`` where the path resolves into
+       the snippets directory.  The full file content replaces the link.
+       Useful for reusable policy paragraphs, office-hour blocks, etc.
 
     Nested snippet includes (a snippet that links to another snippet) are not
     expanded; an error is printed and the inner link is left as-is.
@@ -37,17 +45,13 @@ def preprocess_snippets(text: str, source_file: Path, snippets_dir: Path) -> str
             return None
         return target_path.read_text(), target_path
 
-    def _replace_url_embedded(m: re.Match) -> str:
-        """Expand a snippet ref embedded in a link URL."""
-        outer_text = m.group(1)
-        url_prefix = m.group(2)
-        inner_url = m.group(4)
-        url_suffix = m.group(5)
-        result = _load_snippet(inner_url)
+    def _replace_inline(m: re.Match) -> str:
+        """Expand a $path.md$ inline snippet ref (content is stripped)."""
+        result = _load_snippet(m.group(1))
         if result is None:
             return m.group(0)
         content, _ = result
-        return f"[{outer_text}]({url_prefix}{content.strip()}{url_suffix})"
+        return content.strip()
 
     def _replace(m: re.Match) -> str:
         link_target = m.group(2)
@@ -64,9 +68,9 @@ def preprocess_snippets(text: str, source_file: Path, snippets_dir: Path) -> str
                 )
         return content
 
-    # Pass 1: expand snippet refs embedded inside link URLs
-    text = _URL_EMBEDDED_SNIPPET_RE.sub(_replace_url_embedded, text)
-    # Pass 2: expand direct snippet refs
+    # Pass 1: expand $path.md$ inline snippet refs (stripped, safe for URLs)
+    text = _INLINE_SNIPPET_RE.sub(_replace_inline, text)
+    # Pass 2: expand [text](snippet_path) block snippet links
     return _SNIPPET_LINK_RE.sub(_replace, text)
 
 
