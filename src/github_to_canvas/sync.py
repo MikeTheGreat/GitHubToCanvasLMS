@@ -369,7 +369,7 @@ def run_sync(
                 or (order_changed and md_file.name in position_map)
                 or md_file in modules_with_updated_refs
             )
-            _sync_module(
+            had_module_warnings = _sync_module(
                 course,
                 md_file,
                 repo_path,
@@ -380,6 +380,8 @@ def run_sync(
                 newer_on_canvas,
                 position=position,
             )
+            if had_module_warnings:
+                errors.append(f"module {md_file.name}: some items could not be added")
     if order_changed:
         manifest_lib.record(manifest, manifest_path, _order_key, 0, "module_order")
 
@@ -627,19 +629,19 @@ def _sync_module(
     force_overwrite: bool = False,
     newer_on_canvas: list[str] | None = None,
     position: int | None = None,
-) -> None:
+) -> bool:
     if newer_on_canvas is None:
         newer_on_canvas = []
     local_key = md_file.relative_to(repo_root).as_posix()
 
     if not manifest_lib.needs_sync(manifest, local_key, md_file, force_uploads):
         print(f"Skipping (up-to-date): {local_key}")
-        return
+        return False
 
     if not force_overwrite:
         local_mtime = datetime.fromtimestamp(md_file.stat().st_mtime, tz=timezone.utc)
         if _canvas_is_newer(course, local_key, local_mtime, manifest, newer_on_canvas):
-            return
+            return False
 
     print(f"Syncing module: {local_key}")
 
@@ -661,11 +663,15 @@ def _sync_module(
     )
     capi.clear_module_items(module)
 
+    had_warnings = False
     canvas_item_ids: dict[str, int] = {}
     for item in items:
         item_id = capi.add_module_item(module, item, manifest)
-        if item["type"] == "content" and item_id is not None:
-            canvas_item_ids[item["local_path"]] = item_id
+        if item["type"] == "content":
+            if item_id is not None:
+                canvas_item_ids[item["local_path"]] = item_id
+            else:
+                had_warnings = True
 
     manifest_lib.record(
         manifest,
@@ -675,6 +681,7 @@ def _sync_module(
         "module",
         extra={"canvas_item_ids": canvas_item_ids},
     )
+    return had_warnings
 
 
 def _quiz_needs_sync(
@@ -980,7 +987,7 @@ def run_targeted_sync(
             else:
                 print(f"Skipping (up-to-date): {local_key}")
         elif folder == "modules":
-            _sync_module(
+            had_module_warnings = _sync_module(
                 course,
                 file_path,
                 repo_path,
@@ -991,6 +998,8 @@ def run_targeted_sync(
                 newer_on_canvas,
                 position=_targeted_position_map.get(file_path.name),
             )
+            if had_module_warnings:
+                errors.append(f"module {file_path.name}: some items could not be added")
         elif folder == "quizzes":
             quiz_folder = file_path.parent
             _sync_quiz(
