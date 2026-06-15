@@ -602,6 +602,9 @@ submission_types: ["online_upload"]  # one or more of: online_upload,
                               #   online_text_entry, online_url, online_quiz,
                               #   media_recording, student_annotation,
                               #   on_paper, external_tool, none
+allowed_extensions: ["pdf", "docx"]  # file types students may upload; only
+                              #   meaningful when submission_types includes
+                              #   online_upload; omit to allow any file type
 due_at:    "2025-02-01T23:59:00-05:00"   # graded as late after this
 unlock_at: "2025-01-27T00:00:00-05:00"   # becomes available at this time
 lock_at:   "2025-02-08T23:59:00-05:00"   # no submissions accepted after this
@@ -1038,6 +1041,23 @@ canvas_item_ids  = {"pages/syllabus.md" = 201, "assignments/week1.md" = 202}
 The `last_synced` field is used to skip files that haven't changed since they were last uploaded — a file is re-uploaded only when its local modification time is newer than `last_synced`. Use `--force-uploads` to bypass this check.
 
 If the manifest is lost you can re-run the tool against a fresh Canvas course, or re-create it manually from Canvas IDs.
+
+### Deleting a file in Canvas
+
+The tool does **not** detect Canvas-side deletions. If you delete a file in Canvas (e.g. an image in Canvas Files) but the local file is unchanged, the next `update` run will silently skip it — the local mtime is still older than `last_synced`, so `needs_sync` returns false and no upload occurs. The manifest entry remains, pointing at a now-dead Canvas ID. Any pages that embed the deleted file will show broken links.
+
+To fix this, re-upload the affected file using one of:
+
+```bash
+# Re-upload everything
+github-to-canvas update . --force-uploads
+
+# Re-upload just the one file (touch updates mtime so the tool treats it as changed)
+touch assets/Images/path/to/file.png
+github-to-canvas update .
+```
+
+After a forced re-upload the file receives a **new** Canvas ID. Pages that reference the image must then be re-synced so their embedded URLs are rewritten to the new ID.
 
 ## IMSCC import
 

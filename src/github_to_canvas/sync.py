@@ -536,6 +536,7 @@ def _sync_content_file(
             "lock_at",
             "unlock_at",
             "submission_types",
+            "allowed_extensions",
             "grading_type",
             # Assignment group (grading category)
             "assignment_group_id",
