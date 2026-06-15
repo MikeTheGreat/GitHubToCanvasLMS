@@ -605,6 +605,13 @@ submission_types: ["online_upload"]  # one or more of: online_upload,
 allowed_extensions: ["pdf", "docx"]  # file types students may upload; only
                               #   meaningful when submission_types includes
                               #   online_upload; omit to allow any file type
+annotatable_attachment: "assets/rubric.pdf"  # asset to annotate; required when
+                              #   submission_types includes student_annotation;
+                              #   path relative to repo root — asset must be
+                              #   synced before (or in the same run as) this
+                              #   assignment
+allowed_attempts: -1          # -1 = unlimited (default); positive integer
+                              #   limits the number of submission attempts
 due_at:    "2025-02-01T23:59:00-05:00"   # graded as late after this
 unlock_at: "2025-01-27T00:00:00-05:00"   # becomes available at this time
 lock_at:   "2025-02-08T23:59:00-05:00"   # no submissions accepted after this

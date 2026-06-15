@@ -122,7 +122,14 @@ def sync_syllabus(
         print(f"Skipping (up-to-date): {local_key}")
         return
     print("Syncing syllabus...")
-    frontmatter, body = parse_frontmatter(syllabus_md.read_text())
+    try:
+        frontmatter, body = parse_frontmatter(syllabus_md.read_text())
+    except yaml.YAMLError as exc:
+        msg = f"WARNING: course_settings/syllabus.md: malformed frontmatter: {exc}"
+        print(f"  {msg}")
+        if errors is not None:
+            errors.append(msg)
+        return
     html = markdown_to_html(body.strip()) if body.strip() else ""
     error_count_before = len(errors) if errors is not None else 0
     # Stub creator is not needed for the syllabus; pass a no-op
@@ -356,7 +363,10 @@ def run_sync(
         modules_with_updated_refs: set[Path] = set()
         if synced_content_keys:
             for md_file in modules_dir.glob("*.md"):
-                _, body = parse_frontmatter(md_file.read_text())
+                try:
+                    _, body = parse_frontmatter(md_file.read_text())
+                except yaml.YAMLError:
+                    continue
                 items = parse_module_body(body, md_file, repo_path)
                 refs = {i["local_path"] for i in items if i["type"] == "content"}
                 if refs & synced_content_keys:
@@ -471,7 +481,14 @@ def _sync_content_file(
 
     print(f"Processing: {local_key}")
 
-    frontmatter, body = parse_frontmatter(md_file.read_text())
+    try:
+        frontmatter, body = parse_frontmatter(md_file.read_text())
+    except yaml.YAMLError as exc:
+        msg = f"WARNING: {local_key}: malformed frontmatter: {exc}"
+        print(f"  {msg}")
+        if errors is not None:
+            errors.append(msg)
+        return
     body = preprocess_snippets(body, md_file, snippets_dir)
     html = markdown_to_html(body)
     canvas_type = infer_canvas_type(local_key)
@@ -537,6 +554,7 @@ def _sync_content_file(
             "unlock_at",
             "submission_types",
             "allowed_extensions",
+            "allowed_attempts",
             "grading_type",
             # Assignment group (grading category)
             "assignment_group_id",
@@ -581,6 +599,39 @@ def _sync_content_file(
                 del extra["assignment_group_id"]
             else:
                 extra["assignment_group_id"] = resolved
+        uses_student_annotation = "student_annotation" in (
+            frontmatter.get("submission_types") or []
+        )
+        if uses_student_annotation and "annotatable_attachment" not in frontmatter:
+            msg = (
+                f"WARNING: {local_key}: submission_types includes student_annotation "
+                f"but annotatable_attachment is not set"
+            )
+            print(f"  {msg}")
+            if errors is not None:
+                errors.append(msg)
+        elif "annotatable_attachment" in frontmatter:
+            asset_path = frontmatter["annotatable_attachment"]
+            if not (repo_root / asset_path).exists():
+                msg = (
+                    f"WARNING: {local_key}: annotatable_attachment '{asset_path}' "
+                    f"does not exist on disk"
+                )
+                print(f"  {msg}")
+                if errors is not None:
+                    errors.append(msg)
+            else:
+                asset_entry = manifest.get(asset_path)
+                if asset_entry is None or asset_entry.get("canvas_type") != "file":
+                    msg = (
+                        f"WARNING: {local_key}: annotatable_attachment '{asset_path}' not found "
+                        f"in manifest — sync assets/ first, then re-run"
+                    )
+                    print(f"  {msg}")
+                    if errors is not None:
+                        errors.append(msg)
+                else:
+                    extra["annotatable_attachment_id"] = asset_entry["canvas_id"]
         entry = capi.create_or_update_assignment(
             course, canvas_id, title, html, published=published, **extra
         )
@@ -646,7 +697,14 @@ def _sync_module(
 
     print(f"Syncing module: {local_key}")
 
-    frontmatter, body = parse_frontmatter(md_file.read_text())
+    try:
+        frontmatter, body = parse_frontmatter(md_file.read_text())
+    except yaml.YAMLError as exc:
+        msg = f"WARNING: {local_key}: malformed frontmatter: {exc}"
+        print(f"  {msg}")
+        if errors is not None:
+            errors.append(msg)
+        return False
     items = parse_module_body(body, md_file, repo_root)
 
     existing = manifest.get(local_key)
@@ -888,7 +946,10 @@ def _get_file_refs(
     """Return the set of locally-referenced file keys from any file type, without uploading."""
     folder = local_key.split("/")[0]
     if folder == "modules":
-        _, body = parse_frontmatter(file_path.read_text())
+        try:
+            _, body = parse_frontmatter(file_path.read_text())
+        except yaml.YAMLError:
+            return set()
         items = parse_module_body(body, file_path, repo_root)
         return {item["local_path"] for item in items if item["type"] == "content"}
     if folder in ("assets", "snippets"):
@@ -901,7 +962,10 @@ def _get_file_refs(
         # refs and return them here, and whether rewrite_links() should be called on the
         # converted quiz description / question HTML before upload.
         return set()
-    _, body = parse_frontmatter(file_path.read_text())
+    try:
+        _, body = parse_frontmatter(file_path.read_text())
+    except yaml.YAMLError:
+        return set()
     body = preprocess_snippets(body, file_path, snippets_dir)
     html = markdown_to_html(body)
     return extract_local_refs(html, file_path, repo_root)
