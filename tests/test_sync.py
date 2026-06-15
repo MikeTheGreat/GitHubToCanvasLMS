@@ -34,6 +34,7 @@ def _mock_page(page_id: int, url: str) -> MagicMock:
     p = MagicMock()
     p.page_id = page_id
     p.url = url
+    p.html_url = f"https://school.instructure.com/courses/1/pages/{url}"
     p.edit.return_value = p
     return p
 
@@ -41,6 +42,7 @@ def _mock_page(page_id: int, url: str) -> MagicMock:
 def _mock_assignment(canvas_id: int) -> MagicMock:
     a = MagicMock()
     a.id = canvas_id
+    a.html_url = f"https://school.instructure.com/courses/1/assignments/{canvas_id}"
     a.edit.return_value = a
     return a
 
@@ -48,6 +50,7 @@ def _mock_assignment(canvas_id: int) -> MagicMock:
 def _mock_discussion(canvas_id: int) -> MagicMock:
     d = MagicMock()
     d.id = canvas_id
+    d.html_url = f"https://school.instructure.com/courses/1/discussion_topics/{canvas_id}"
     d.update.return_value = d
     return d
 
@@ -379,7 +382,7 @@ def test_module_sync_item_order(mock_course, course_root, mocker) -> None:
     assert types == ["SubHeader", "Page", "SubHeader", "Assignment", "Discussion"]
 
     assert item_calls[0][1]["module_item"]["title"] == "Readings"
-    assert item_calls[1][1]["module_item"]["content_id"] == 11111
+    assert item_calls[1][1]["module_item"]["page_url"] == "syllabus"
     assert item_calls[2][1]["module_item"]["title"] == "Work"
     assert item_calls[3][1]["module_item"]["content_id"] == 98765
     assert item_calls[4][1]["module_item"]["content_id"] == 55555
@@ -775,6 +778,7 @@ def test_recursive_target_no_duplicate_processing(mock_course, course_root, mock
 def _mock_quiz(canvas_id: int) -> MagicMock:
     q = MagicMock()
     q.id = canvas_id
+    q.html_url = f"https://school.instructure.com/courses/1/quizzes/{canvas_id}"
     q.edit.return_value = q
     q.get_questions.return_value = []
     return q

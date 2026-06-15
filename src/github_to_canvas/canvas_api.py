@@ -203,7 +203,7 @@ def create_or_update_page(
         page = page.edit(wiki_page={"title": title, "body": body, **kwargs})
     else:
         page = course.create_page(wiki_page={"title": title, "body": body, **kwargs})
-    return {"canvas_type": "page", "canvas_id": page.page_id, "canvas_url": page.url}
+    return {"canvas_type": "page", "canvas_id": page.page_id, "canvas_url": page.url, "html_url": page.html_url}
 
 
 def set_front_page(course, page_url: str) -> None:
@@ -222,7 +222,7 @@ def create_or_update_assignment(
         assignment = course.create_assignment(
             assignment={"name": title, "description": body, **kwargs}
         )
-    return {"canvas_type": "assignment", "canvas_id": assignment.id}
+    return {"canvas_type": "assignment", "canvas_id": assignment.id, "html_url": assignment.html_url}
 
 
 def create_or_update_discussion(
@@ -233,7 +233,7 @@ def create_or_update_discussion(
         topic = topic.update(title=title, message=body, **kwargs)
     else:
         topic = course.create_discussion_topic(title=title, message=body, **kwargs)
-    return {"canvas_type": "discussion", "canvas_id": topic.id}
+    return {"canvas_type": "discussion", "canvas_id": topic.id, "html_url": topic.html_url}
 
 
 def create_stub(course, canvas_type: str, title: str) -> dict[str, Any]:
@@ -261,7 +261,7 @@ def create_or_update_quiz(
         quiz = quiz.edit(quiz=params)
     else:
         quiz = course.create_quiz(quiz=params)
-    return {"canvas_type": "quiz", "canvas_id": quiz.id}
+    return {"canvas_type": "quiz", "canvas_id": quiz.id, "html_url": quiz.html_url}
 
 
 def _build_question_params(q: dict[str, Any]) -> dict[str, Any]:
@@ -346,18 +346,26 @@ def add_module_item(module, item: dict[str, Any], manifest: dict) -> int | None:
     if canvas_type is None:
         print(f"  WARNING: unsupported canvas_type for module item (skipping): {local_path}")
         return None
+    if canvas_type == "Page":
+        module_item_params = {
+            "type": canvas_type,
+            "page_url": entry["canvas_url"],
+            "title": item["title"],
+        }
+        stale_id = entry.get("canvas_url")
+    else:
+        module_item_params = {
+            "type": canvas_type,
+            "content_id": entry["canvas_id"],
+            "title": item["title"],
+        }
+        stale_id = entry.get("canvas_id")
     try:
-        mi = module.create_module_item(
-            module_item={
-                "type": canvas_type,
-                "content_id": entry["canvas_id"],
-                "title": item["title"],
-            }
-        )
+        mi = module.create_module_item(module_item=module_item_params)
     except (BadRequest, ResourceDoesNotExist) as exc:
         print(
             f"  WARNING: could not add module item '{item['title']}' ({local_path}): {exc}\n"
-            f"  The Canvas ID {entry['canvas_id']!r} may be stale or belong to a different course.\n"
+            f"  The Canvas ID {stale_id!r} may be stale or belong to a different course.\n"
             f"  Re-sync '{local_path}' first, then re-sync this module."
         )
         return None

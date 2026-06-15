@@ -514,6 +514,7 @@ def _sync_content_file(
             published=published,
             editing_roles=frontmatter.get("editing_roles", "teachers"),
         )
+        print(f"  Link: {entry['html_url']}")
         manifest_lib.record(
             manifest,
             manifest_path,
@@ -580,6 +581,7 @@ def _sync_content_file(
         entry = capi.create_or_update_assignment(
             course, canvas_id, title, html, published=published, **extra
         )
+        print(f"  Link: {entry['html_url']}")
         manifest_lib.record(
             manifest, manifest_path, local_key, entry["canvas_id"], "assignment"
         )
@@ -597,6 +599,7 @@ def _sync_content_file(
         entry = capi.create_or_update_discussion(
             course, canvas_id, title, html, published=published, **extra
         )
+        print(f"  Link: {entry['html_url']}")
         manifest_lib.record(
             manifest, manifest_path, local_key, entry["canvas_id"], "discussion"
         )
@@ -817,6 +820,7 @@ def _sync_quiz(
     result = capi.create_or_update_quiz(
         course, canvas_id, title, desc_html, published=published, **quiz_kwargs
     )
+    print(f"  Link: {result['html_url']}")
     quiz_obj = course.get_quiz(result["canvas_id"])
     q_id_map = capi.sync_quiz_questions(course, quiz_obj, questions)
 
