@@ -14,8 +14,9 @@ load_dotenv(find_dotenv(usecwd=True), override=True, verbose=True)
 from .canvas_api import get_course
 from .config import load as load_config
 from .imscc_import import run_import
+from .orphans import find_orphans, print_report
 from .publish import run_publish
-from .sync import run_sync, run_targeted_sync
+from .sync import run_prune, run_sync, run_targeted_sync
 
 
 # all commands must use die() for user-facing errors — no tracebacks, no raw exceptions.
@@ -110,6 +111,111 @@ def publish(
         )
     except ValueError as e:
         die(str(e))
+
+
+@main.command(name="prune", no_args_is_help=True)
+@click.argument(
+    "repo",
+    type=click.Path(exists=True, file_okay=False, path_type=Path),
+)
+@click.option(
+    "--config",
+    default=None,
+    type=click.Path(path_type=Path),
+    help="Path to canvas.toml (default: <repo>/canvas.toml)",
+)
+@click.option(
+    "--delete",
+    "mode",
+    flag_value="delete",
+    help="Delete the orphaned items from Canvas.",
+)
+@click.option(
+    "--unpublish",
+    "mode",
+    flag_value="unpublish",
+    help="Unpublish (set published=False) the orphaned items on Canvas.",
+)
+def prune(repo: Path, config: Path | None, mode: str | None) -> None:
+    """Delete or unpublish Canvas items whose local source file no longer exists.
+
+    REPO is the course content repo. An item is pruned when its manifest entry's
+    local file is gone (deleted or renamed). Exactly one of --delete / --unpublish
+    is required. Changes are applied immediately.
+    """
+    if mode is None:
+        die("Exactly one of --delete or --unpublish is required.")
+    if config is None:
+        config = repo / "canvas.toml"
+    try:
+        cfg = load_config(config)
+
+        click.echo(f"Repo:      {repo.resolve()}")
+        click.echo(f"Course ID: {cfg.course_id}  ({cfg.base_url})")
+
+        course = get_course(cfg)
+        click.echo(f"Course:    {course.name}")
+
+        had_errors = run_prune(cfg, repo, mode)
+
+        if had_errors:
+            click.secho(
+                "Prune complete; please check warnings listed above.", fg="yellow"
+            )
+        else:
+            click.secho("Prune successful", fg="green")
+    except FileNotFoundError as e:
+        die(f"Config file not found: {e.filename}")
+    except tomllib.TOMLDecodeError as e:
+        die(f"Invalid canvas.toml: {e}")
+    except (ValueError, KeyError) as e:
+        die("KeyError or ValueError:" + str(e))
+    except Exception as e:
+        raise e  # For unknown errors print rich debugging info
+
+
+@main.command(name="find-orphans")
+@click.argument(
+    "repo",
+    default=".",
+    type=click.Path(exists=True, file_okay=False, path_type=Path),
+)
+@click.option(
+    "--config",
+    default=None,
+    type=click.Path(path_type=Path),
+    help="Path to canvas.toml (default: <repo>/canvas.toml)",
+)
+def find_orphans_cmd(repo: Path, config: Path | None) -> None:
+    """Find Canvas resources not referenced by any other resource in the course.
+
+    Scans all pages, assignments, discussions, and quizzes for internal links,
+    checks module item membership, and identifies the front page. Resources
+    with zero inbound references are reported.
+
+    REPO is the course content repo (defaults to the current directory).
+    """
+    if config is None:
+        config = repo / "canvas.toml"
+    try:
+        cfg = load_config(config)
+
+        click.echo(f"Course ID: {cfg.course_id}  ({cfg.base_url})")
+
+        course = get_course(cfg)
+        click.echo(f"Course:    {course.name}")
+        click.echo()
+
+        orphans = find_orphans(course)
+        print_report(orphans, cfg.base_url)
+    except FileNotFoundError as e:
+        die(f"Config file not found: {e.filename}")
+    except tomllib.TOMLDecodeError as e:
+        die(f"Invalid canvas.toml: {e}")
+    except (ValueError, KeyError) as e:
+        die("KeyError or ValueError:" + str(e))
+    except Exception as e:
+        raise e
 
 
 @main.command(no_args_is_help=True)

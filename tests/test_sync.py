@@ -9,7 +9,13 @@ from unittest.mock import MagicMock, call
 import pytest
 
 from github_to_canvas.config import Config
-from github_to_canvas.sync import parse_frontmatter, parse_module_body, run_sync, run_targeted_sync
+from github_to_canvas.sync import (
+    parse_frontmatter,
+    parse_module_body,
+    run_prune,
+    run_sync,
+    run_targeted_sync,
+)
 
 FIXTURES = Path(__file__).parent / "fixtures"
 COURSE_ID = 999
@@ -181,6 +187,8 @@ def test_first_sync_creates_all_content(mock_course, course_root, mocker) -> Non
     mock_course.create_assignment.assert_called_once()
     mock_course.create_discussion_topic.assert_called_once()
     mock_course.upload.assert_called_once()
+    # Assets must overwrite in-place so existing links keep the same file ID/URL.
+    assert mock_course.upload.call_args.kwargs["on_duplicate"] == "overwrite"
     mock_course.create_module.assert_called_once()
 
 
@@ -1574,3 +1582,141 @@ def test_targeted_sync_passes_position_from_order_file(
 
     call_kwargs = mock_course.create_module.call_args[1]["module"]
     assert call_kwargs["position"] == 2
+
+
+# ---------------------------------------------------------------------------
+# prune: delete / unpublish orphaned manifest entries
+# ---------------------------------------------------------------------------
+
+
+def _prune_repo(tmp_path: Path) -> Path:
+    """A repo where only pages/kept.md exists on disk; everything else is orphaned."""
+    root = tmp_path / "course"
+    (root / "pages").mkdir(parents=True)
+    (root / "pages" / "kept.md").write_text("---\ntitle: Kept\n---\nstill here\n")
+    return root
+
+
+def test_prune_delete_removes_orphans_and_keeps_present(
+    mock_course, mocker, tmp_path
+) -> None:
+    root = _prune_repo(tmp_path)
+    manifest = {
+        "pages/gone.md": {"canvas_type": "page", "canvas_id": 11, "canvas_url": "gone"},
+        "assignments/gone.md": {"canvas_type": "assignment", "canvas_id": 22},
+        "pages/kept.md": {"canvas_type": "page", "canvas_id": 33, "canvas_url": "kept"},
+    }
+    mocker.patch("github_to_canvas.manifest.load", return_value=manifest)
+    mocker.patch("github_to_canvas.manifest.flush")
+
+    had_errors = run_prune(_config(), root, "delete")
+
+    assert had_errors is False
+    # Orphans deleted on Canvas...
+    mock_course.get_page.assert_called_once_with("gone")
+    mock_course.get_page.return_value.delete.assert_called_once()
+    mock_course.get_assignment.assert_called_once_with(22)
+    mock_course.get_assignment.return_value.delete.assert_called_once()
+    # ...and removed from the manifest; the present file is untouched.
+    assert "pages/gone.md" not in manifest
+    assert "assignments/gone.md" not in manifest
+    assert "pages/kept.md" in manifest
+
+
+def test_prune_unpublish_sets_published_false(mock_course, mocker, tmp_path) -> None:
+    root = _prune_repo(tmp_path)
+    manifest = {
+        "pages/gone.md": {"canvas_type": "page", "canvas_id": 11, "canvas_url": "gone"},
+        "quizzes/gone/gone.md": {"canvas_type": "quiz", "canvas_id": 44},
+    }
+    mocker.patch("github_to_canvas.manifest.load", return_value=manifest)
+    mocker.patch("github_to_canvas.manifest.flush")
+
+    had_errors = run_prune(_config(), root, "unpublish")
+
+    assert had_errors is False
+    mock_course.get_page.return_value.edit.assert_called_once_with(
+        wiki_page={"published": False}
+    )
+    mock_course.get_quiz.return_value.edit.assert_called_once_with(
+        quiz={"published": False}
+    )
+    mock_course.get_page.return_value.delete.assert_not_called()
+    assert manifest == {}
+
+
+def test_prune_skips_nonprunable_type_and_keeps_entry(
+    mock_course, mocker, tmp_path
+) -> None:
+    root = _prune_repo(tmp_path)
+    manifest = {
+        "course_settings/module_order.toml": {
+            "canvas_type": "module_order",
+            "canvas_id": 0,
+        },
+    }
+    mocker.patch("github_to_canvas.manifest.load", return_value=manifest)
+    mocker.patch("github_to_canvas.manifest.flush")
+
+    had_errors = run_prune(_config(), root, "delete")
+
+    assert had_errors is False
+    # No Canvas object exists for bookkeeping types; nothing is fetched or deleted.
+    mock_course.get_page.assert_not_called()
+    # The entry is preserved (skip + warn).
+    assert "course_settings/module_order.toml" in manifest
+
+
+def test_prune_question_bank_skipped_under_unpublish(
+    mock_course, mocker, tmp_path
+) -> None:
+    root = _prune_repo(tmp_path)
+    manifest = {
+        "question_banks/qb/qb.toml": {
+            "canvas_type": "question_bank",
+            "canvas_id": 88,
+        },
+    }
+    mocker.patch("github_to_canvas.manifest.load", return_value=manifest)
+    mocker.patch("github_to_canvas.manifest.flush")
+
+    had_errors = run_prune(_config(), root, "unpublish")
+
+    assert had_errors is False
+    # Question banks have no unpublish concept: skipped, entry kept.
+    assert "question_banks/qb/qb.toml" in manifest
+
+
+def test_prune_no_orphans_is_noop(mock_course, mocker, tmp_path) -> None:
+    root = _prune_repo(tmp_path)
+    manifest = {
+        "pages/kept.md": {"canvas_type": "page", "canvas_id": 33, "canvas_url": "kept"},
+    }
+    mocker.patch("github_to_canvas.manifest.load", return_value=manifest)
+    flush = mocker.patch("github_to_canvas.manifest.flush")
+
+    had_errors = run_prune(_config(), root, "delete")
+
+    assert had_errors is False
+    mock_course.get_page.assert_not_called()
+    flush.assert_not_called()
+    assert "pages/kept.md" in manifest
+
+
+def test_prune_reports_errors_but_continues(mock_course, mocker, tmp_path) -> None:
+    root = _prune_repo(tmp_path)
+    manifest = {
+        "pages/bad.md": {"canvas_type": "page", "canvas_id": 11, "canvas_url": "bad"},
+        "assignments/gone.md": {"canvas_type": "assignment", "canvas_id": 22},
+    }
+    mocker.patch("github_to_canvas.manifest.load", return_value=manifest)
+    mocker.patch("github_to_canvas.manifest.flush")
+    mock_course.get_page.side_effect = RuntimeError("404 not found")
+
+    had_errors = run_prune(_config(), root, "delete")
+
+    assert had_errors is True
+    # The failed entry is kept; the healthy one is still pruned.
+    assert "pages/bad.md" in manifest
+    assert "assignments/gone.md" not in manifest
+    mock_course.get_assignment.return_value.delete.assert_called_once()

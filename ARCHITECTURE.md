@@ -156,6 +156,51 @@ Paths passed to `-t` and `-s` are resolved as follows:
 
 Paths that resolve outside the repo root print a warning and are skipped.
 
+## `prune` Subcommand
+
+```text
+Usage: github-to-canvas prune [OPTIONS] REPO
+
+  --delete       Delete the orphaned items from Canvas.
+  --unpublish    Unpublish (set published=False) the orphaned items on Canvas.
+  --config PATH  Path to canvas.toml (default: <repo>/canvas.toml)
+```
+
+Removes Canvas items whose local source file no longer exists. Because the
+manifest is the only record of what the tool created, an entry is treated as an
+**orphan** when `REPO / <local_key>` is gone from disk — which covers both
+deleting a file and renaming one (a rename leaves the old path orphaned while the
+new path syncs as a fresh item, per the path-keyed manifest).
+
+Exactly one of `--delete` or `--unpublish` is required; there is no default, so
+the destructive intent is always explicit. Changes are applied immediately (no
+preview or confirmation prompt). Pandoc is **not** required for this subcommand.
+
+### How it works
+
+1. Load the manifest and compute the orphan set: every entry whose local file is missing.
+2. For each orphan, dispatch by `canvas_type`:
+   - `--delete`: fetch the object and call `.delete()`, then drop the manifest key.
+   - `--unpublish`: set `published=False` on the object, then drop the manifest key.
+   - The Canvas object is addressed by URL slug (`canvas_url`) for pages and by `canvas_id` for everything else — the same identifier rule used by the timestamp check.
+3. Flush the manifest after each successful prune, so an interrupted run leaves a consistent file.
+4. Print a `N deleted/unpublished, M skipped, K errors` summary.
+
+A failure on one item is caught, reported as a warning, and does **not** abort the
+run — that entry keeps its manifest key so it can be retried.
+
+### Type support
+
+| `canvas_type` | `--delete` | `--unpublish` |
+| --- | --- | --- |
+| `page`, `assignment`, `discussion`, `quiz`, `module` | ✅ deleted | ✅ unpublished |
+| `file` | ✅ deleted | ⏭️ skipped (Canvas files use a hidden/locked state, not a `published` boolean) |
+| `question_bank` | ⏭️ skipped (no reliable delete via `canvasapi`) | ⏭️ skipped (no unpublish concept) |
+| `syllabus`, `course_settings`, `module_order` | ⏭️ skipped (bookkeeping / course fields, no standalone object) | ⏭️ skipped |
+
+Skipped orphans print a warning and **retain** their manifest entry (nothing is
+changed on Canvas), so they can be cleaned up manually if needed.
+
 ## `import` Subcommand
 
 Converts an exported Canvas course (`.imscc` file) into a local Markdown repo ready for use with this tool.

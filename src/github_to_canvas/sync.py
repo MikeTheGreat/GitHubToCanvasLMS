@@ -400,6 +400,65 @@ def run_sync(
     return bool(errors)
 
 
+def run_prune(config: Config, repo_path: Path, mode: str) -> bool:
+    """Delete or unpublish Canvas items whose local source file no longer exists.
+
+    An entry is orphaned when its local file (repo_path / local_key) is gone — which
+    happens on both delete and rename. `mode` is "delete" or "unpublish".
+
+    Types with no standalone deletable/unpublishable Canvas object (and question
+    banks, which have no unpublish concept) are skipped with a warning and keep
+    their manifest entry. Returns True if any errors occurred.
+    """
+    past = "deleted" if mode == "delete" else "unpublished"
+    action = capi.delete_content if mode == "delete" else capi.unpublish_content
+    supported_types = (
+        capi.DELETABLE_TYPES if mode == "delete" else capi.UNPUBLISHABLE_TYPES
+    )
+
+    manifest_path = repo_path / ".canvas-manifest.toml"
+    manifest = manifest_lib.load(manifest_path)
+    course = capi.get_course(config)
+
+    orphans = [
+        (key, entry)
+        for key, entry in manifest.items()
+        if not (repo_path / key).exists()
+    ]
+    if not orphans:
+        print("No orphaned manifest entries found; nothing to prune.")
+        return False
+
+    pruned: list[str] = []
+    skipped: list[str] = []
+    errors: list[str] = []
+
+    for key, entry in orphans:
+        canvas_type = entry.get("canvas_type", "")
+        if canvas_type not in supported_types:
+            print(f"  Skipping (cannot {mode} type '{canvas_type}'): {key}")
+            skipped.append(key)
+            continue
+        try:
+            action(course, canvas_type, entry)
+        except Exception as exc:
+            msg = f"failed to {mode} {key}: {exc}"
+            print(f"  WARNING: {msg}")
+            errors.append(msg)
+            continue
+        print(f"  {past.capitalize()} on Canvas: {key}")
+        del manifest[key]
+        manifest_lib.flush(manifest_path, manifest)
+        pruned.append(key)
+
+    print(
+        f"\nPrune complete: {len(pruned)} {past}, "
+        f"{len(skipped)} skipped, {len(errors)} errors."
+    )
+    _print_errors_summary(errors)
+    return bool(errors)
+
+
 def _walk_assets(
     course,
     dir_path: Path,

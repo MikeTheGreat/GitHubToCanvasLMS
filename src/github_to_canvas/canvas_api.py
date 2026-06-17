@@ -181,12 +181,86 @@ def get_canvas_updated_at(course, canvas_type: str, identifier) -> datetime | No
         return None
 
 
+# Manifest types prune can act on. Other types (syllabus, course_settings,
+# module_order, question_bank) have no standalone deletable/unpublishable object.
+DELETABLE_TYPES = frozenset(
+    {"page", "assignment", "discussion", "quiz", "module", "file"}
+)
+UNPUBLISHABLE_TYPES = frozenset(
+    {"page", "assignment", "discussion", "quiz", "module"}
+)
+
+
+def _get_object(course, canvas_type: str, entry: dict[str, Any]):
+    """Fetch the canvasapi object for a manifest entry, or None if unsupported.
+
+    Pages are addressed by URL slug (canvas_url); everything else by canvas_id.
+    """
+    if canvas_type == "page":
+        return course.get_page(entry["canvas_url"])
+    if canvas_type == "assignment":
+        return course.get_assignment(entry["canvas_id"])
+    if canvas_type == "discussion":
+        return course.get_discussion_topic(entry["canvas_id"])
+    if canvas_type == "quiz":
+        return course.get_quiz(entry["canvas_id"])
+    if canvas_type == "module":
+        return course.get_module(entry["canvas_id"])
+    if canvas_type == "file":
+        return course.get_file(entry["canvas_id"])
+    return None
+
+
+def delete_content(course, canvas_type: str, entry: dict[str, Any]) -> bool:
+    """Delete the Canvas object for an orphaned manifest entry.
+
+    Returns True if a delete was issued, False if the type is not deletable.
+    """
+    if canvas_type not in DELETABLE_TYPES:
+        return False
+    obj = _get_object(course, canvas_type, entry)
+    if obj is None:
+        return False
+    obj.delete()
+    return True
+
+
+def unpublish_content(course, canvas_type: str, entry: dict[str, Any]) -> bool:
+    """Set published=False on the Canvas object for an orphaned manifest entry.
+
+    Returns True if an unpublish was issued, False if the type cannot be unpublished.
+    """
+    if canvas_type not in UNPUBLISHABLE_TYPES:
+        return False
+    if canvas_type == "page":
+        course.get_page(entry["canvas_url"]).edit(wiki_page={"published": False})
+    elif canvas_type == "assignment":
+        course.get_assignment(entry["canvas_id"]).edit(assignment={"published": False})
+    elif canvas_type == "discussion":
+        course.get_discussion_topic(entry["canvas_id"]).update(published=False)
+    elif canvas_type == "quiz":
+        course.get_quiz(entry["canvas_id"]).edit(quiz={"published": False})
+    elif canvas_type == "module":
+        course.get_module(entry["canvas_id"]).edit(module={"published": False})
+    return True
+
+
 def upload_asset(course, local_path: Path, assets_root: Path) -> dict[str, Any]:
-    """Upload a file to Canvas Files. Returns manifest entry."""
+    """Upload a file to Canvas Files. Returns manifest entry.
+
+    Passes on_duplicate="overwrite" so that re-uploading a changed asset replaces
+    the existing file in-place, preserving its Canvas file ID and URL. Without this,
+    Canvas renames the new upload (e.g. image-1.png), leaving every page/assignment
+    that already links to the old file pointing at stale content.
+    """
     rel = local_path.relative_to(assets_root)
     parent = rel.parent
     canvas_folder = "course files" if parent == Path(".") else f"course files/{parent}"
-    _success, response = course.upload(str(local_path), parent_folder_path=canvas_folder)
+    _success, response = course.upload(
+        str(local_path),
+        parent_folder_path=canvas_folder,
+        on_duplicate="overwrite",
+    )
     return {
         "canvas_type": "file",
         "canvas_id": response["id"],
@@ -414,7 +488,26 @@ def sync_rubrics(course, rubrics: list[dict[str, Any]]) -> None:
 # ---------------------------------------------------------------------------
 
 def sync_question_bank(course, bank_title: str, questions: list[dict[str, Any]]) -> int:
-    """Create a question bank and populate it. Returns the Canvas bank ID."""
+    """Create a question bank and populate it. Returns the Canvas bank ID.
+
+    KNOWN LIMITATION — re-syncing creates a duplicate bank instead of updating the
+    existing one, and orphans the old bank on Canvas. This cannot currently be fixed
+    cleanly because:
+      * canvasapi (3.6.0) exposes no question-bank methods at all; the
+        course.create_question_bank() / bank.create_assessment_question() calls below
+        are not part of the library and will AttributeError against a real Canvas
+        (the unit tests only pass because the course object is a MagicMock).
+      * The documented Canvas REST API for Assessment Question Banks is GET-only
+        (list banks / get bank / list questions) — there is no public POST/PUT/DELETE
+        for banks or for the assessment questions inside them. GraphQL doesn't cover
+        them either. See /doc/api/assessment_question_banks.html.
+      * The only write path is the undocumented UI controller routes
+        (POST/PUT/DELETE /courses/:id/question_banks...), which are unstable across
+        Canvas versions and may not honor bearer-token auth.
+    To support update/delete-then-recreate (mirroring the other content types) we would
+    need those undocumented routes to work on the target instance; revisit if/when that
+    is verified. Verified against canvasapi 3.6.0 and Canvas API docs, 2026-06.
+    """
     bank = course.create_question_bank(
         assessment_question_bank={"name": bank_title}
     )

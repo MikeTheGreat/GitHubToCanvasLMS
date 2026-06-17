@@ -40,6 +40,8 @@ def canvas_content_url(entry: dict[str, Any], course_id: int) -> str:
         return f"/courses/{course_id}/discussion_topics/{entry['canvas_id']}"
     if t == "quiz":
         return f"/courses/{course_id}/quizzes/{entry['canvas_id']}"
+    if t == "module":
+        return f"/courses/{course_id}/modules#module_{entry['canvas_id']}"
     raise ValueError(f"Unknown canvas_type: {t!r}")
 
 

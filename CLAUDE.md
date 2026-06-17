@@ -1,3 +1,10 @@
+# Quick warning about the user
+The user is working on several different projects that all relate to Canavs LMS and/or teaching,
+and will sometimes mistakenly prompt you for something that's really about one of the other projects.
+If you think the user is doing any of the following please stop an confirm with the user before doing any work:
+* User asks you to do work on something that's in a different project / directory
+* User asks you about a feature that doesn't exist in this project
+
 # GitHubToCanvasLMS
 
 A tool for managing Canvas LMS course content through Markdown files stored in a GitHub repository. The workflow converts Markdown (and supporting assets) into HTML fragments and uploads them to a Canvas LMS instance via the Canvas API.

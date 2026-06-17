@@ -28,6 +28,7 @@ Write your course content as Markdown files in a Git repository. Run this tool t
     - [`-t` — recursive (BFS)](#-t--recursive-bfs)
     - [`-s` — single target (no traversal)](#-s--single-target-no-traversal)
     - [Combining `-t` and `-s`](#combining--t-and--s)
+  - [Removing content (`prune`)](#removing-content-prune)
   - [Content file format](#content-file-format)
     - [`course_settings.toml`](#course_settingstoml)
     - [Syllabus (`course_settings/syllabus.md`)](#syllabus-course_settingssyllabusmd)
@@ -338,6 +339,49 @@ github-to-canvas update . \
   -t modules/week-3.md \
   -s pages/office-hours.md
 ```
+
+---
+
+## Removing content (`prune`)
+
+`update` never deletes anything from Canvas — if you delete or rename a Markdown
+file locally, the item it created stays in Canvas and a stale entry remains in the
+manifest. Use `prune` to clean those up.
+
+```text
+Usage: github-to-canvas prune [OPTIONS] REPO
+
+  Delete or unpublish Canvas items whose local source file no longer exists.
+
+Options:
+  --config PATH   Path to canvas.toml  [default: <repo>/canvas.toml]
+  --delete        Delete the orphaned items from Canvas
+  --unpublish     Unpublish (set published=False) the orphaned items on Canvas
+  --help          Show this message and exit.
+```
+
+`prune` looks for **orphans** — manifest entries whose local file is gone — which
+covers both deleting a file and renaming one (the old path is orphaned; the new
+name syncs as a fresh item on the next `update`).
+
+You must pass exactly one of `--delete` or `--unpublish`; there is no default, so
+the destructive action is always explicit. Changes are applied **immediately** —
+there is no preview or confirmation prompt — so commit your manifest first if you
+want an easy way to undo.
+
+```bash
+# Delete every orphaned item from Canvas
+github-to-canvas prune ./my-course --delete
+
+# ...or hide them instead of deleting (where the type supports it)
+github-to-canvas prune ./my-course --unpublish
+```
+
+Pages, assignments, discussions, quizzes, and modules can be either deleted or
+unpublished. Files can only be deleted (Canvas files have no published flag).
+Question banks and course-level bookkeeping entries (syllabus, course settings,
+module order) are skipped with a warning and keep their manifest entry. A failure
+on one item is reported but does not stop the rest of the run.
 
 ---
 

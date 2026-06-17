@@ -114,10 +114,47 @@ with the same name is created in Canvas**, leaving the old one behind.
 Note also that `_sync_question_banks`'s `needs_sync` check only looks at the bank's
 `.toml` mtime — editing a question `.md` file alone does **not** trigger a re-sync.
 
-Fix options: look up the existing bank via the manifest `canvas_id`, delete it (and
-its questions) before re-creating, or diff questions and update in place. Also
-extend the staleness check to cover the `questions/*.md` files (cf. how
-`_quiz_needs_sync` already does this for quizzes).
+**Why this is hard to fix (investigated 2026-06):** unlike the other content types,
+there is no supported API to update or delete a question bank, so the usual
+"look up `canvas_id` and update in place" pattern cannot be applied.
+
+- **canvasapi (3.6.0) has no question-bank support at all.** `course.create_question_bank()`
+  and `bank.create_assessment_question()` are not methods on the library's `Course`
+  object (verified: `hasattr(Course, "create_question_bank")` → `False`). The current
+  upload path therefore **cannot run against a real Canvas** — it would raise
+  `AttributeError`. The unit tests only pass because the test course is a `MagicMock`
+  that auto-fabricates any attribute, so this is invisible in CI.
+- **The documented Canvas REST API for Assessment Question Banks is read-only.**
+  `/doc/api/assessment_question_banks.html` documents exactly three endpoints, all GET:
+  `GET /api/v1/question_banks`, `GET /api/v1/question_banks/:id`, and
+  `GET /api/v1/question_banks/:id/questions`. There is **no public POST/PUT/DELETE**
+  for banks, nor for the assessment questions inside them. (Confirmed on two official
+  mirrors.)
+- **GraphQL does not cover them either** — Canvas's GraphQL API exposes no
+  assessment-question-bank create/update/delete mutations.
+- **The only write path is undocumented UI controller routes** —
+  `POST/PUT/DELETE /courses/:id/question_banks...` (and `.../questions`), which the Canvas
+  web UI uses. These are unstable across Canvas releases and frequently require
+  session/CSRF auth rather than a bearer token, so they may simply reject the API token
+  on a given instance.
+
+**Fix options, in order of preference:**
+
+1. Verify whether the undocumented UI routes accept bearer-token auth on the target
+   Canvas instance (a small read-only probe first, e.g. `GET /courses/:id/question_banks`).
+   If they do, implement delete-then-recreate via raw `course._requester.request(...)`
+   calls (same pattern already used for `update_late_policy` / `update_post_policy`),
+   looking up the prior bank via the manifest `canvas_id`.
+2. If the write routes are unavailable, treat question-bank upload as create-only and
+   document that re-syncing requires manually deleting the old bank in Canvas first
+   (mirrors the rubric limitation below).
+
+Either way, also extend the staleness check to cover the `questions/*.md` files
+(cf. how `_quiz_needs_sync` already does this for quizzes), so question edits trigger
+a re-sync.
+
+See the matching `KNOWN LIMITATION` note in `canvas_api.sync_question_bank` for the
+same findings at the call site.
 
 ### Rubrics are never updated once created
 
