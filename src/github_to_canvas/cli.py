@@ -1,3 +1,4 @@
+import os
 import sys
 import tomllib
 from pathlib import Path
@@ -55,6 +56,60 @@ def setup_cmd() -> None:
         click.secho("Pandoc installed successfully.", fg="green")
     except Exception as e:
         die(f"Failed to download Pandoc: {e}")
+
+
+def _detect_shell() -> str:
+    shell_path = os.environ.get("SHELL", "")
+    for name in ("zsh", "fish", "bash"):
+        if name in shell_path:
+            return name
+    return "bash"
+
+
+def _completion_path(shell: str, prog_name: str) -> Path:
+    home = Path.home()
+    if shell == "bash":
+        return home / ".local/share/bash-completion/completions" / prog_name
+    if shell == "zsh":
+        return home / ".zfunc" / f"_{prog_name}"
+    if shell == "fish":
+        return home / ".config/fish/completions" / f"{prog_name}.fish"
+    raise ValueError(f"Unsupported shell: {shell}")
+
+
+@main.command(name="install-completion")
+@click.option(
+    "--shell",
+    type=click.Choice(["bash", "zsh", "fish"]),
+    default=None,
+    help="Shell to install completion for (auto-detected from $SHELL if omitted).",
+)
+def install_completion(shell: str | None) -> None:
+    """Install shell tab-completion for github-to-canvas."""
+    from click.shell_completion import BashComplete, FishComplete, ZshComplete
+
+    if shell is None:
+        shell = _detect_shell()
+
+    comp_cls = {"bash": BashComplete, "zsh": ZshComplete, "fish": FishComplete}[shell]
+
+    prog_name = "github-to-canvas"
+    complete_var = "_GITHUB_TO_CANVAS_COMPLETE"
+    comp = comp_cls(cli=main, ctx_args={}, prog_name=prog_name, complete_var=complete_var)
+    script = comp.source()
+
+    dest = _completion_path(shell, prog_name)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_text(script)
+
+    click.secho(f"Completion script installed to {dest}", fg="green")
+    if shell == "zsh":
+        click.echo(
+            "Make sure your .zshrc contains:\n"
+            '  fpath+=~/.zfunc\n'
+            '  autoload -Uz compinit && compinit'
+        )
+    click.echo("Restart your shell (or open a new tab) to activate.")
 
 
 @main.command(name="import", no_args_is_help=True)
