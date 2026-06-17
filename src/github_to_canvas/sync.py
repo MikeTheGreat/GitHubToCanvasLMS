@@ -453,21 +453,18 @@ def run_prune(config: Config, repo_path: Path, mode: str) -> bool:
     """Delete or unpublish Canvas items whose local source file no longer exists.
 
     An entry is orphaned when its local file (repo_path / local_key) is gone — which
-    happens on both delete and rename. `mode` is "delete" or "unpublish".
+    happens on both delete and rename. `mode` is "delete", "unpublish", or "manifest".
 
-    Types with no standalone deletable/unpublishable Canvas object (and question
-    banks, which have no unpublish concept) are skipped with a warning and keep
-    their manifest entry. Returns True if any errors occurred.
+    In "manifest" mode, orphaned entries are simply removed from the local manifest
+    and Canvas is never contacted — an escape hatch for entries left stranded by a
+    manual Canvas cleanup, an unsupported type, or an in-use protection.
+
+    For "delete"/"unpublish", types with no standalone deletable/unpublishable Canvas
+    object (and question banks, which have no unpublish concept) are skipped with a
+    warning and keep their manifest entry. Returns True if any errors occurred.
     """
-    past = "deleted" if mode == "delete" else "unpublished"
-    action = capi.delete_content if mode == "delete" else capi.unpublish_content
-    supported_types = (
-        capi.DELETABLE_TYPES if mode == "delete" else capi.UNPUBLISHABLE_TYPES
-    )
-
     manifest_path = repo_path / ".canvas-manifest.toml"
     manifest = manifest_lib.load(manifest_path)
-    course = capi.get_course(config)
 
     orphans = [
         (key, entry)
@@ -478,6 +475,25 @@ def run_prune(config: Config, repo_path: Path, mode: str) -> bool:
         print("No orphaned manifest entries found; nothing to prune.")
         return False
 
+    if mode == "manifest":
+        for key, _entry in orphans:
+            del manifest[key]
+            print(f"  Removed manifest entry: {key}")
+        manifest_lib.flush(manifest_path, manifest)
+        noun = "entry" if len(orphans) == 1 else "entries"
+        print(
+            f"\nPrune complete: {len(orphans)} manifest {noun} removed "
+            f"(Canvas untouched)."
+        )
+        return False
+
+    past = "deleted" if mode == "delete" else "unpublished"
+    action = capi.delete_content if mode == "delete" else capi.unpublish_content
+    supported_types = (
+        capi.DELETABLE_TYPES if mode == "delete" else capi.UNPUBLISHABLE_TYPES
+    )
+
+    course = capi.get_course(config)
     in_use = _in_use_resources(course)
 
     pruned: list[str] = []
@@ -498,13 +514,16 @@ def run_prune(config: Config, repo_path: Path, mode: str) -> bool:
             skipped.append(key)
             continue
         try:
-            action(course, canvas_type, entry)
+            existed = action(course, canvas_type, entry)
         except Exception as exc:
             msg = f"failed to {mode} {key}: {exc}"
             print(f"  WARNING: {msg}")
             errors.append(msg)
             continue
-        print(f"  {past.capitalize()} on Canvas: {key}")
+        if existed:
+            print(f"  {past.capitalize()} on Canvas: {key}")
+        else:
+            print(f"  Does not exist on Canvas: {key}")
         del manifest[key]
         manifest_lib.flush(manifest_path, manifest)
         pruned.append(key)

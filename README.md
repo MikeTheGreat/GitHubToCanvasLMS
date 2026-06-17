@@ -354,20 +354,22 @@ Usage: github-to-canvas prune [OPTIONS] REPO
   Delete or unpublish Canvas items whose local source file no longer exists.
 
 Options:
-  --config PATH   Path to canvas.toml  [default: <repo>/canvas.toml]
-  --delete        Delete the orphaned items from Canvas
-  --unpublish     Unpublish (set published=False) the orphaned items on Canvas
-  --help          Show this message and exit.
+  --config PATH    Path to canvas.toml  [default: <repo>/canvas.toml]
+  --delete         Delete the orphaned items from Canvas
+  --unpublish      Unpublish (set published=False) the orphaned items on Canvas
+  --manifest-only  Remove orphaned entries from the local manifest only; never
+                   touch Canvas
+  --help           Show this message and exit.
 ```
 
 `prune` looks for **orphans** — manifest entries whose local file is gone — which
 covers both deleting a file and renaming one (the old path is orphaned; the new
 name syncs as a fresh item on the next `update`).
 
-You must pass exactly one of `--delete` or `--unpublish`; there is no default, so
-the destructive action is always explicit. Changes are applied **immediately** —
-there is no preview or confirmation prompt — so commit your manifest first if you
-want an easy way to undo.
+You must pass exactly one of `--delete`, `--unpublish`, or `--manifest-only`;
+there is no default, so the intent is always explicit. Changes are applied
+**immediately** — there is no preview or confirmation prompt — so commit your
+manifest first if you want an easy way to undo.
 
 ```bash
 # Delete every orphaned item from Canvas
@@ -375,6 +377,9 @@ github-to-canvas prune ./my-course --delete
 
 # ...or hide them instead of deleting (where the type supports it)
 github-to-canvas prune ./my-course --unpublish
+
+# ...or just clear stale manifest entries without touching Canvas
+github-to-canvas prune ./my-course --manifest-only
 ```
 
 Pages, assignments, discussions, quizzes, and modules can be either deleted or
@@ -382,6 +387,17 @@ unpublished. Files can only be deleted (Canvas files have no published flag).
 Question banks and course-level bookkeeping entries (syllabus, course settings,
 module order) are skipped with a warning and keep their manifest entry. A failure
 on one item is reported but does not stop the rest of the run.
+
+If a `--delete`/`--unpublish` orphan is **already gone** on Canvas (you deleted it
+by hand, or a previous run did), that's treated as success and its stale manifest
+entry is dropped — so a half-finished cleanup won't keep failing on the same item.
+
+`--manifest-only` is a local-only escape hatch: it drops every orphaned manifest
+entry **without contacting Canvas at all** (no API token or course connection
+needed). Use it to clear entries the other modes leave behind — items you already
+removed from Canvas manually, unsupported types, or in-use protected resources. It
+ignores the in-use protection and type rules above because it never changes
+anything on Canvas; it only forgets the local bookkeeping.
 
 ---
 

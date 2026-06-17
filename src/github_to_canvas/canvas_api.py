@@ -214,34 +214,50 @@ def _get_object(course, canvas_type: str, entry: dict[str, Any]):
 def delete_content(course, canvas_type: str, entry: dict[str, Any]) -> bool:
     """Delete the Canvas object for an orphaned manifest entry.
 
-    Returns True if a delete was issued, False if the type is not deletable.
+    Returns True if a delete was actually issued against an existing object, and
+    False if the object was already gone on Canvas (deleted manually or by a prior
+    run). Either way the desired end state — the item absent from Canvas — is
+    reached, so the caller can drop the stale manifest entry; the return value only
+    lets it report which case happened. Callers must pre-filter to DELETABLE_TYPES.
     """
     if canvas_type not in DELETABLE_TYPES:
         return False
-    obj = _get_object(course, canvas_type, entry)
-    if obj is None:
+    try:
+        obj = _get_object(course, canvas_type, entry)
+        if obj is None:
+            return False
+        obj.delete()
+    except ResourceDoesNotExist:
         return False
-    obj.delete()
     return True
 
 
 def unpublish_content(course, canvas_type: str, entry: dict[str, Any]) -> bool:
     """Set published=False on the Canvas object for an orphaned manifest entry.
 
-    Returns True if an unpublish was issued, False if the type cannot be unpublished.
+    Returns True if an unpublish was actually issued against an existing object, and
+    False if the object was already gone on Canvas (by definition no longer
+    published). Either way the caller can drop the stale manifest entry; the return
+    value only distinguishes the two for reporting. Callers must pre-filter to
+    UNPUBLISHABLE_TYPES.
     """
     if canvas_type not in UNPUBLISHABLE_TYPES:
         return False
-    if canvas_type == "page":
-        course.get_page(entry["canvas_url"]).edit(wiki_page={"published": False})
-    elif canvas_type == "assignment":
-        course.get_assignment(entry["canvas_id"]).edit(assignment={"published": False})
-    elif canvas_type == "discussion":
-        course.get_discussion_topic(entry["canvas_id"]).update(published=False)
-    elif canvas_type == "quiz":
-        course.get_quiz(entry["canvas_id"]).edit(quiz={"published": False})
-    elif canvas_type == "module":
-        course.get_module(entry["canvas_id"]).edit(module={"published": False})
+    try:
+        if canvas_type == "page":
+            course.get_page(entry["canvas_url"]).edit(wiki_page={"published": False})
+        elif canvas_type == "assignment":
+            course.get_assignment(entry["canvas_id"]).edit(
+                assignment={"published": False}
+            )
+        elif canvas_type == "discussion":
+            course.get_discussion_topic(entry["canvas_id"]).update(published=False)
+        elif canvas_type == "quiz":
+            course.get_quiz(entry["canvas_id"]).edit(quiz={"published": False})
+        elif canvas_type == "module":
+            course.get_module(entry["canvas_id"]).edit(module={"published": False})
+    except ResourceDoesNotExist:
+        return False
     return True
 
 

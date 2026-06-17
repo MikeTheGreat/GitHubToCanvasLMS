@@ -8,6 +8,7 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock, call
 
 import pytest
+from canvasapi.exceptions import ResourceDoesNotExist
 
 from github_to_canvas.config import Config
 from github_to_canvas.sync import (
@@ -1789,3 +1790,99 @@ def test_prune_unpublish_keeps_front_page(mock_course, mocker, tmp_path) -> None
     # In-use pages are never unpublished either.
     assert "pages/home.md" in manifest
     mock_course.get_page.return_value.edit.assert_not_called()
+
+
+def test_prune_delete_treats_already_gone_as_success(
+    mock_course, mocker, tmp_path, capsys
+) -> None:
+    root = _prune_repo(tmp_path)
+    manifest = {
+        "pages/gone.md": {"canvas_type": "page", "canvas_id": 11, "canvas_url": "gone"},
+    }
+    mocker.patch("github_to_canvas.manifest.load", return_value=manifest)
+    mocker.patch("github_to_canvas.manifest.flush")
+    _set_syllabus_body(mock_course, "")
+    # The Canvas item was already deleted (manually or by a prior run).
+    mock_course.get_page.return_value.delete.side_effect = ResourceDoesNotExist(
+        "404 not found"
+    )
+
+    had_errors = run_prune(_config(), root, "delete")
+
+    # Desired end state already reached: no error, stale entry dropped.
+    assert had_errors is False
+    assert "pages/gone.md" not in manifest
+    # ...and the message reflects that it was already gone, not freshly deleted.
+    out = capsys.readouterr().out
+    assert "Does not exist on Canvas: pages/gone.md" in out
+    assert "Deleted on Canvas: pages/gone.md" not in out
+
+
+def test_prune_unpublish_treats_already_gone_as_success(
+    mock_course, mocker, tmp_path, capsys
+) -> None:
+    root = _prune_repo(tmp_path)
+    manifest = {
+        "pages/gone.md": {"canvas_type": "page", "canvas_id": 11, "canvas_url": "gone"},
+    }
+    mocker.patch("github_to_canvas.manifest.load", return_value=manifest)
+    mocker.patch("github_to_canvas.manifest.flush")
+    _set_syllabus_body(mock_course, "")
+    mock_course.get_page.side_effect = ResourceDoesNotExist("404 not found")
+
+    had_errors = run_prune(_config(), root, "unpublish")
+
+    assert had_errors is False
+    assert "pages/gone.md" not in manifest
+    out = capsys.readouterr().out
+    assert "Does not exist on Canvas: pages/gone.md" in out
+
+
+def test_prune_manifest_only_drops_orphans_without_touching_canvas(
+    mock_course, mocker, tmp_path
+) -> None:
+    root = _prune_repo(tmp_path)
+    manifest = {
+        # A normally-deletable orphan whose Canvas item is already gone...
+        "pages/gone.md": {"canvas_type": "page", "canvas_id": 11, "canvas_url": "gone"},
+        # ...an unsupported (otherwise un-prunable) type...
+        "course_settings/module_order.toml": {
+            "canvas_type": "module_order",
+            "canvas_id": 0,
+        },
+        # ...and a present file that must be preserved.
+        "pages/kept.md": {"canvas_type": "page", "canvas_id": 33, "canvas_url": "kept"},
+    }
+    mocker.patch("github_to_canvas.manifest.load", return_value=manifest)
+    flush = mocker.patch("github_to_canvas.manifest.flush")
+
+    had_errors = run_prune(_config(), root, "manifest")
+
+    assert had_errors is False
+    # Every orphan is dropped regardless of type or in-use status...
+    assert "pages/gone.md" not in manifest
+    assert "course_settings/module_order.toml" not in manifest
+    # ...the present file is kept...
+    assert "pages/kept.md" in manifest
+    flush.assert_called_once()
+    # ...and Canvas is never contacted.
+    mock_course.get_page.assert_not_called()
+    mock_course.get_assignment.assert_not_called()
+    mock_course._requester.request.assert_not_called()
+
+
+def test_prune_manifest_only_no_orphans_is_noop(
+    mock_course, mocker, tmp_path
+) -> None:
+    root = _prune_repo(tmp_path)
+    manifest = {
+        "pages/kept.md": {"canvas_type": "page", "canvas_id": 33, "canvas_url": "kept"},
+    }
+    mocker.patch("github_to_canvas.manifest.load", return_value=manifest)
+    flush = mocker.patch("github_to_canvas.manifest.flush")
+
+    had_errors = run_prune(_config(), root, "manifest")
+
+    assert had_errors is False
+    flush.assert_not_called()
+    assert "pages/kept.md" in manifest

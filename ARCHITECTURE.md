@@ -161,9 +161,11 @@ Paths that resolve outside the repo root print a warning and are skipped.
 ```text
 Usage: github-to-canvas prune [OPTIONS] REPO
 
-  --delete       Delete the orphaned items from Canvas.
-  --unpublish    Unpublish (set published=False) the orphaned items on Canvas.
-  --config PATH  Path to canvas.toml (default: <repo>/canvas.toml)
+  --delete         Delete the orphaned items from Canvas.
+  --unpublish      Unpublish (set published=False) the orphaned items on Canvas.
+  --manifest-only  Remove orphaned entries from the local manifest only; never
+                   touch Canvas.
+  --config PATH    Path to canvas.toml (default: <repo>/canvas.toml)
 ```
 
 Removes Canvas items whose local source file no longer exists. Because the
@@ -172,9 +174,22 @@ manifest is the only record of what the tool created, an entry is treated as an
 deleting a file and renaming one (a rename leaves the old path orphaned while the
 new path syncs as a fresh item, per the path-keyed manifest).
 
-Exactly one of `--delete` or `--unpublish` is required; there is no default, so
-the destructive intent is always explicit. Changes are applied immediately (no
-preview or confirmation prompt). Pandoc is **not** required for this subcommand.
+Exactly one of `--delete`, `--unpublish`, or `--manifest-only` is required; there
+is no default, so the intent is always explicit. Changes are applied immediately
+(no preview or confirmation prompt). Pandoc is **not** required for this
+subcommand.
+
+`--manifest-only` is a local escape hatch: it drops every orphaned manifest entry
+without contacting Canvas at all (no API token or course connection needed). Use
+it to clear entries that the Canvas-touching modes leave stranded — items already
+deleted on Canvas by hand, unsupported `canvas_type`s, or in-use protected
+resources. It ignores the in-use protection and type-support rules below because
+it never changes anything on Canvas; it only forgets the local bookkeeping.
+
+When the Canvas object for a `--delete`/`--unpublish` orphan is **already gone**
+(deleted manually or by an earlier run), Canvas returns a not-found error. The
+desired end state is already reached, so this is treated as success and the stale
+manifest entry is dropped rather than failing on every subsequent run.
 
 ### How it works
 

@@ -136,15 +136,22 @@ def publish(
     flag_value="unpublish",
     help="Unpublish (set published=False) the orphaned items on Canvas.",
 )
+@click.option(
+    "--manifest-only",
+    "mode",
+    flag_value="manifest",
+    help="Remove orphaned entries from the local manifest only; never touch Canvas.",
+)
 def prune(repo: Path, config: Path | None, mode: str | None) -> None:
     """Delete or unpublish Canvas items whose local source file no longer exists.
 
     REPO is the course content repo. An item is pruned when its manifest entry's
-    local file is gone (deleted or renamed). Exactly one of --delete / --unpublish
-    is required. Changes are applied immediately.
+    local file is gone (deleted or renamed). Exactly one of --delete / --unpublish /
+    --manifest-only is required. --manifest-only just drops the stale manifest
+    entries without contacting Canvas; the others apply changes immediately.
     """
     if mode is None:
-        die("Exactly one of --delete or --unpublish is required.")
+        die("Exactly one of --delete, --unpublish, or --manifest-only is required.")
     if config is None:
         config = repo / "canvas.toml"
     try:
@@ -153,8 +160,9 @@ def prune(repo: Path, config: Path | None, mode: str | None) -> None:
         click.echo(f"Repo:      {repo.resolve()}")
         click.echo(f"Course ID: {cfg.course_id}  ({cfg.base_url})")
 
-        course = get_course(cfg)
-        click.echo(f"Course:    {course.name}")
+        if mode != "manifest":
+            course = get_course(cfg)
+            click.echo(f"Course:    {course.name}")
 
         had_errors = run_prune(cfg, repo, mode)
 
