@@ -4,6 +4,7 @@ from __future__ import annotations
 import os
 import shutil
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import MagicMock, call
 
 import pytest
@@ -1720,3 +1721,71 @@ def test_prune_reports_errors_but_continues(mock_course, mocker, tmp_path) -> No
     assert "pages/bad.md" in manifest
     assert "assignments/gone.md" not in manifest
     mock_course.get_assignment.return_value.delete.assert_called_once()
+
+
+def _set_syllabus_body(mock_course, html: str) -> None:
+    """Make course._requester.request(... syllabus_body ...) return the given HTML."""
+    response = MagicMock()
+    response.json.return_value = {"syllabus_body": html}
+    mock_course._requester.request.return_value = response
+
+
+def test_prune_keeps_front_page(mock_course, mocker, tmp_path) -> None:
+    root = _prune_repo(tmp_path)
+    manifest = {
+        "pages/home.md": {"canvas_type": "page", "canvas_id": 11, "canvas_url": "home"},
+        "assignments/gone.md": {"canvas_type": "assignment", "canvas_id": 22},
+    }
+    mocker.patch("github_to_canvas.manifest.load", return_value=manifest)
+    mocker.patch("github_to_canvas.manifest.flush")
+    mock_course.show_front_page.return_value = SimpleNamespace(url="home")
+    _set_syllabus_body(mock_course, "")
+
+    had_errors = run_prune(_config(), root, "delete")
+
+    assert had_errors is False
+    # The front page is kept even though its local file is gone.
+    assert "pages/home.md" in manifest
+    mock_course.get_page.assert_not_called()
+    # Other orphans still pruned.
+    assert "assignments/gone.md" not in manifest
+    mock_course.get_assignment.return_value.delete.assert_called_once()
+
+
+def test_prune_keeps_page_linked_from_syllabus(mock_course, mocker, tmp_path) -> None:
+    root = _prune_repo(tmp_path)
+    manifest = {
+        "pages/syl.md": {"canvas_type": "page", "canvas_id": 11, "canvas_url": "syl-page"},
+    }
+    mocker.patch("github_to_canvas.manifest.load", return_value=manifest)
+    mocker.patch("github_to_canvas.manifest.flush")
+    mock_course.show_front_page.return_value = None
+    _set_syllabus_body(
+        mock_course,
+        '<a href="/courses/123/pages/syl-page">syllabus link</a>',
+    )
+
+    had_errors = run_prune(_config(), root, "delete")
+
+    assert had_errors is False
+    # A page referenced from the syllabus body is kept.
+    assert "pages/syl.md" in manifest
+    mock_course.get_page.return_value.delete.assert_not_called()
+
+
+def test_prune_unpublish_keeps_front_page(mock_course, mocker, tmp_path) -> None:
+    root = _prune_repo(tmp_path)
+    manifest = {
+        "pages/home.md": {"canvas_type": "page", "canvas_id": 11, "canvas_url": "home"},
+    }
+    mocker.patch("github_to_canvas.manifest.load", return_value=manifest)
+    mocker.patch("github_to_canvas.manifest.flush")
+    mock_course.show_front_page.return_value = SimpleNamespace(url="home")
+    _set_syllabus_body(mock_course, "")
+
+    had_errors = run_prune(_config(), root, "unpublish")
+
+    assert had_errors is False
+    # In-use pages are never unpublished either.
+    assert "pages/home.md" in manifest
+    mock_course.get_page.return_value.edit.assert_not_called()

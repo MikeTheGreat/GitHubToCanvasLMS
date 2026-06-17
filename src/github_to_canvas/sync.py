@@ -15,6 +15,7 @@ from . import manifest as manifest_lib
 from .config import Config
 from .convert import markdown_to_html, preprocess_snippets
 from .link_rewrite import extract_local_refs, infer_canvas_type, rewrite_links
+from .orphans import ResourceKey, extract_canvas_refs
 from .quiz import parse_question_file, parse_quiz_file
 
 
@@ -400,6 +401,54 @@ def run_sync(
     return bool(errors)
 
 
+def _entry_resource_key(canvas_type: str, entry: dict[str, Any]) -> ResourceKey | None:
+    """Map a manifest entry to the ResourceKey used for in-use detection.
+
+    Pages are keyed by URL slug; everything else by integer Canvas id. Returns
+    None for entries with no addressable Canvas object (or missing fields).
+    """
+    if canvas_type == "page":
+        url = entry.get("canvas_url")
+        return ResourceKey("page", url) if url else None
+    if canvas_type in ("assignment", "discussion", "quiz", "file", "module"):
+        cid = entry.get("canvas_id")
+        return ResourceKey(canvas_type, int(cid)) if cid is not None else None
+    return None
+
+
+def _in_use_resources(course) -> dict[ResourceKey, str]:
+    """Resources Canvas is actively using outside of modules, mapped to a reason.
+
+    Covers the course front page and anything linked from the syllabus body.
+    Prune must not delete/unpublish these even when their local source file is
+    gone. Front page wins over syllabus when a page is both.
+    """
+    in_use: dict[ResourceKey, str] = {}
+
+    # Syllabus first so the front page reason takes precedence on overlap.
+    try:
+        response = course._requester.request(
+            "GET",
+            f"courses/{course.id}",
+            _kwargs=[("include[]", "syllabus_body")],
+        )
+        syllabus_body = response.json().get("syllabus_body", "") or ""
+        for ref in extract_canvas_refs(syllabus_body):
+            in_use[ref] = "syllabus"
+    except Exception:
+        pass
+
+    try:
+        front_page = course.show_front_page()
+        url = getattr(front_page, "url", None) if front_page else None
+        if isinstance(url, str) and url:
+            in_use[ResourceKey("page", url)] = "front page"
+    except Exception:
+        pass
+
+    return in_use
+
+
 def run_prune(config: Config, repo_path: Path, mode: str) -> bool:
     """Delete or unpublish Canvas items whose local source file no longer exists.
 
@@ -429,12 +478,21 @@ def run_prune(config: Config, repo_path: Path, mode: str) -> bool:
         print("No orphaned manifest entries found; nothing to prune.")
         return False
 
+    in_use = _in_use_resources(course)
+
     pruned: list[str] = []
     skipped: list[str] = []
+    protected: list[str] = []
     errors: list[str] = []
 
     for key, entry in orphans:
         canvas_type = entry.get("canvas_type", "")
+        resource_key = _entry_resource_key(canvas_type, entry)
+        reason = in_use.get(resource_key) if resource_key is not None else None
+        if reason is not None:
+            print(f"  Skipping (in use as {reason}): {key}")
+            protected.append(key)
+            continue
         if canvas_type not in supported_types:
             print(f"  Skipping (cannot {mode} type '{canvas_type}'): {key}")
             skipped.append(key)
@@ -453,6 +511,7 @@ def run_prune(config: Config, repo_path: Path, mode: str) -> bool:
 
     print(
         f"\nPrune complete: {len(pruned)} {past}, "
+        f"{len(protected)} kept (in use), "
         f"{len(skipped)} skipped, {len(errors)} errors."
     )
     _print_errors_summary(errors)

@@ -179,12 +179,18 @@ preview or confirmation prompt). Pandoc is **not** required for this subcommand.
 ### How it works
 
 1. Load the manifest and compute the orphan set: every entry whose local file is missing.
-2. For each orphan, dispatch by `canvas_type`:
+2. Query Canvas for the resources it is **actively using** outside of modules — the
+   course front page (`course.show_front_page()`) and anything linked from the
+   syllabus body (`syllabus_body` scanned for `/courses/.../pages|assignments|...`
+   references). These are protected: even when their local file is gone, prune
+   keeps them rather than removing content Canvas still relies on.
+3. For each orphan, dispatch by `canvas_type`:
+   - If the item is in use as the front page or syllabus, skip it (kept, manifest entry retained).
    - `--delete`: fetch the object and call `.delete()`, then drop the manifest key.
    - `--unpublish`: set `published=False` on the object, then drop the manifest key.
    - The Canvas object is addressed by URL slug (`canvas_url`) for pages and by `canvas_id` for everything else — the same identifier rule used by the timestamp check.
-3. Flush the manifest after each successful prune, so an interrupted run leaves a consistent file.
-4. Print a `N deleted/unpublished, M skipped, K errors` summary.
+4. Flush the manifest after each successful prune, so an interrupted run leaves a consistent file.
+5. Print a `N deleted/unpublished, P kept (in use), M skipped, K errors` summary.
 
 A failure on one item is caught, reported as a warning, and does **not** abort the
 run — that entry keeps its manifest key so it can be retried.
