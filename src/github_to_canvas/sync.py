@@ -113,6 +113,7 @@ def sync_syllabus(
     course_id: int,
     errors: list[str] | None = None,
     force_uploads: bool = False,
+    verbose: bool = False,
 ) -> None:
     """Upload course_settings/syllabus.md as the Canvas course syllabus body."""
     syllabus_md = repo_path / "course_settings" / "syllabus.md"
@@ -120,7 +121,8 @@ def sync_syllabus(
         return
     local_key = "course_settings/syllabus.md"
     if not manifest_lib.needs_sync(manifest, local_key, syllabus_md, force_uploads):
-        print(f"Skipping (up-to-date): {local_key}")
+        if verbose:
+            print(f"Skipping (up-to-date): {local_key}")
         return
     print("Syncing syllabus...")
     try:
@@ -150,6 +152,7 @@ def sync_course_settings(
     manifest: dict,
     manifest_path: Path,
     force_uploads: bool = False,
+    verbose: bool = False,
 ) -> None:
     """Sync course_settings.toml: metadata, grading standards, assignment groups, policies, rubrics."""
     settings_path = repo_path / "course_settings.toml"
@@ -165,7 +168,8 @@ def sync_course_settings(
         manifest, local_key, rubrics_path, force_uploads
     )
     if not settings_stale and not rubrics_stale:
-        print(f"Skipping (up-to-date): {local_key}")
+        if verbose:
+            print(f"Skipping (up-to-date): {local_key}")
         return
     print("Syncing course settings...")
     with settings_path.open("rb") as fh:
@@ -223,6 +227,7 @@ def run_sync(
     repo_path: Path,
     force_uploads: bool = False,
     force_overwrite: bool = False,
+    verbose: bool = False,
 ) -> bool:
     """Main sync pipeline: assets → content → modules. Returns True if any errors occurred."""
     manifest_path = repo_path / ".canvas-manifest.toml"
@@ -240,7 +245,7 @@ def run_sync(
             _front_page_path = tomllib.load(_fh).get("front_page")
 
     # 0. Course settings (metadata, grading standards, assignment groups, policies, rubrics)
-    sync_course_settings(course, repo_path, manifest, manifest_path, force_uploads)
+    sync_course_settings(course, repo_path, manifest, manifest_path, force_uploads, verbose=verbose)
 
     # Fetch assignment group IDs once so assignments can reference groups by name
     assignment_group_ids = capi.get_assignment_group_ids(course)
@@ -254,6 +259,7 @@ def run_sync(
         config.course_id,
         errors,
         force_uploads,
+        verbose=verbose,
     )
 
     # 1. Assets (depth-first, files before subdirs, alphabetical)
@@ -269,6 +275,7 @@ def run_sync(
             force_uploads,
             force_overwrite,
             newer_on_canvas,
+            verbose=verbose,
         )
 
     # 2. Content folders (alphabetical, excl. assets, modules, quizzes, snippets, course_settings, hidden)
@@ -302,6 +309,7 @@ def run_sync(
                 errors,
                 assignment_group_ids=assignment_group_ids,
                 synced_keys=synced_content_keys,
+                verbose=verbose,
             )
 
     # 2.5. Quizzes (each quiz lives in its own sub-folder)
@@ -323,10 +331,11 @@ def run_sync(
                     newer_on_canvas,
                     errors,
                     synced_keys=synced_content_keys,
+                    verbose=verbose,
                 )
 
     # 2.6. Question banks
-    _sync_question_banks(course, repo_path, manifest, manifest_path, force_uploads)
+    _sync_question_banks(course, repo_path, manifest, manifest_path, force_uploads, verbose=verbose)
 
     # 2.7. Front page (must run after pages are synced so the manifest entry exists)
     if _front_page_path:
@@ -390,6 +399,7 @@ def run_sync(
                 force_overwrite,
                 newer_on_canvas,
                 position=position,
+                verbose=verbose,
             )
             if had_module_warnings:
                 errors.append(f"module {md_file.name}: some items could not be added")
@@ -547,6 +557,7 @@ def _walk_assets(
     force_uploads: bool = False,
     force_overwrite: bool = False,
     newer_on_canvas: list[str] | None = None,
+    verbose: bool = False,
 ) -> None:
     if newer_on_canvas is None:
         newer_on_canvas = []
@@ -585,6 +596,7 @@ def _walk_assets(
                 force_uploads,
                 force_overwrite,
                 newer_on_canvas,
+                verbose=verbose,
             )
 
 
@@ -602,13 +614,15 @@ def _sync_content_file(
     errors: list[str] | None = None,
     assignment_group_ids: dict[str, int] | None = None,
     synced_keys: set[str] | None = None,
+    verbose: bool = False,
 ) -> None:
     if newer_on_canvas is None:
         newer_on_canvas = []
     local_key = md_file.relative_to(repo_root).as_posix()
 
     if not manifest_lib.needs_sync(manifest, local_key, md_file, force_uploads):
-        print(f"Skipping (up-to-date): {local_key}")
+        if verbose:
+            print(f"Skipping (up-to-date): {local_key}")
         return
 
     if not force_overwrite:
@@ -818,13 +832,15 @@ def _sync_module(
     force_overwrite: bool = False,
     newer_on_canvas: list[str] | None = None,
     position: int | None = None,
+    verbose: bool = False,
 ) -> bool:
     if newer_on_canvas is None:
         newer_on_canvas = []
     local_key = md_file.relative_to(repo_root).as_posix()
 
     if not manifest_lib.needs_sync(manifest, local_key, md_file, force_uploads):
-        print(f"Skipping (up-to-date): {local_key}")
+        if verbose:
+            print(f"Skipping (up-to-date): {local_key}")
         return False
 
     if not force_overwrite:
@@ -917,6 +933,7 @@ def _sync_quiz(
     newer_on_canvas: list[str] | None = None,
     errors: list[str] | None = None,
     synced_keys: set[str] | None = None,
+    verbose: bool = False,
 ) -> None:
     if newer_on_canvas is None:
         newer_on_canvas = []
@@ -924,7 +941,8 @@ def _sync_quiz(
     questions_dir = quiz_folder / "questions"
 
     if not _quiz_needs_sync(quiz_md, questions_dir, local_key, manifest, force_uploads):
-        print(f"Skipping (up-to-date): {local_key}")
+        if verbose:
+            print(f"Skipping (up-to-date): {local_key}")
         return
 
     if not force_overwrite:
@@ -1045,6 +1063,7 @@ def _sync_question_banks(
     manifest: manifest_lib.ManifestDict,
     manifest_path: Path,
     force_uploads: bool = False,
+    verbose: bool = False,
 ) -> None:
     """Sync all question banks from question_banks/ to Canvas."""
     banks_dir = repo_root / "question_banks"
@@ -1058,7 +1077,8 @@ def _sync_question_banks(
         if not force_uploads and not manifest_lib.needs_sync(
             manifest, local_key, toml_path, False
         ):
-            print(f"Skipping (up-to-date): {local_key}")
+            if verbose:
+                print(f"Skipping (up-to-date): {local_key}")
             continue
         with toml_path.open("rb") as fh:
             bank_meta = tomllib.load(fh)
@@ -1145,6 +1165,7 @@ def run_targeted_sync(
     single_targets: list[str],
     force_uploads: bool = False,
     force_overwrite: bool = False,
+    verbose: bool = False,
 ) -> bool:
     """Sync only the specified targets. Returns True if any errors occurred.
 
@@ -1187,7 +1208,8 @@ def run_targeted_sync(
                     extra={"canvas_url": canvas_entry["canvas_url"]},
                 )
             else:
-                print(f"Skipping (up-to-date): {local_key}")
+                if verbose:
+                    print(f"Skipping (up-to-date): {local_key}")
         elif folder == "modules":
             had_module_warnings = _sync_module(
                 course,
@@ -1199,6 +1221,7 @@ def run_targeted_sync(
                 force_overwrite,
                 newer_on_canvas,
                 position=_targeted_position_map.get(file_path.name),
+                verbose=verbose,
             )
             if had_module_warnings:
                 errors.append(f"module {file_path.name}: some items could not be added")
@@ -1216,6 +1239,7 @@ def run_targeted_sync(
                 force_overwrite,
                 newer_on_canvas,
                 errors,
+                verbose=verbose,
             )
         else:
             _sync_content_file(
@@ -1230,6 +1254,7 @@ def run_targeted_sync(
                 force_overwrite,
                 newer_on_canvas,
                 errors,
+                verbose=verbose,
             )
 
     def _warn_missing(target: str) -> None:

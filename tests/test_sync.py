@@ -498,7 +498,7 @@ def test_module_not_resynced_when_referenced_content_unchanged(
     mocker.patch("github_to_canvas.manifest.load", return_value=preloaded)
     mocker.patch("github_to_canvas.manifest.flush")
 
-    run_sync(_config(), course_root)
+    run_sync(_config(), course_root, verbose=True)
 
     mock_course.create_module.assert_not_called()
     mock_course.get_module.assert_not_called()
@@ -535,7 +535,7 @@ def test_up_to_date_content_file_is_skipped(mock_course, course_root, mocker, ca
     mock_course.create_module.return_value = module
     module.create_module_item.side_effect = [_mock_item(i) for i in range(201, 210)]
 
-    run_sync(_config(), course_root)
+    run_sync(_config(), course_root, verbose=True)
 
     mock_course.create_assignment.assert_not_called()
     mock_course.get_assignment.assert_not_called()
@@ -714,6 +714,7 @@ def test_single_target_respects_timestamp(mock_course, course_root, mocker, caps
         _config(), course_root,
         recursive_targets=[],
         single_targets=[str(course_root / "assignments" / "week1.md")],
+        verbose=True,
     )
 
     mock_course.create_assignment.assert_not_called()
@@ -897,7 +898,7 @@ def test_quiz_skipped_if_up_to_date(mock_course, mocker, tmp_path, capsys) -> No
     mocker.patch("github_to_canvas.manifest.load", return_value=preloaded)
     mocker.patch("github_to_canvas.manifest.flush")
 
-    run_sync(_config(), root)
+    run_sync(_config(), root, verbose=True)
 
     mock_course.create_quiz.assert_not_called()
     mock_course.get_quiz.assert_not_called()
@@ -1553,7 +1554,7 @@ def test_module_order_up_to_date_skips_resync(
     mocker.patch("github_to_canvas.manifest.load", return_value=preloaded)
     mocker.patch("github_to_canvas.manifest.flush")
 
-    run_sync(_config(), root)
+    run_sync(_config(), root, verbose=True)
 
     mock_course.create_module.assert_not_called()
     mock_course.get_module.assert_not_called()

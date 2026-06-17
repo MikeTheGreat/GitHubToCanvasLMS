@@ -33,7 +33,7 @@ def _ensure_pandoc() -> None:
         die("Pandoc not found. Run `github-to-canvas setup` to install it.")
 
 
-@click.group()
+@click.group(context_settings={"help_option_names": ["-h", "--help"]})
 def main() -> None:
     """Manage Canvas LMS course content from a Markdown GitHub repo."""
 
@@ -328,6 +328,13 @@ def find_orphans_cmd(repo: Path, config: Path | None) -> None:
         "redundant re-uploads. Skips the full course sync."
     ),
 )
+@click.option(
+    "--verbose",
+    "-v",
+    is_flag=True,
+    default=False,
+    help="Print messages for items that are skipped (up-to-date or newer on Canvas).",
+)
 def update(
     repo: Path,
     config: Path | None,
@@ -335,6 +342,7 @@ def update(
     force_overwrite: bool,
     target_recursively: str | None,
     single_target: str | None,
+    verbose: bool,
 ) -> None:
     """Sync a Markdown course repo to Canvas LMS."""
     _ensure_pandoc()
@@ -361,11 +369,13 @@ def update(
                 else []
             )
             had_errors = run_targeted_sync(
-                cfg, repo, recursive_list, single_list, force_uploads, force_overwrite
+                cfg, repo, recursive_list, single_list, force_uploads, force_overwrite,
+                verbose=verbose,
             )
         else:
             had_errors = run_sync(
-                cfg, repo, force_uploads=force_uploads, force_overwrite=force_overwrite
+                cfg, repo, force_uploads=force_uploads, force_overwrite=force_overwrite,
+                verbose=verbose,
             )
 
         if had_errors:

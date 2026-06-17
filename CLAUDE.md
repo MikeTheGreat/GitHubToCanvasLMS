@@ -1,9 +1,15 @@
-# Quick warning about the user
+# User-added info:
+## Be aware that the user may accidentally give you prompts meant for other projects
 The user is working on several different projects that all relate to Canavs LMS and/or teaching,
 and will sometimes mistakenly prompt you for something that's really about one of the other projects.
 If you think the user is doing any of the following please stop an confirm with the user before doing any work:
 * User asks you to do work on something that's in a different project / directory
 * User asks you about a feature that doesn't exist in this project
+
+## Credit yourself as the author
+When the user asks you to create a git commit message please list your 
+contribution as "Authored-By" instead of "Co-Authored-By". Please list
+the user as "Prompted-By", but do not include the user's email (just their name)
 
 # GitHubToCanvasLMS
 
