@@ -18,6 +18,7 @@ from github_to_canvas.imscc_import import (
     _parse_late_policy,
     _parse_manifest_metadata,
     _parse_rubrics,
+    _shift_headings_down,
     _strip_canvas_img_attrs,
     parse_assignment_settings,
     parse_qti_questions,
@@ -1122,3 +1123,51 @@ def test_rewrite_imscc_links_canvas_course_reference_and_course_id_together() ->
     assert "$CANVAS_COURSE_ID$" not in result
     assert "https://school.instructure.com/courses/99/grades" in result
     assert "https://school.instructure.com/courses/99/modules" in result
+
+
+# ---------------------------------------------------------------------------
+# _shift_headings_down
+# ---------------------------------------------------------------------------
+
+
+def test_shift_headings_h1_becomes_h2() -> None:
+    assert _shift_headings_down("# Title\n") == "## Title\n"
+
+
+def test_shift_headings_h2_becomes_h3() -> None:
+    assert _shift_headings_down("## Sub\n") == "### Sub\n"
+
+
+def test_shift_headings_h5_becomes_h6() -> None:
+    assert _shift_headings_down("##### Deep\n") == "###### Deep\n"
+
+
+def test_shift_headings_h6_stays_h6() -> None:
+    assert _shift_headings_down("###### Max\n") == "###### Max\n"
+
+
+def test_shift_headings_h6_prints_warning(capsys: pytest.CaptureFixture) -> None:
+    _shift_headings_down("###### Max\n", "pages/test.md")
+    captured = capsys.readouterr().out
+    assert "WARNING" in captured
+    assert "H6" in captured
+    assert "pages/test.md" in captured
+
+
+def test_shift_headings_multiple_levels() -> None:
+    md = "# H1\n\n## H2\n\n### H3\n\nSome text\n"
+    result = _shift_headings_down(md)
+    assert "## H1" in result
+    assert "### H2" in result
+    assert "#### H3" in result
+
+
+def test_shift_headings_non_heading_hashes_unchanged() -> None:
+    md = "Not a heading: use #channel for Slack\n"
+    assert _shift_headings_down(md) == md
+
+
+def test_shift_headings_preserves_body_text() -> None:
+    md = "# Title\n\nParagraph text here.\n"
+    result = _shift_headings_down(md)
+    assert "Paragraph text here." in result

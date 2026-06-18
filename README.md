@@ -43,6 +43,7 @@ Write your course content as Markdown files in a Git repository. Run this tool t
     - [Snippets](#snippets)
       - [Inline snippets and the `CANVAS_COURSE_REFERENCE` snippet](#inline-snippets-and-the-canvas_course_reference-snippet)
   - [Manifest file](#manifest-file)
+    - [Deleting a file in Canvas](#deleting-a-file-in-canvas)
   - [IMSCC import](#imscc-import)
     - [Verifying the import](#verifying-the-import)
 
@@ -644,10 +645,14 @@ editing_roles: teachers  # who may edit in Canvas: teachers | students
 published: true          # true = visible to students; false = draft (the default)
 ---
 
-# Course Syllabus
+## Course Syllabus
 
 Welcome to the course. See [Week 1 Assignment](../assignments/week1.md).
 ```
+
+**WARNING:**  Make sure that you start your headers at H2.  **DO NOT USE H1 HEADERS!!!**  
+Canvas will translate the H1 headers into styled normal paragraphs so it looks right but
+will not work correctly with screen readers!!
 
 ### Assignment (`assignments/`)
 

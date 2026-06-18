@@ -642,6 +642,18 @@ def _sync_content_file(
         return
     body = preprocess_snippets(body, md_file, snippets_dir)
     html = markdown_to_html(body)
+
+    if re.search(r"<h1[\s>]", html, re.IGNORECASE):
+        msg = (
+            f"ERROR: {local_key}: contains <h1> heading — "
+            f"Canvas silently converts H1 to a styled paragraph; "
+            f"use H2 or deeper instead"
+        )
+        print(f"  {msg}")
+        if errors is not None:
+            errors.append(msg)
+        return
+
     canvas_type = infer_canvas_type(local_key)
 
     def stub_creator(ref_local_path: str, ref_canvas_type: str) -> dict[str, Any]:

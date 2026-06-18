@@ -11,6 +11,8 @@ When the user asks you to create a git commit message please list your
 contribution as "Authored-By" instead of "Co-Authored-By". Please list
 the user as "Prompted-By", but do not include the user's email (just their name)
 
+## 
+
 # GitHubToCanvasLMS
 
 A tool for managing Canvas LMS course content through Markdown files stored in a GitHub repository. The workflow converts Markdown (and supporting assets) into HTML fragments and uploads them to a Canvas LMS instance via the Canvas API.

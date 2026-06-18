@@ -320,6 +320,42 @@ def test_interrupted_sync_skips_completed_asset(mock_course, course_root, mocker
 # ---------------------------------------------------------------------------
 
 
+def test_h1_heading_blocks_upload(
+    mock_course, tmp_path: Path, mocker, capsys: pytest.CaptureFixture
+) -> None:
+    mocker.patch("github_to_canvas.manifest.flush")
+    course_root = tmp_path / "course"
+    (course_root / "pages").mkdir(parents=True)
+    page = course_root / "pages" / "test.md"
+    page.write_text("---\ntitle: Test\npublished: true\n---\n\n# Big Heading\n\nBody.\n")
+    mock_course.create_page.return_value = _mock_page(1, "test")
+
+    had_errors = run_sync(_config(), course_root)
+
+    out = capsys.readouterr().out
+    assert "ERROR" in out
+    assert "h1" in out.lower()
+    assert had_errors is True
+    mock_course.create_page.assert_not_called()
+
+
+def test_no_h1_heading_no_warning(
+    mock_course, tmp_path: Path, mocker, capsys: pytest.CaptureFixture
+) -> None:
+    mocker.patch("github_to_canvas.manifest.flush")
+    course_root = tmp_path / "course"
+    (course_root / "pages").mkdir(parents=True)
+    page = course_root / "pages" / "test.md"
+    page.write_text("---\ntitle: Test\npublished: true\n---\n\n## Sub Heading\n\nBody.\n")
+    mock_course.create_page.return_value = _mock_page(1, "test")
+
+    had_errors = run_sync(_config(), course_root)
+
+    out = capsys.readouterr().out
+    assert "h1" not in out.lower() or "heading" not in out.lower()
+    assert had_errors is False
+
+
 def test_missing_local_file_tag_removed_sync_continues(
     mock_course, tmp_path: Path, mocker, capsys: pytest.CaptureFixture
 ) -> None:
@@ -1428,7 +1464,7 @@ def test_content_file_without_frontmatter_still_uploads(
     mocker.patch("github_to_canvas.manifest.flush")
     root = tmp_path / "course"
     (root / "pages").mkdir(parents=True)
-    (root / "pages" / "my-notes.md").write_text("# Notes\n\nSome content here.\n")
+    (root / "pages" / "my-notes.md").write_text("## Notes\n\nSome content here.\n")
     mock_course.create_page.return_value = _mock_page(30001, "my-notes")
 
     run_sync(_config(), root)

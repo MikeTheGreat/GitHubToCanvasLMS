@@ -3,7 +3,7 @@ title: "Syllabus"
 published: true
 ---
 
-# Course Syllabus
+## Course Syllabus
 
 [My Office Hours](../snippets/office-hours.md)
 

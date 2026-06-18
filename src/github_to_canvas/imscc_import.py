@@ -529,6 +529,33 @@ def _html_to_markdown(html: str) -> str:
     )
 
 
+_ATX_HEADING_RE = re.compile(r"^(#{1,6})\s", re.MULTILINE)
+
+
+def _shift_headings_down(markdown: str, context: str = "") -> str:
+    """Increase every ATX heading level by one (H1→H2, …, H5→H6, H6→H6).
+
+    Canvas LMS silently converts H1 to a styled paragraph, so imported
+    content should start at H2.  Existing H6 headings cannot be shifted
+    further; a warning is printed and they are left at H6.
+    """
+    has_h6 = False
+
+    def _bump(m: re.Match) -> str:
+        nonlocal has_h6
+        hashes = m.group(1)
+        if len(hashes) >= 6:
+            has_h6 = True
+            return m.group(0)
+        return "#" + hashes + " "
+
+    result = _ATX_HEADING_RE.sub(_bump, markdown)
+    if has_h6:
+        label = f" in {context}" if context else ""
+        print(f"  WARNING: H6 heading found{label}; cannot shift deeper — left at H6")
+    return result
+
+
 def convert_page(
     entry: TempEntry,
     imscc_dir: Path,
@@ -543,6 +570,7 @@ def convert_page(
     body_html = _extract_html_body(raw_html)
     body_html = rewrite_imscc_links(body_html, temp_manifest, entry.local_path, course_id, base_url)
     markdown = _html_to_markdown(body_html)
+    markdown = _shift_headings_down(markdown, entry.local_path)
 
     frontmatter = _build_frontmatter({"title": entry.title, "published": True})
     out_path = output_dir / entry.local_path
@@ -677,6 +705,7 @@ def convert_assignment(
     body_html = _extract_html_body(raw_html)
     body_html = rewrite_imscc_links(body_html, temp_manifest, entry.local_path, course_id, base_url)
     markdown = _html_to_markdown(body_html)
+    markdown = _shift_headings_down(markdown, entry.local_path)
 
     frontmatter = _build_frontmatter(fm_fields)
     out_path = output_dir / entry.local_path
@@ -767,6 +796,7 @@ def convert_discussion(
 
     body_html = rewrite_imscc_links(body_html, temp_manifest, entry.local_path, course_id, base_url)
     markdown = _html_to_markdown(body_html)
+    markdown = _shift_headings_down(markdown, entry.local_path)
 
     # Extract attachments (spec §4.7)
     attach_el = (
@@ -1878,7 +1908,7 @@ def _write_events_md(
             body_html = rewrite_imscc_links(
                 description_html, temp_manifest, "course_settings/events.md", course_id, base_url
             )
-            md = _html_to_markdown(body_html).strip()
+            md = _shift_headings_down(_html_to_markdown(body_html), "course_settings/events.md").strip()
             if md:
                 lines.append(md)
                 lines.append("")
@@ -1905,6 +1935,7 @@ def create_course_settings(
         body_html = _extract_html_body(raw_html)
         body_html = rewrite_imscc_links(body_html, temp_manifest, "course_settings/syllabus.md", course_id, base_url)
         markdown = _html_to_markdown(body_html)
+        markdown = _shift_headings_down(markdown, "course_settings/syllabus.md")
         fm = _build_frontmatter({"title": "Syllabus", "published": True})
         (cs_dir / "syllabus.md").write_text(fm + "\n" + markdown + "\n", encoding="utf-8")
         print("Converting page: course_settings/syllabus.md")

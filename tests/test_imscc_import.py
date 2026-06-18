@@ -92,6 +92,13 @@ def test_page_has_title_frontmatter(output_dir: Path) -> None:
     assert "title: My Page" in text
 
 
+def test_page_headings_shifted_down(output_dir: Path) -> None:
+    run_import(FIXTURE_DIR, output_dir)
+    text = (output_dir / "pages" / "my-page.md").read_text()
+    assert "\n## My Page" in text
+    assert "\n# My Page" not in text
+
+
 def test_page_canvas_ref_rewritten(output_dir: Path) -> None:
     run_import(FIXTURE_DIR, output_dir)
     text = (output_dir / "pages" / "my-page.md").read_text()
