@@ -65,12 +65,15 @@ def test_convert_tab_configuration_external_tool_resolves_label() -> None:
     ]
 
 
-def test_convert_tab_configuration_unresolved_tool_keeps_id(capsys) -> None:
-    """A tool with no resolvable title keeps just its id and warns."""
-    raw = '[{"id":"context_external_tool_gunknown"}]'
+def test_convert_tab_configuration_unresolved_tool_gets_empty_label(capsys) -> None:
+    """A tool with no resolvable name (not in the cartridge) gets an empty fill-in label."""
+    raw = '[{"id":"context_external_tool_gunknown","hidden":true}]'
     result = _convert_tab_configuration(raw, {})
-    assert result == [{"id": "context_external_tool_gunknown"}]
-    assert "WARNING" in capsys.readouterr().out
+    assert result == [
+        {"label": "", "id": "context_external_tool_gunknown", "hidden": True}
+    ]
+    out = capsys.readouterr().out
+    assert "WARNING" in out and "1 external-tool" in out
 
 
 def test_convert_tab_configuration_unknown_numeric_id_warns(capsys) -> None:

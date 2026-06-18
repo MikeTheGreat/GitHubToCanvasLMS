@@ -43,6 +43,27 @@ def _parse_exturl_attrs(comment_text: str) -> dict[str, str]:
     return {m.group(1): m.group(2) for m in _EXTURL_ATTR_KV_RE.finditer(comment_text)}
 
 
+def _find_nested_key(obj: Any, target: str) -> str | None:
+    """Return a dotted path to `target` if it appears anywhere inside obj, else None.
+
+    Used to detect a top-level key (e.g. tab_configuration) that the user accidentally
+    nested under a TOML [section] header.
+    """
+    if isinstance(obj, dict):
+        for key, value in obj.items():
+            if key == target:
+                return key
+            found = _find_nested_key(value, target)
+            if found:
+                return f"{key}.{found}"
+    elif isinstance(obj, list):
+        for item in obj:
+            found = _find_nested_key(item, target)
+            if found:
+                return found
+    return None
+
+
 def parse_module_body(
     body: str, module_file: Path, course_root: Path
 ) -> list[dict[str, Any]]:
@@ -157,10 +178,10 @@ def sync_course_settings(
     verbose: bool = False,
 ) -> None:
     """Sync course_settings.toml: metadata, grading standards, assignment groups, policies, rubrics."""
-    settings_path = repo_path / "course_settings.toml"
+    settings_path = repo_path / "course_settings" / "course_settings.toml"
     if not settings_path.exists():
         return
-    local_key = "course_settings.toml"
+    local_key = "course_settings/course_settings.toml"
     rubrics_path = repo_path / "course_settings" / "rubrics.toml"
     # Re-sync if either the main settings file or rubrics.toml is newer than last_synced.
     settings_stale = manifest_lib.needs_sync(
@@ -221,10 +242,21 @@ def sync_course_settings(
             except Exception as exc:
                 print(f"  WARNING: rubrics sync failed: {exc}")
 
-    # Course-navigation (left sidebar) order/visibility. Stored as a JSON string
-    # because that's the raw form Canvas exports in course_settings.xml.
+    # Course-navigation (left sidebar) order/visibility. A top-level array (older
+    # imports/exports may use a JSON string). If it's missing, the user may have
+    # accidentally nested it under a [section] header — a silent TOML gotcha — so
+    # check for that and warn rather than doing nothing.
     tab_config_raw = settings.get("tab_configuration")
-    if tab_config_raw:
+    if tab_config_raw is None:
+        misplaced = _find_nested_key(settings, "tab_configuration")
+        if misplaced:
+            print(
+                f"  WARNING: 'tab_configuration' was found nested under {misplaced!r}, "
+                "not at the top level, so course navigation was NOT updated. In TOML a "
+                "top-level key must come BEFORE any [section]/[[section]] headers — move "
+                "the tab_configuration block above the first section in course_settings.toml."
+            )
+    elif tab_config_raw:
         try:
             tab_config = (
                 json.loads(tab_config_raw)
@@ -260,7 +292,7 @@ def run_sync(
     errors: list[str] = []
 
     # Read front_page setting up front so we can apply it after pages are synced.
-    _cs_path = repo_path / "course_settings.toml"
+    _cs_path = repo_path / "course_settings" / "course_settings.toml"
     _front_page_path: str | None = None
     if _cs_path.exists():
         with _cs_path.open("rb") as _fh:

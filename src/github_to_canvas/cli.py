@@ -177,7 +177,7 @@ def publish(
     "--config",
     default=None,
     type=click.Path(path_type=Path),
-    help="Path to canvas.toml (default: <repo>/canvas.toml)",
+    help="Path to canvas.toml (default: <repo>/course_settings/canvas.toml)",
 )
 @click.option(
     "--delete",
@@ -208,7 +208,7 @@ def prune(repo: Path, config: Path | None, mode: str | None) -> None:
     if mode is None:
         die("Exactly one of --delete, --unpublish, or --manifest-only is required.")
     if config is None:
-        config = repo / "canvas.toml"
+        config = repo / "course_settings" / "canvas.toml"
     try:
         cfg = load_config(config)
 
@@ -247,7 +247,7 @@ def prune(repo: Path, config: Path | None, mode: str | None) -> None:
     "--config",
     default=None,
     type=click.Path(path_type=Path),
-    help="Path to canvas.toml (default: <repo>/canvas.toml)",
+    help="Path to canvas.toml (default: <repo>/course_settings/canvas.toml)",
 )
 def find_orphans_cmd(repo: Path, config: Path | None) -> None:
     """Find Canvas resources not referenced by any other resource in the course.
@@ -259,7 +259,7 @@ def find_orphans_cmd(repo: Path, config: Path | None) -> None:
     REPO is the course content repo (defaults to the current directory).
     """
     if config is None:
-        config = repo / "canvas.toml"
+        config = repo / "course_settings" / "canvas.toml"
     try:
         cfg = load_config(config)
 
@@ -290,7 +290,7 @@ def find_orphans_cmd(repo: Path, config: Path | None) -> None:
     "--config",
     default=None,
     type=click.Path(path_type=Path),
-    help="Path to canvas.toml (default: <repo>/canvas.toml)",
+    help="Path to canvas.toml (default: <repo>/course_settings/canvas.toml)",
 )
 @click.option(
     "--force-uploads",
@@ -347,7 +347,7 @@ def update(
     """Sync a Markdown course repo to Canvas LMS."""
     _ensure_pandoc()
     if config is None:
-        config = repo / "canvas.toml"
+        config = repo / "course_settings" / "canvas.toml"
     try:
         cfg = load_config(config)
 

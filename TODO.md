@@ -5,8 +5,8 @@ Currently we don't manage this, but it would be nice
 
 ## Only set front page when relevant files have changed
 
-Currently `run_sync` reads `front_page` from `course_settings.toml` at startup and
-calls `set_front_page` on every run, regardless of whether `course_settings.toml` or
+Currently `run_sync` reads `front_page` from `course_settings/course_settings.toml` at startup and
+calls `set_front_page` on every run, regardless of whether `course_settings/course_settings.toml` or
 the target page's `.md` file has actually changed. It should only call `set_front_page`
 when one of those two files has been re-synced in the same run.
 
@@ -64,6 +64,46 @@ These files are produced by the importer but have no upload path yet:
 
 - **`course_settings/events.md`** — Calendar events. Requires parsing `## Title` / `**Date:**` sections back into structured event data and calling `canvas.create_calendar_event()` per event. Complex (deduplication, update-vs-create). See UPLOADER_CHANGES.md §3.
 - **`course_settings/files_meta.toml`** — File visibility (`locked`, `hidden`, `display_name`, `unlock_at`) and folder visibility. Requires Canvas file IDs from the manifest (needs matching by `local_path` or `display_name`). Import-side fix also needed: `_write_files_meta_toml()` should write `local_path` alongside each file entry. See UPLOADER_CHANGES.md §16.
+
+## User-maintained external-tool aliases (auto-fill nav-tab labels)
+
+**Problem.** Canvas does not export the names of external tools used only in course
+navigation, so `import` writes those `tab_configuration` entries with an empty
+`label = ""` placeholder for the user to fill in by hand (see
+`_convert_tab_configuration` / `_resolve_tool_titles` in `imscc_import.py`, and the
+README note under `course_settings.toml`). The tab id is a Canvas **migration hash**
+(`context_external_tool_g<md5>`), derived from the tool's installation id.
+
+**Why an alias map works.** That hash is stable and effectively global **within a
+single Canvas instance** for account/sub-account-installed tools (the common case for
+Panopto, Zoom, etc.): the same tool yields the same hash across every course exported
+from that instance. (Caveat: tools installed *per course* get a distinct id, hence a
+distinct hash, per course.) So a user who always exports from the same Canvas can
+record `hash → label` once and reuse it across imports. It is **not** portable across
+instances and can't be shipped as a built-in table.
+
+**Proposed feature.**
+
+- A user-maintained alias file mapping the tool id (the full
+  `context_external_tool_g…`, or the bare hash) to a label, e.g.:
+
+  ```toml
+  # tool_aliases.toml
+  "context_external_tool_g22ae550f785ace6a783be4c9006544ea" = "Panopto"
+  "context_external_tool_gd9568f5b0d2a343486654adb2ae69aac" = "Zoom"
+  ```
+
+- Importer consults it when building tool labels. Precedence: cartridge BLTI
+  `<blti:title>` (when present) → alias-file label → empty `""` placeholder (current
+  behaviour). Thread the alias map into `_convert_tab_configuration` alongside
+  `tool_titles`.
+- Location options to decide: a repo-level `course_settings/tool_aliases.toml`,
+  and/or a `--tool-aliases PATH` flag, and/or a user-level default (e.g.
+  `~/.config/github-to-canvas/tool_aliases.toml`) since the map is per-instance and
+  naturally shared across multiple course repos from the same Canvas.
+- Nice-to-have: have `import` **append** any newly-seen unresolved hashes to the
+  alias file as commented `# "context_external_tool_g…" = ""` stubs, so filling one
+  in once carries forward to future imports.
 
 ## Round-trip fidelity gaps (import → sync)
 
@@ -241,7 +281,7 @@ uv tool install github-to-canvas[publish]
 ### What the `publish` subcommand does
 
 1. Read the course repo's `modules/` directory to determine content ordering and grouping.
-2. Read `course_settings.toml` (if present) for the course name / nickname.
+2. Read `course_settings/course_settings.toml` (if present) for the course name / nickname.
 3. Copy (or symlink) content files into a temporary `docs/` staging directory, organized by module.
 4. Generate a `mkdocs.yml` in the staging directory with:
    - `site_name` set to the course name
@@ -319,7 +359,7 @@ Then in `docs/stylesheets/extra.css`:
 }
 ```
 
-The orange accent (`#E66000`) is Canvas's own default — institutions override it, but it's what most users recognize. If the course repo's `course_settings.toml` carries institution branding colors in the future, those could override it automatically.
+The orange accent (`#E66000`) is Canvas's own default — institutions override it, but it's what most users recognize. If the course repo's `course_settings/course_settings.toml` carries institution branding colors in the future, those could override it automatically.
 
 #### Course name in sidebar header
 

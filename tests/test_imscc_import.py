@@ -397,19 +397,19 @@ def test_syllabus_has_content(output_dir: Path) -> None:
 
 def test_course_settings_toml_at_root(output_dir: Path) -> None:
     run_import(FIXTURE_DIR, output_dir)
-    assert (output_dir / "course_settings.toml").exists()
+    assert (output_dir / "course_settings" / "course_settings.toml").exists()
 
 
 def test_course_settings_toml_has_title(output_dir: Path) -> None:
     run_import(FIXTURE_DIR, output_dir)
-    text = (output_dir / "course_settings.toml").read_text()
+    text = (output_dir / "course_settings" / "course_settings.toml").read_text()
     assert "Test Course" in text
 
 
 def test_course_settings_toml_has_all_basic_fields(output_dir: Path) -> None:
     import tomllib
     run_import(FIXTURE_DIR, output_dir)
-    data = tomllib.loads((output_dir / "course_settings.toml").read_text())
+    data = tomllib.loads((output_dir / "course_settings" / "course_settings.toml").read_text())
     assert data["course_code"] == "TEST101"
     assert data["default_view"] == "modules"
     assert data["is_public"] is False
@@ -419,7 +419,7 @@ def test_course_settings_toml_has_all_basic_fields(output_dir: Path) -> None:
 def test_course_settings_toml_booleans_typed(output_dir: Path) -> None:
     import tomllib
     run_import(FIXTURE_DIR, output_dir)
-    data = tomllib.loads((output_dir / "course_settings.toml").read_text())
+    data = tomllib.loads((output_dir / "course_settings" / "course_settings.toml").read_text())
     assert data["grading_standard_enabled"] is True
     assert isinstance(data["home_page_announcement_limit"], int)
     assert data["home_page_announcement_limit"] == 3
@@ -428,21 +428,21 @@ def test_course_settings_toml_booleans_typed(output_dir: Path) -> None:
 def test_course_settings_toml_post_policy(output_dir: Path) -> None:
     import tomllib
     run_import(FIXTURE_DIR, output_dir)
-    data = tomllib.loads((output_dir / "course_settings.toml").read_text())
+    data = tomllib.loads((output_dir / "course_settings" / "course_settings.toml").read_text())
     assert data["default_post_policy"]["post_manually"] is True
 
 
 def test_course_settings_toml_has_last_modified(output_dir: Path) -> None:
     import tomllib
     run_import(FIXTURE_DIR, output_dir)
-    data = tomllib.loads((output_dir / "course_settings.toml").read_text())
+    data = tomllib.loads((output_dir / "course_settings" / "course_settings.toml").read_text())
     assert data.get("last_modified") == "2025-08-01"
 
 
 def test_course_settings_toml_has_grading_standard(output_dir: Path) -> None:
     import tomllib
     run_import(FIXTURE_DIR, output_dir)
-    data = tomllib.loads((output_dir / "course_settings.toml").read_text())
+    data = tomllib.loads((output_dir / "course_settings" / "course_settings.toml").read_text())
     assert "grading_standards" in data
     gs = data["grading_standards"][0]
     assert gs["title"] == "Test Grade Scale"
@@ -453,7 +453,7 @@ def test_course_settings_toml_has_grading_standard(output_dir: Path) -> None:
 def test_course_settings_toml_has_assignment_groups(output_dir: Path) -> None:
     import tomllib
     run_import(FIXTURE_DIR, output_dir)
-    data = tomllib.loads((output_dir / "course_settings.toml").read_text())
+    data = tomllib.loads((output_dir / "course_settings" / "course_settings.toml").read_text())
     assert "assignment_groups" in data
     titles = [g["title"] for g in data["assignment_groups"]]
     assert "Homework" in titles
@@ -463,7 +463,7 @@ def test_course_settings_toml_has_assignment_groups(output_dir: Path) -> None:
 def test_course_settings_toml_assignment_group_rules(output_dir: Path) -> None:
     import tomllib
     run_import(FIXTURE_DIR, output_dir)
-    data = tomllib.loads((output_dir / "course_settings.toml").read_text())
+    data = tomllib.loads((output_dir / "course_settings" / "course_settings.toml").read_text())
     exams = next(g for g in data["assignment_groups"] if g["title"] == "Exams")
     assert exams["rules"][0]["drop_type"] == "drop_lowest"
     assert exams["rules"][0]["drop_count"] == 1
@@ -472,7 +472,7 @@ def test_course_settings_toml_assignment_group_rules(output_dir: Path) -> None:
 def test_course_settings_toml_has_late_policy(output_dir: Path) -> None:
     import tomllib
     run_import(FIXTURE_DIR, output_dir)
-    data = tomllib.loads((output_dir / "course_settings.toml").read_text())
+    data = tomllib.loads((output_dir / "course_settings" / "course_settings.toml").read_text())
     assert "late_policy" in data
     lp = data["late_policy"]
     assert lp["late_submission_deduction_enabled"] is True
@@ -482,20 +482,20 @@ def test_course_settings_toml_has_late_policy(output_dir: Path) -> None:
 
 def test_canvas_toml_has_base_url_from_context(output_dir: Path) -> None:
     run_import(FIXTURE_DIR, output_dir)
-    text = (output_dir / "canvas.toml").read_text()
+    text = (output_dir / "course_settings" / "canvas.toml").read_text()
     assert "test.instructure.com" in text
 
 
 def test_canvas_toml_has_course_id_from_context(output_dir: Path) -> None:
     run_import(FIXTURE_DIR, output_dir)
-    text = (output_dir / "canvas.toml").read_text()
+    text = (output_dir / "course_settings" / "canvas.toml").read_text()
     assert "12345" in text
 
 
 def test_canvas_toml_has_base_url_key(output_dir: Path) -> None:
     run_import(FIXTURE_DIR, output_dir)
-    assert (output_dir / "canvas.toml").exists()
-    text = (output_dir / "canvas.toml").read_text()
+    assert (output_dir / "course_settings" / "canvas.toml").exists()
+    text = (output_dir / "course_settings" / "canvas.toml").read_text()
     assert "base_url" in text
     assert "course_id" in text
 
@@ -622,8 +622,8 @@ def test_run_import_from_zip(tmp_path: Path) -> None:
     assert (out / "assignments" / "my-assignment.md").exists()
     assert (out / "discussions" / "week-01-forum.md").exists()
     assert (out / "modules" / "week-1.md").exists()
-    assert (out / "canvas.toml").exists()
-    assert (out / "course_settings.toml").exists()
+    assert (out / "course_settings" / "canvas.toml").exists()
+    assert (out / "course_settings" / "course_settings.toml").exists()
 
 
 # ---------------------------------------------------------------------------
@@ -718,7 +718,7 @@ def test_question_bank_not_in_course_settings(output_dir: Path) -> None:
     """Standalone question bank should not overwrite course_settings.toml."""
     import tomllib
     run_import(FIXTURE_DIR, output_dir)
-    data = tomllib.loads((output_dir / "course_settings.toml").read_text())
+    data = tomllib.loads((output_dir / "course_settings" / "course_settings.toml").read_text())
     assert "Test Course" in data["title"]  # file is intact, not corrupted by question bank
 
 

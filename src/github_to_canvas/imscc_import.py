@@ -209,7 +209,7 @@ def parse_imsmanifest(imscc_dir: Path) -> dict[str, TempEntry]:
                 imscc_id=identifier,
                 category="course_settings",
                 imscc_path=href,
-                local_path="course_settings.toml",
+                local_path="course_settings/course_settings.toml",
                 title="Course Settings",
             )
             continue
@@ -1825,6 +1825,11 @@ def _convert_tab_configuration(
       keyed by resource id) and the id is retained for provenance;
     - ``hidden = true`` is emitted only for hidden tabs (omitted otherwise);
     - display order is preserved.
+
+    Canvas does **not** export the names of external tools that are only used in
+    course navigation (it ships no BLTI resource for them), so most real cartridges
+    can't resolve a label.  Those tabs are written with an empty ``label = ""`` slot
+    for the user to fill in by hand, and a single summary warning is printed.
     """
     if isinstance(raw, str):
         try:
@@ -1838,6 +1843,7 @@ def _convert_tab_configuration(
         return []
 
     result: list[dict[str, Any]] = []
+    unresolved: list[str] = []
     for entry in entries:
         if not isinstance(entry, dict):
             continue
@@ -1859,14 +1865,12 @@ def _convert_tab_configuration(
         elif isinstance(raw_id, str) and raw_id.startswith(TOOL_TAB_PREFIX):
             resource_id = raw_id[len(TOOL_TAB_PREFIX):]
             label = tool_titles.get(resource_id)
-            if label:
-                out["label"] = label
-            else:
-                print(
-                    f"  WARNING: could not resolve a name for external-tool tab "
-                    f"{raw_id!r}; keeping the id only (sync won't be able to match it)"
-                )
+            # Empty label is a deliberate fill-in slot when the name isn't in the
+            # cartridge; sync ignores it until the user supplies a real label.
+            out["label"] = label if label else ""
             out["id"] = raw_id
+            if not label:
+                unresolved.append(raw_id)
         elif isinstance(raw_id, str) and raw_id:
             out["id"] = raw_id
         else:
@@ -1875,6 +1879,15 @@ def _convert_tab_configuration(
         if entry.get("hidden"):
             out["hidden"] = True
         result.append(out)
+
+    if unresolved:
+        print(
+            f"  WARNING: {len(unresolved)} external-tool navigation tab(s) have no name "
+            "in this cartridge — Canvas does not export the names of tools used only in "
+            'course navigation. Each was written with an empty label = "". Fill in the '
+            "tool's name as it appears in the destination course to position or hide it; "
+            "otherwise sync leaves that tab untouched."
+        )
     return result
 
 
@@ -1897,7 +1910,7 @@ def _write_course_settings_toml(
     late_policy: dict[str, Any],
     output_dir: Path,
 ) -> None:
-    """Write course_settings.toml at the output root with all course-level settings."""
+    """Write course_settings/course_settings.toml with all course-level settings."""
     data: dict[str, Any] = {}
 
     # Identity and key settings first (deterministic ordering)
@@ -1931,10 +1944,12 @@ def _write_course_settings_toml(
     if tab_configuration:
         data["tab_configuration"] = tab_configuration
 
-    (output_dir / "course_settings.toml").write_text(
+    cs_dir = output_dir / "course_settings"
+    cs_dir.mkdir(parents=True, exist_ok=True)
+    (cs_dir / "course_settings.toml").write_text(
         tomli_w.dumps(data), encoding="utf-8"
     )
-    print("Writing: course_settings.toml")
+    print("Writing: course_settings/course_settings.toml")
 
 
 def _write_canvas_toml(context: dict[str, Any], output_dir: Path) -> None:
@@ -1948,7 +1963,9 @@ def _write_canvas_toml(context: dict[str, Any], output_dir: Path) -> None:
         else "course_id = 0  # TODO: set your course ID\n"
     )
 
-    (output_dir / "canvas.toml").write_text(
+    cs_dir = output_dir / "course_settings"
+    cs_dir.mkdir(parents=True, exist_ok=True)
+    (cs_dir / "canvas.toml").write_text(
         f'base_url = "{base_url}"\n'
         + course_id_line
         + "\n"
@@ -1957,7 +1974,7 @@ def _write_canvas_toml(context: dict[str, Any], output_dir: Path) -> None:
         '# api_token = ""\n',
         encoding="utf-8",
     )
-    print("Writing: canvas.toml")
+    print("Writing: course_settings/canvas.toml")
 
 
 def _write_events_md(
@@ -2009,7 +2026,7 @@ def create_course_settings(
     course_id: int | str | None = None,
     base_url: str | None = None,
 ) -> None:
-    """Write course_settings.toml (root), course_settings/syllabus.md, events.md, canvas.toml."""
+    """Write course_settings/{course_settings.toml, syllabus.md, events.md, canvas.toml}."""
     cs_dir = output_dir / "course_settings"
     cs_dir.mkdir(parents=True, exist_ok=True)
 

@@ -32,7 +32,7 @@ Mock the `canvasapi` library with `pytest-mock`. Run the full sync pipeline agai
 - **Assignment extended fields**: `lock_at`, `unlock_at`, `grading_type` from frontmatter reach `canvasapi` (fixture `assignments/week1.md` carries these fields)
 - **Graded discussion fields**: `points_possible`, `due_at`, `lock_at`, `unlock_at` passed to `create_discussion_topic()` as `assignment={...}` nested dict (fixture `discussions/week1-intro.md` carries these fields)
 - **Syllabus sync**: `course_settings/syllabus.md` body converted to HTML and passed to `course.update(course={"syllabus_body": ...})`; absent file → no update called
-- **Course metadata sync**: flat fields from `course_settings.toml` reach `course.update(course={...})`; absent file → no crash
+- **Course metadata sync**: flat fields from `course_settings/course_settings.toml` reach `course.update(course={...})`; absent file → no crash
 - **`course_settings/` folder isolation**: files inside `course_settings/` are never uploaded as Canvas Pages
 - `--target-recursively`: BFS from a module reaches all referenced content; module deferred until content is in manifest
 - `--single-target`: only specified files processed; no BFS

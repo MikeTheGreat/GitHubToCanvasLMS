@@ -16,7 +16,7 @@ git clone (local)
 2. load .canvas-manifest.toml           (into in-memory dict; single source of truth during the run)
 2.1. build ignore matcher               (from .gitignore + optional .canvasignore at repo root;
      any matched file/dir is skipped during discovery in every phase below)
-2.5. if course_settings.toml exists: apply course metadata to Canvas (name, dates, flags, grading
+2.5. if course_settings/course_settings.toml exists: apply course metadata to Canvas (name, dates, flags, grading
      standards, assignment groups, late policy, post policy, rubrics)
 2.6. if course_settings/syllabus.md exists: convert body to HTML and set as course syllabus body
 3. upload assets/                       (see processing order below)
@@ -171,7 +171,7 @@ Usage: github-to-canvas prune [OPTIONS] REPO
   --unpublish      Unpublish (set published=False) the orphaned items on Canvas.
   --manifest-only  Remove orphaned entries from the local manifest only; never
                    touch Canvas.
-  --config PATH    Path to canvas.toml (default: <repo>/canvas.toml)
+  --config PATH    Path to canvas.toml (default: <repo>/course_settings/canvas.toml)
 ```
 
 Removes Canvas items whose local source file no longer exists. Because the
@@ -281,12 +281,12 @@ The `_syllabus` resource (`course_settings/syllabus.html`) → `course_settings/
 6c. **Question banks:** parse `non_cc_assessments/*.xml.qti` objectbank files; read bank metadata (bank_title, bank_context_uuid, bank_state) from `<qtimetadata>`; parse all `<item>` children as questions (same QTI format as quizzes, plus `original_answer_ids` metadata); write `question_banks/{slug}/{slug}.toml` and one question file per item under `question_banks/{slug}/questions/`
 7. **Modules:** read `course_settings/module_meta.xml`; emit items in position order (see below); write `modules/{slugify(title)}.md`
 8. **Course settings:** collect data from all `course_settings/*.xml` files and `imsmanifest.xml` metadata; write:
-   - `course_settings.toml` (root) — all course-level settings (see below)
+   - `course_settings/course_settings.toml` — all course-level settings (see below)
    - `course_settings/syllabus.md` — syllabus HTML converted to Markdown
    - `course_settings/events.md` — calendar events (if any exist in `events.xml`)
    - `course_settings/rubrics.toml` — rubric definitions with criteria and ratings (if any exist in `rubrics.xml`)
    - `course_settings/files_meta.toml` — file visibility/lock metadata (from `files_meta.xml`)
-   - `canvas.toml` (root) — connection config skeleton pre-populated from `context.xml`
+   - `course_settings/canvas.toml` — connection config skeleton pre-populated from `context.xml`
    - `media_tracks.xml` and `canvas_export.txt` are skipped (no useful round-trip content)
 
 ### Internal link rewriting
@@ -312,9 +312,9 @@ Unknown `gXXX` not in resource map → warn and remove href, keep link text.
 - `ContextExternalTool` (LTI embedded tool) → `- [display_title](url)` (URL comes from the module item's own `url` field, not the LTI resource XML)
 - `Attachment` (Canvas File) → `# SKIPPED: Attachment - "title"` comment line + printed warning (no local file equivalent)
 
-### Course settings output (`course_settings.toml`)
+### Course settings output (`course_settings/course_settings.toml`)
 
-A TOML file written at the repo root capturing all course-level metadata. Sources and content:
+A TOML file written inside the `course_settings/` folder capturing all course-level metadata. Sources and content:
 
 | Source file | Fields extracted |
 | --- | --- |
@@ -339,11 +339,11 @@ Boolean fields (`true`/`false`) are stored as TOML booleans. Numeric fields are 
 ### Key behaviours
 
 - **No `.canvas-manifest.toml` written** — IMSCC `gXXX` identifiers are not real Canvas numeric IDs; the first `sync` run creates all items and populates the manifest with real IDs.
-- **`course_settings/` directory** — syllabus, events, and any other converted HTML content land here.
-- **`course_settings.toml` at root** — all course-wide settings (not in `course_settings/` subdir) so they are immediately visible.
+- **`course_settings/` directory** — `course_settings.toml`, `canvas.toml`, syllabus, events, and any other converted content land here.
+- **`course_settings/course_settings.toml`** — all course-wide settings, alongside the rest of the course-settings files.
 - **Graded discussion metadata captured** — `points_possible`, `due_at`, etc. written to frontmatter even if not currently used by sync.
 - **Quiz question slugification** — question filenames are derived from the QTI `title` attribute via `_slugify()`. Special characters (e.g. `+`) are stripped, so "What is 2+2?" becomes `what-is-22.md`.
-- **Course-navigation tabs humanised** — `course_settings.xml`'s `tab_configuration` (an escaped JSON string of Canvas-internal numeric ids and `context_external_tool_<resource-id>` ids) is rewritten into a readable `[[tab_configuration]]` array. Numeric ids become string ids (`3` → `id = "assignments"`); external-tool ids are resolved to a human `label` via the tool's BLTI `<blti:title>` (with the original id kept for provenance). A tool whose title can't be resolved keeps its id and emits a warning. See `_convert_tab_configuration()`.
+- **Course-navigation tabs humanised** — `course_settings.xml`'s `tab_configuration` (an escaped JSON string of Canvas-internal numeric ids and `context_external_tool_<resource-id>` ids) is rewritten into a readable `tab_configuration` inline array. Numeric ids become string ids (`3` → `id = "assignments"`); external-tool ids are resolved to a human `label` via the tool's BLTI `<blti:title>` (with the original id kept for provenance). See `_convert_tab_configuration()`. **Caveat:** Canvas only exports a BLTI resource for tools that ship as course *content*; tools used **only in course navigation** have no resource (and no name) in the cartridge — verified against real Canvas exports. Those tabs are written with an empty `label = ""` fill-in slot plus the id, and one summary warning is printed counting them. Sync skips an unfilled placeholder (it can't match a nameless tool); the user supplies the label by hand.
 
 ### Console output style
 
@@ -389,7 +389,7 @@ MkDocs renders them.
 
 ### What it does
 
-1. Determine the site name from `course_settings.toml` (`title` / `name` /
+1. Determine the site name from `course_settings/course_settings.toml` (`title` / `name` /
    `course_code`), falling back to the course directory name.
 2. Build the `nav:` tree from `modules/` (alphabetical, matching the sync
    order). Each module becomes a top-level nav section; the module's own `.md`
@@ -434,9 +434,9 @@ Built static site: /abs/site
 
 ## Configuration
 
-### Tool config file (`canvas.toml`)
+### Tool config file (`course_settings/canvas.toml`)
 
-Provided once per course repo, checked into git:
+Provided once per course repo (in the `course_settings/` folder), checked into git:
 
 ```toml
 base_url = "https://yourschool.instructure.com"
@@ -748,25 +748,25 @@ These files are never uploaded as Canvas Pages. Each has a dedicated upload path
 
 | File | Upload behaviour |
 | --- | --- |
-| `course_settings.toml` (repo root) | Applied via `course.update()` for flat metadata; dedicated API calls for grading standards, assignment groups, late policy, post policy, course-navigation tabs, and rubrics |
+| `course_settings/course_settings.toml` | Applied via `course.update()` for flat metadata; dedicated API calls for grading standards, assignment groups, late policy, post policy, course-navigation tabs, and rubrics |
 | `course_settings/syllabus.md` | Body converted to HTML and set as `course.syllabus_body` via `course.update()` |
 | `course_settings/events.md` | Not yet uploaded (future feature) |
 | `course_settings/rubrics.toml` | Each rubric created via `course.create_rubric()` if title not already present |
 | `course_settings/files_meta.toml` | Not yet uploaded (requires matching Canvas file IDs after asset upload) |
 
-**`course_settings.toml` upload detail:**
+**`course_settings/course_settings.toml` upload detail:**
 
 The following sections are handled separately from the flat `course.update()` call:
 
 - `[[grading_standards]]` — each entry created via `course.create_grading_standard()` if title not already present; first standard's ID passed as `grading_standard_id` in the course update
 - `[[assignment_groups]]` — each entry created or updated via `course.create_assignment_group()` / `ag.edit()`, matched by name; processed in `position` order
-- `[late_policy]` — applied via `PATCH /api/v1/courses/:id/late_policy` (raw requester call, not wrapped in `canvasapi`)
-- `[default_post_policy]` — applied via `PUT /api/v1/courses/:id/post_policies` (raw requester call)
-- `tab_configuration` — controls the **course-navigation sidebar** (the left-hand "Assignments", "Modules", … links). An **array of tables** (`[[tab_configuration]]`), one entry per tab, in display order. Each entry is applied via `tab.update(position=…, hidden=…)` against `course.get_tabs()` using 1-based positions; `hidden` defaults to false. Two kinds of entry:
-  - **Built-in tabs** — `id = "assignments"`, using the string ids the live Tabs API exposes (`home`, `syllabus`, `pages`, `assignments`, `quizzes`, `grades`, `people`, `discussions`, `modules`, `files`, `announcements`, `outcomes`, …). Matched by id.
-  - **External-tool tabs** — `label = "Zoom"`, optionally carrying the original `id = "context_external_tool_g…"` for provenance. Matched **by label** (case-insensitive) against the course's installed tool tabs, because the cartridge's tool id never equals a live course's Canvas-assigned tool id (see the import note below). The retained `id` is *not* used for matching.
+- `[late_policy]` — applied via `PATCH /api/v1/courses/:id/late_policy` (raw requester call, not wrapped in `canvasapi`). This genuinely is a REST resource, so it stays REST.
+- `[default_post_policy]` — applied via the **GraphQL** `setCoursePostPolicy` mutation (`POST /api/graphql`), issued through the shared requester (`canvas_api.graphql()` / `update_post_policy()`). Post policies are GraphQL-only in Canvas; the former `PUT /api/v1/courses/:id/post_policies` REST route does not exist and returned 404.
+- `tab_configuration` — controls the **course-navigation sidebar** (the left-hand "Assignments", "Modules", … links). An inline array, one entry per tab, in display order. Each entry is applied via `tab.update(position=…, hidden=…)` against `course.get_tabs()`; `hidden` defaults to false. Positions are assigned in list order **starting at 2**, because Canvas pins **Home** at position 1 and rejects any other tab placed there (`"That tab location is invalid"`).
 
-  Only reordering and hiding are supported — new tabs cannot be created. Entries that don't resolve to a tab already present in the course (e.g. an external tool not installed here, or a built-in tab Canvas doesn't expose) are **warned about and skipped**, never created. The unmovable `home` and `settings` tabs are silently left alone. For backward compatibility the sync also accepts the legacy form: a single JSON-encoded string using Canvas's internal **numeric** tab ids (`0`=home, `3`=assignments, …; see `NUMERIC_TAB_IDS` in `canvas_api.py`), which is what older imports/exports produced.
+  Each entry names one tab via `id` **or** `label` — the two are interchangeable (a non-empty `label` is used as the name when present, else `id`). `_resolve_tab_entry()` matches the typed name, **case-insensitively**, against: (1) a built-in tab id (`home`, `syllabus`, `pages`, `assignments`, `modules`, `announcements`, …); then (2) any live tab's **display label**, which covers external tools (`Zoom`, `Panopto Recordings`) and renamed built-ins (Conferences shown as `BigBlueButton`). This means a user can simply type the sidebar name without knowing whether it's a built-in or a tool. An entry may still carry both keys (e.g. the importer writes `label = "Zoom"` plus the original `id = "context_external_tool_g…"` for provenance); the tool id is not used for matching because the cartridge's id never equals a live course's Canvas-assigned tool id.
+
+  Only reordering and hiding are supported — new tabs cannot be created. Entries that don't resolve to any tab in the course (no built-in or installed tool by that name) are **warned about and skipped**, never created. The unmovable `home` and `settings` tabs are silently left alone. Also accepted for backward compatibility: Canvas's internal **numeric** tab ids (`0`=home, `3`=assignments, …; see `NUMERIC_TAB_IDS`) and a single JSON-encoded string, the forms older imports/exports produced.
 
 Read-only or infrastructure fields (`storage_quota`, `root_account_uuid`, `image_identifier_ref`, `last_modified`, `copyright_restrictions`, `copyright_description`, and others) are present in the TOML for round-trip fidelity but are silently ignored by the uploader.
 

@@ -142,13 +142,52 @@ def update_late_policy(course, late_policy: dict[str, Any]) -> None:
         course._requester.request("POST", f"courses/{course.id}/late_policy", _kwargs=flat)
 
 
-def update_post_policy(course, post_manually: bool) -> None:
-    """Set the course default post policy via raw API call."""
-    course._requester.request(
-        "PUT",
-        f"courses/{course.id}/post_policies",
-        _kwargs=[("post_policy[post_manually]", post_manually)],
+_SET_COURSE_POST_POLICY = """
+mutation SetCoursePostPolicy($courseId: ID!, $postManually: Boolean!) {
+  setCoursePostPolicy(input: {courseId: $courseId, postManually: $postManually}) {
+    postPolicy { postManually }
+    errors { attribute message }
+  }
+}
+"""
+
+
+def graphql(course, query: str, variables: dict[str, Any]) -> dict[str, Any]:
+    """Run a GraphQL query/mutation against /api/graphql and return the parsed JSON.
+
+    canvasapi only exposes ``graphql()`` on the top-level ``Canvas`` object, but the
+    shared requester is reachable from any object, so we issue it via ``course``.
+    Raises on transport errors, GraphQL-level ``errors``, or mutation-payload errors
+    (GraphQL returns HTTP 200 even when the operation failed).
+    """
+    response = course._requester.request(
+        "POST",
+        "graphql",
+        headers={"Content-Type": "application/json"},
+        _url="graphql",  # GraphQL lives at /api/graphql, not /api/v1/...
+        json={"query": query, "variables": variables},
     )
+    data = response.json()
+    if data.get("errors"):
+        raise RuntimeError(f"GraphQL error: {data['errors']}")
+    return data
+
+
+def update_post_policy(course, post_manually: bool) -> None:
+    """Set the course default post policy via the GraphQL ``setCoursePostPolicy`` mutation.
+
+    Post policies are a GraphQL-only feature in Canvas — there is no REST endpoint
+    (the old ``PUT /courses/:id/post_policies`` route returns 404), so we issue the
+    mutation directly.
+    """
+    data = graphql(
+        course,
+        _SET_COURSE_POST_POLICY,
+        {"courseId": course.id, "postManually": post_manually},
+    )
+    payload = (data.get("data") or {}).get("setCoursePostPolicy") or {}
+    if payload.get("errors"):
+        raise RuntimeError(f"setCoursePostPolicy failed: {payload['errors']}")
 
 
 TOOL_TAB_PREFIX = "context_external_tool_"
@@ -184,14 +223,22 @@ UNMANAGEABLE_TABS: frozenset[str] = frozenset({"home", "settings"})
 
 
 def _resolve_tab_entry(
-    entry: dict[str, Any], by_id: dict, tools_by_label: dict
-) -> tuple[str | None, Any, str]:
-    """Resolve one tab_configuration entry to ``(dedup_key, live_tab_or_None, desc)``.
+    entry: dict[str, Any], by_id: dict, by_id_ci: dict, by_label: dict
+) -> tuple[Any, str | None, str]:
+    """Resolve one tab_configuration entry to ``(live_tab_or_None, dedup_key, desc)``.
 
+    ``id`` and ``label`` are interchangeable: the user types a single human-readable
+    name in either, and we don't make them know whether it's a built-in tab or an
+    external tool. A non-empty ``label`` is used as the name when present, else ``id``.
+    Resolution order for a plain name:
+
+      1. a built-in tab id, matched exactly then case-insensitively
+         (so ``"Assignments"`` finds the built-in ``"assignments"``);
+      2. any tab's display label, case-insensitively (so ``"Panopto Recordings"`` or
+         ``"BigBlueButton"`` find the external tool / built-in by its sidebar name).
+
+    Legacy numeric ids and literal ``context_external_tool_…`` ids are also accepted.
     Returns ``(None, None, "")`` (after warning) for entries we can't interpret.
-    Built-in tabs are matched by their string id; external-tool tabs are matched by
-    their human-readable ``label`` against the course's live tool tabs, since the
-    cartridge's tool id never matches a live course's Canvas-assigned tool id.
     """
     raw_id = entry.get("id")
     label = entry.get("label")
@@ -200,39 +247,49 @@ def _resolve_tab_entry(
         print(f"  WARNING: course-navigation tab has non-id value {raw_id!r}; skipping")
         return None, None, ""
 
-    is_tool_id = isinstance(raw_id, str) and raw_id.startswith(TOOL_TAB_PREFIX)
-
-    # External tool, matched by human label (the preferred, portable form).
-    if label and (raw_id is None or is_tool_id):
-        norm = str(label).strip().lower()
-        return f"label:{norm}", tools_by_label.get(norm), f"external tool {label!r}"
-
-    # Built-in tab via Canvas's internal numeric constant (legacy/IMSCC form).
+    # Legacy numeric built-in id (IMSCC export form).
     if isinstance(raw_id, int):
         api_id = NUMERIC_TAB_IDS.get(raw_id)
         if api_id is None:
             print(f"  WARNING: unknown course-navigation tab id {raw_id!r}; skipping")
             return None, None, ""
-        return api_id, by_id.get(api_id), f"tab {api_id!r}"
+        tab = by_id.get(api_id)
+        return tab, (tab.id if tab else api_id), repr(api_id)
 
-    # External-tool id with no resolvable label — best-effort direct match.
-    if is_tool_id:
-        return raw_id, by_id.get(raw_id), f"external tool {raw_id!r}"
+    has_label = isinstance(label, str)
+    label_text = label.strip() if has_label else ""
+    id_is_tool = isinstance(raw_id, str) and raw_id.startswith(TOOL_TAB_PREFIX)
 
-    # Built-in tab via string id ("assignments", "modules", ...).
-    if isinstance(raw_id, str) and raw_id:
-        return raw_id, by_id.get(raw_id), f"tab {raw_id!r}"
+    # Importer's unfilled empty-label placeholder on an external-tool tab.
+    if id_is_tool and has_label and not label_text:
+        print(
+            f"  WARNING: external-tool navigation tab {raw_id!r} has no label; add "
+            'label = "<tool name>" in course_settings.toml to position it; skipping'
+        )
+        return None, None, ""
 
-    print("  WARNING: course-navigation entry has neither a usable id nor label; skipping")
-    return None, None, ""
+    # The name to match: a non-empty label wins, otherwise the id.
+    name = label_text or (raw_id if isinstance(raw_id, str) else "")
+    if not name:
+        print("  WARNING: course-navigation entry has neither a usable id nor label; skipping")
+        return None, None, ""
+
+    # A literal external-tool id (provenance / legacy) only matches by exact id.
+    if name.startswith(TOOL_TAB_PREFIX):
+        tab = by_id.get(name)
+        return tab, (tab.id if tab else name), f"external tool {name!r}"
+
+    # A human name: built-in id (exact → case-insensitive), then any tab's label.
+    tab = by_id.get(name) or by_id_ci.get(name.lower()) or by_label.get(name.lower())
+    return tab, (tab.id if tab else name.lower()), repr(name)
 
 
 def sync_tab_configuration(course, tab_config: list[dict[str, Any]]) -> None:
     """Apply course-navigation (left-sidebar) order/visibility from tab_configuration.
 
-    Each entry is a dict in display order: a built-in tab as ``{"id": "assignments"}``
-    or an external tool as ``{"label": "Zoom"}`` (optionally carrying the original
-    ``id`` for provenance). ``hidden`` defaults to false. We can only reorder/hide
+    Each entry is a dict in display order naming one tab via ``id`` or ``label`` (the
+    two are interchangeable — built-in tabs and external tools are both matched by
+    name, case-insensitively); ``hidden`` defaults to false. We can only reorder/hide
     tabs the course already exposes — entries that don't resolve to an existing tab
     (e.g. an external tool not installed in this course) are warned about and skipped,
     never created.
@@ -241,18 +298,20 @@ def sync_tab_configuration(course, tab_config: list[dict[str, Any]]) -> None:
         return
     live = list(course.get_tabs())
     by_id = {tab.id: tab for tab in live}
-    tools_by_label: dict[str, Any] = {}
+    by_id_ci = {str(tid).lower(): tab for tid, tab in by_id.items()}
+    by_label: dict[str, Any] = {}  # all live tabs, keyed by lowercased label
     for tab in live:
-        if str(tab.id).startswith(TOOL_TAB_PREFIX):
-            label = (getattr(tab, "label", "") or "").strip().lower()
-            if label:
-                tools_by_label.setdefault(label, tab)
+        label = (getattr(tab, "label", "") or "").strip().lower()
+        if label:
+            by_label.setdefault(label, tab)
 
     seen: set[str] = set()
-    position = 0
+    # Canvas pins Home at position 1 and rejects any other tab placed there
+    # ("That tab location is invalid"), so movable tabs are numbered from 2 up.
+    position = 1
     for entry in tab_config:
         hidden = bool(entry.get("hidden", False))
-        key, tab, desc = _resolve_tab_entry(entry, by_id, tools_by_label)
+        tab, key, desc = _resolve_tab_entry(entry, by_id, by_id_ci, by_label)
         if key is None:
             continue  # _resolve_tab_entry already warned
         if key in seen:
@@ -263,8 +322,8 @@ def sync_tab_configuration(course, tab_config: list[dict[str, Any]]) -> None:
         if tab is None:
             print(
                 f"  WARNING: course-navigation {desc} is not present in this course "
-                "(e.g. an external tool that isn't installed here, or a tab Canvas does "
-                "not expose); skipping — it will simply not appear in the nav"
+                "(no built-in tab or installed tool by that name); skipping — it will "
+                "not appear in the nav"
             )
             continue
         position += 1

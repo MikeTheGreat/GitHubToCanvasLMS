@@ -165,7 +165,7 @@ You have two options:
 
 ### `canvas.toml`
 
-Place this file in your course repo (or pass `--config` to point elsewhere). Commit it — it contains no secrets.
+Place this file in your course repo's `course_settings/` folder (i.e. `course_settings/canvas.toml`), or pass `--config` to point elsewhere. Commit it — it contains no secrets.
 
 ```toml
 base_url  = "https://yourschool.instructure.com"
@@ -195,7 +195,7 @@ Or put it in a `.env` file in your working directory (loaded automatically on st
 CANVAS_API_TOKEN=your-token-here
 ```
 
-Or put it in the `[auth]` block of `canvas.toml` for local-only use (add `canvas.toml` to `.gitignore` if you do this).
+Or put it in the `[auth]` block of `course_settings/canvas.toml` for local-only use (add `course_settings/canvas.toml` to `.gitignore` if you do this).
 
 ---
 
@@ -210,7 +210,7 @@ Arguments:
   REPO                            Path to the course content repo  [required]
 
 Options:
-  --config PATH                   Path to canvas.toml  [default: <repo>/canvas.toml]
+  --config PATH                   Path to canvas.toml  [default: <repo>/course_settings/canvas.toml]
   --force-uploads                 Re-upload all files even if unchanged since last sync
   --force-overwrite               Skip Canvas timestamp check; always overwrite Canvas
   -t, --target-recursively FILE   Comma-separated files; each is synced plus all resources
@@ -219,6 +219,8 @@ Options:
                                   Runs after -t. Skips the full sync.
   --help                          Show this message and exit.
 ```
+**Warning**: In order to get changes to the left-hand course navigation column you may need to go
+to Settings ➡ Navigation and then click the 'Save' button.
 
 ---
 
@@ -264,7 +266,7 @@ Use both flags together to re-upload and overwrite everything unconditionally.
 Syncs every file in the course repo. Files that haven't changed since their last `last_synced` manifest timestamp are skipped automatically.
 
 ```bash
-# canvas.toml lives inside the repo (default)
+# canvas.toml lives in the repo's course_settings/ folder (default)
 github-to-canvas update ./my-course
 
 # explicit config path
@@ -357,7 +359,7 @@ Usage: github-to-canvas prune [OPTIONS] REPO
   Delete or unpublish Canvas items whose local source file no longer exists.
 
 Options:
-  --config PATH    Path to canvas.toml  [default: <repo>/canvas.toml]
+  --config PATH    Path to canvas.toml  [default: <repo>/course_settings/canvas.toml]
   --delete         Delete the orphaned items from Canvas
   --unpublish      Unpublish (set published=False) the orphaned items on Canvas
   --manifest-only  Remove orphaned entries from the local manifest only; never
@@ -430,12 +432,12 @@ to avoid surprises.
 
 ### `course_settings.toml`
 
-Placed at the **repo root** (not inside `course_settings/`). Drives the course's
-own settings: identity, dates, visibility, grading scheme, assignment groups, and
-policies. Applied before any content is uploaded.
+Placed inside the `course_settings/` folder (i.e. `course_settings/course_settings.toml`).
+Drives the course's own settings: identity, dates, visibility, grading scheme,
+assignment groups, and policies. Applied before any content is uploaded.
 
 ```toml
-# course_settings.toml — repo root, TOML syntax. Every key is optional.
+# course_settings/course_settings.toml — TOML syntax. Every key is optional.
 
 # ── Course identity & display ────────────────────────────────────────────
 title        = "Intro to Programming"          # Canvas course name
@@ -484,6 +486,26 @@ syllabus_course_summary = true    # show the auto course summary on the syllabus
 usage_rights_required   = false   # require usage rights on uploaded files
 enable_course_paces     = false
 
+# ── Course navigation (the left-hand sidebar) ────────────────────────────
+# Inline array of objects, one per tab, in the order they should appear.
+# Name each tab with `id` or `label` (they're interchangeable) — just type the
+# tab's name as you see it in Canvas, whether it's a built-in tab or an external
+# tool; matching is case-insensitive. Omit `hidden` to leave a tab visible.
+#
+# IMPORTANT: this is a top-level key, so it MUST appear BEFORE any [section]
+# or [[section]] header below (e.g. [late_policy], [[grading_standards]]).
+# In TOML, every key after a section header belongs to that section — put
+# tab_configuration here, above them, or it will be silently ignored.
+tab_configuration = [
+    { id = "Home" },
+    { id = "Modules" },
+    { id = "Assignments" },
+    { id = "Grades" },
+    { id = "Zoom" },                    # an external (LTI) tool — same syntax
+    { id = "Files", hidden = true },    # hide a tab from students
+    { id = "Discussions", hidden = true },
+]
+
 # ── Default post policy (when grades become visible to students) ──────────
 [default_post_policy]
 post_manually = true   # true = grades hidden until you post them; false = automatic
@@ -527,30 +549,32 @@ drop_count = 1
 title        = "Exams"
 position     = 2
 group_weight = 60.0
-
-# ── Course navigation (the left-hand sidebar) ────────────────────────────
-# Inline array of objects, one per tab, in the order they should appear.
-# Built-in tabs use a string `id`; external tools use a human `label`
-# (matched by name). Omit `hidden` to leave a tab visible.
-tab_configuration = [
-    { id = "home" },
-    { id = "modules" },
-    { id = "assignments" },
-    { id = "grades" },
-    { label = "Zoom" },                 # an external (LTI) tool, matched by its name
-    { id = "files", hidden = true },    # hide a tab from students
-    { id = "discussions", hidden = true },
-]
 ```
 
-The built-in `id` strings are: `home`, `announcements`, `syllabus`, `modules`,
-`pages`, `assignments`, `quizzes`, `discussions`, `grades`, `people`, `groups`,
-`files`, `outcomes`, `conferences`, `collaborations`, `chat`, and `settings`
-(`home` and `settings` are always shown and can't be moved or hidden). External
-tools are identified by `label` (the tool's name as it appears in Canvas) rather
-than an `id`. Only reordering and hiding are supported — tabs can't be created
-here; any entry that doesn't match a tab already in the course is skipped with a
-warning.
+`id` and `label` are interchangeable, and matching is **case-insensitive** — just
+type the name shown in the sidebar. That name resolves to a built-in tab id first
+(`announcements`, `assignments`, `chat`, `collaborations`, `conferences`,
+`discussions`, `files`, `grades`, `groups`, `modules`, `outcomes`, `pages`,
+`people`, `quizzes`, `syllabus`, `home`, `settings`), and otherwise to any tab's
+display label — which is how external tools (Zoom, Panopto, etc.) and renamed
+built-ins (e.g. Conferences shown as "BigBlueButton") are matched. `home` and
+`settings` are always shown and can't be moved or hidden. Only reordering and
+hiding are supported — tabs can't be created here; any entry that doesn't match a
+tab already in the course is skipped with a warning.
+
+> **Edge case:** because a built-in id is matched before a tool label, if a course
+> happened to have an external tool named exactly like a built-in tab id (e.g. a
+> tool literally named "assignments"), the built-in wins and there's currently no
+> way to target the tool in that clash. This is extremely unlikely; mentioned only
+> for completeness.
+>
+> **Imported external tools may need a label filled in.** Canvas does not export
+> the names of external tools that are used only in course navigation, so on
+> `import` such tabs are written with an empty `label = ""` (their original id is
+> kept for reference) and a warning is printed. Fill in each label with the tool's
+> name as it appears in the destination course — e.g. `{ label = "Panopto", id =
+> "context_external_tool_g…" }` — to position or hide it; until then sync leaves
+> that tab untouched.
 
 ### Syllabus (`course_settings/syllabus.md`)
 

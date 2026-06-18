@@ -1286,10 +1286,12 @@ def test_syllabus_missing_does_not_crash(mock_course, mocker, tmp_path) -> None:
 
 
 def _make_course_with_settings(tmp_path: Path) -> Path:
-    """Minimal course repo with a course_settings.toml."""
+    """Minimal course repo with a course_settings/course_settings.toml."""
     root = tmp_path / "course"
     root.mkdir()
-    (root / "course_settings.toml").write_text(
+    cs_dir = root / "course_settings"
+    cs_dir.mkdir()
+    (cs_dir / "course_settings.toml").write_text(
         'title = "Intro to CS"\n'
         'course_code = "CS101"\n'
         'default_view = "modules"\n'
@@ -1358,9 +1360,9 @@ def test_tab_configuration_string_ids_reorder_and_hide() -> None:
     )
 
     tabs["home"].update.assert_not_called()
-    tabs["modules"].update.assert_called_once_with(position=1, hidden=False)
-    tabs["assignments"].update.assert_called_once_with(position=2, hidden=False)
-    tabs["files"].update.assert_called_once_with(position=3, hidden=True)
+    tabs["modules"].update.assert_called_once_with(position=2, hidden=False)
+    tabs["assignments"].update.assert_called_once_with(position=3, hidden=False)
+    tabs["files"].update.assert_called_once_with(position=4, hidden=True)
 
 
 def test_tab_configuration_external_tool_matched_by_label() -> None:
@@ -1378,7 +1380,7 @@ def test_tab_configuration_external_tool_matched_by_label() -> None:
         ],
     )
 
-    zoom.update.assert_called_once_with(position=2, hidden=True)
+    zoom.update.assert_called_once_with(position=3, hidden=True)
 
 
 def test_tab_configuration_label_match_is_case_insensitive() -> None:
@@ -1388,7 +1390,7 @@ def test_tab_configuration_label_match_is_case_insensitive() -> None:
 
     _capi.sync_tab_configuration(course, [{"label": "panopto video"}])
 
-    tool.update.assert_called_once_with(position=1, hidden=False)
+    tool.update.assert_called_once_with(position=2, hidden=False)
 
 
 def test_tab_configuration_numeric_ids_still_accepted() -> None:
@@ -1398,8 +1400,8 @@ def test_tab_configuration_numeric_ids_still_accepted() -> None:
 
     _capi.sync_tab_configuration(course, [{"id": 10}, {"id": 3}])
 
-    tabs["modules"].update.assert_called_once_with(position=1, hidden=False)
-    tabs["assignments"].update.assert_called_once_with(position=2, hidden=False)
+    tabs["modules"].update.assert_called_once_with(position=2, hidden=False)
+    tabs["assignments"].update.assert_called_once_with(position=3, hidden=False)
 
 
 def test_tab_configuration_warns_on_unresolved_external_tool(capsys) -> None:
@@ -1412,6 +1414,25 @@ def test_tab_configuration_warns_on_unresolved_external_tool(capsys) -> None:
 
     out = capsys.readouterr().out
     assert "Zoom" in out and "WARNING" in out
+
+
+def test_tab_configuration_empty_label_placeholder_warns(capsys) -> None:
+    """An unfilled `label = ""` placeholder is reported and skipped, never matched by id."""
+    tool = _mock_tab("context_external_tool_4567", label="Panopto")
+    course = MagicMock()
+    course.get_tabs.return_value = [_mock_tab("assignments"), tool]
+
+    _capi.sync_tab_configuration(
+        course,
+        [
+            {"id": "assignments"},
+            {"label": "", "id": "context_external_tool_gOLDHASH", "hidden": True},
+        ],
+    )
+
+    tool.update.assert_not_called()
+    out = capsys.readouterr().out
+    assert "no label" in out and "WARNING" in out
 
 
 def test_tab_configuration_warns_on_missing_tab(capsys) -> None:
@@ -1431,6 +1452,30 @@ def test_tab_configuration_warns_on_missing_tab(capsys) -> None:
     assert "WARNING" in out
 
 
+def test_tab_configuration_id_falls_back_to_tool_label() -> None:
+    """id and label are interchangeable: id="<tool name>" resolves to the tool tab."""
+    course = MagicMock()
+    panopto = _mock_tab("context_external_tool_25392", label="Panopto Recordings")
+    course.get_tabs.return_value = [_mock_tab("assignments"), panopto]
+
+    _capi.sync_tab_configuration(
+        course, [{"id": "assignments"}, {"id": "Panopto Recordings"}]
+    )
+
+    panopto.update.assert_called_once_with(position=3, hidden=False)
+
+
+def test_tab_configuration_id_is_case_insensitive_for_builtins() -> None:
+    """A capitalized id like "Assignments" still matches the built-in "assignments"."""
+    course = _fake_course_with_tabs("assignments", "modules")
+    tabs = {t.id: t for t in course.get_tabs.return_value}
+
+    _capi.sync_tab_configuration(course, [{"id": "Assignments"}, {"label": "Modules"}])
+
+    tabs["assignments"].update.assert_called_once_with(position=2, hidden=False)
+    tabs["modules"].update.assert_called_once_with(position=3, hidden=False)
+
+
 def test_tab_configuration_warns_on_unknown_numeric_id(capsys) -> None:
     """An unrecognized numeric tab id is warned + skipped, not applied."""
     course = _fake_course_with_tabs("home")
@@ -1448,7 +1493,7 @@ def test_tab_configuration_dedups_collaborations() -> None:
 
     _capi.sync_tab_configuration(course, [{"id": 16}, {"id": 18, "hidden": True}])
 
-    tab.update.assert_called_once_with(position=1, hidden=False)
+    tab.update.assert_called_once_with(position=2, hidden=False)
 
 
 def test_tab_configuration_synced_end_to_end(mock_course, mocker, tmp_path) -> None:
@@ -1456,8 +1501,10 @@ def test_tab_configuration_synced_end_to_end(mock_course, mocker, tmp_path) -> N
     mocker.patch("github_to_canvas.manifest.flush")
     root = tmp_path / "course"
     root.mkdir()
+    cs_dir = root / "course_settings"
+    cs_dir.mkdir()
     # JSON string, exactly as the importer writes it (TOML escapes the inner quotes).
-    (root / "course_settings.toml").write_text(
+    (cs_dir / "course_settings.toml").write_text(
         'title = "Intro to CS"\n'
         'tab_configuration = "[{\\"id\\":3},{\\"id\\":10,\\"hidden\\":true}]"\n'
     )
@@ -1467,8 +1514,8 @@ def test_tab_configuration_synced_end_to_end(mock_course, mocker, tmp_path) -> N
 
     run_sync(_config(), root)
 
-    assignments_tab.update.assert_called_once_with(position=1, hidden=False)
-    modules_tab.update.assert_called_once_with(position=2, hidden=True)
+    assignments_tab.update.assert_called_once_with(position=2, hidden=False)
+    modules_tab.update.assert_called_once_with(position=3, hidden=True)
 
 
 def test_tab_configuration_array_of_tables_end_to_end(mock_course, mocker, tmp_path) -> None:
@@ -1476,7 +1523,9 @@ def test_tab_configuration_array_of_tables_end_to_end(mock_course, mocker, tmp_p
     mocker.patch("github_to_canvas.manifest.flush")
     root = tmp_path / "course"
     root.mkdir()
-    (root / "course_settings.toml").write_text(
+    cs_dir = root / "course_settings"
+    cs_dir.mkdir()
+    (cs_dir / "course_settings.toml").write_text(
         'title = "Intro to CS"\n'
         "\n"
         "[[tab_configuration]]\n"
@@ -1493,8 +1542,88 @@ def test_tab_configuration_array_of_tables_end_to_end(mock_course, mocker, tmp_p
 
     run_sync(_config(), root)
 
-    assignments_tab.update.assert_called_once_with(position=1, hidden=False)
-    zoom_tab.update.assert_called_once_with(position=2, hidden=True)
+    assignments_tab.update.assert_called_once_with(position=2, hidden=False)
+    zoom_tab.update.assert_called_once_with(position=3, hidden=True)
+
+
+def test_tab_configuration_misplaced_under_section_warns(mock_course, mocker, tmp_path, capsys) -> None:
+    """tab_configuration accidentally nested under a [section] is detected and warned."""
+    mocker.patch("github_to_canvas.manifest.flush")
+    root = tmp_path / "course"
+    root.mkdir()
+    cs_dir = root / "course_settings"
+    cs_dir.mkdir()
+    # The classic TOML trap: a top-level key written AFTER a [section] header, so
+    # TOML attaches it to that section instead.
+    (cs_dir / "course_settings.toml").write_text(
+        'title = "Intro to CS"\n'
+        "\n"
+        "[late_policy]\n"
+        "missing_submission_deduction_enabled = false\n"
+        "\n"
+        "tab_configuration = [\n"
+        '    { id = "modules" },\n'
+        "]\n"
+    )
+    modules_tab = _mock_tab("modules")
+    mock_course.get_tabs.return_value = [modules_tab]
+
+    run_sync(_config(), root)
+
+    modules_tab.update.assert_not_called()  # nested → never applied
+    out = capsys.readouterr().out
+    assert "late_policy.tab_configuration" in out and "top level" in out
+
+
+# ---------------------------------------------------------------------------
+# Scenario 13c: Post policy via GraphQL (not REST)
+# ---------------------------------------------------------------------------
+
+
+def _graphql_response(payload: dict) -> MagicMock:
+    resp = MagicMock()
+    resp.json.return_value = payload
+    return resp
+
+
+def test_update_post_policy_uses_graphql_mutation() -> None:
+    """Course post policy goes through the GraphQL endpoint, not a REST route."""
+    course = MagicMock()
+    course.id = 42
+    course._requester.request.return_value = _graphql_response(
+        {"data": {"setCoursePostPolicy": {"postPolicy": {"postManually": True}, "errors": None}}}
+    )
+
+    _capi.update_post_policy(course, True)
+
+    args, kwargs = course._requester.request.call_args
+    assert args[0] == "POST" and args[1] == "graphql"
+    assert kwargs["_url"] == "graphql"  # hits /api/graphql, not /api/v1/...
+    assert kwargs["json"]["variables"] == {"courseId": 42, "postManually": True}
+    assert "setCoursePostPolicy" in kwargs["json"]["query"]
+
+
+def test_update_post_policy_raises_on_mutation_error() -> None:
+    """Mutation-level errors (HTTP 200 with an errors array) surface as an exception."""
+    course = MagicMock()
+    course.id = 7
+    course._requester.request.return_value = _graphql_response(
+        {"data": {"setCoursePostPolicy": {"errors": [{"message": "not allowed"}]}}}
+    )
+
+    with pytest.raises(RuntimeError, match="setCoursePostPolicy"):
+        _capi.update_post_policy(course, False)
+
+
+def test_graphql_raises_on_top_level_errors() -> None:
+    """GraphQL transport-level errors are raised rather than silently ignored."""
+    course = MagicMock()
+    course._requester.request.return_value = _graphql_response(
+        {"errors": [{"message": "Field 'x' doesn't exist"}]}
+    )
+
+    with pytest.raises(RuntimeError, match="GraphQL error"):
+        _capi.graphql(course, "query {}", {})
 
 
 # ---------------------------------------------------------------------------

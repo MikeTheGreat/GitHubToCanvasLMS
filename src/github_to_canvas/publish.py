@@ -86,7 +86,7 @@ THEME_FEATURES = [
 
 def load_site_name(repo: Path) -> str:
     """Course name from course_settings.toml, falling back to the repo dir name."""
-    settings_path = repo / "course_settings.toml"
+    settings_path = repo / "course_settings" / "course_settings.toml"
     if settings_path.exists():
         with settings_path.open("rb") as fh:
             settings = tomllib.load(fh)

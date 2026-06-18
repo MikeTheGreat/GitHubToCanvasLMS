@@ -29,7 +29,9 @@ def test_load_site_name_falls_back_to_repo_dir():
 
 
 def test_load_site_name_reads_course_settings(tmp_path):
-    (tmp_path / "course_settings.toml").write_text('title = "Intro to CS"\n')
+    cs_dir = tmp_path / "course_settings"
+    cs_dir.mkdir()
+    (cs_dir / "course_settings.toml").write_text('title = "Intro to CS"\n')
     assert publish.load_site_name(tmp_path) == "Intro to CS"
 
 
