@@ -1323,6 +1323,181 @@ def test_course_settings_missing_does_not_crash(mock_course, mocker, tmp_path) -
 
 
 # ---------------------------------------------------------------------------
+# Scenario 13b: Course-navigation (tab_configuration) sync
+# ---------------------------------------------------------------------------
+
+from github_to_canvas import canvas_api as _capi  # noqa: E402
+
+
+def _mock_tab(tab_id: str, label: str | None = None) -> MagicMock:
+    t = MagicMock()
+    t.id = tab_id
+    t.label = label if label is not None else tab_id.title()
+    return t
+
+
+def _fake_course_with_tabs(*tab_ids: str) -> MagicMock:
+    course = MagicMock()
+    course.get_tabs.return_value = [_mock_tab(tid) for tid in tab_ids]
+    return course
+
+
+def test_tab_configuration_string_ids_reorder_and_hide() -> None:
+    """The repo format uses string ids; position is 1-based; hidden passes through."""
+    course = _fake_course_with_tabs("home", "assignments", "modules", "files")
+    tabs = {t.id: t for t in course.get_tabs.return_value}
+
+    _capi.sync_tab_configuration(
+        course,
+        [
+            {"id": "home"},                  # unmanageable → skipped
+            {"id": "modules"},
+            {"id": "assignments"},
+            {"id": "files", "hidden": True},
+        ],
+    )
+
+    tabs["home"].update.assert_not_called()
+    tabs["modules"].update.assert_called_once_with(position=1, hidden=False)
+    tabs["assignments"].update.assert_called_once_with(position=2, hidden=False)
+    tabs["files"].update.assert_called_once_with(position=3, hidden=True)
+
+
+def test_tab_configuration_external_tool_matched_by_label() -> None:
+    """External-tool tabs are matched by label, not by the (course-specific) id."""
+    course = MagicMock()
+    zoom = _mock_tab("context_external_tool_4567", label="Zoom")  # live, real Canvas id
+    course.get_tabs.return_value = [_mock_tab("assignments"), zoom]
+
+    _capi.sync_tab_configuration(
+        course,
+        [
+            {"id": "assignments"},
+            # repo carries the original cartridge id, but matching is by label:
+            {"label": "Zoom", "id": "context_external_tool_gOLDHASH", "hidden": True},
+        ],
+    )
+
+    zoom.update.assert_called_once_with(position=2, hidden=True)
+
+
+def test_tab_configuration_label_match_is_case_insensitive() -> None:
+    course = MagicMock()
+    tool = _mock_tab("context_external_tool_99", label="Panopto Video")
+    course.get_tabs.return_value = [tool]
+
+    _capi.sync_tab_configuration(course, [{"label": "panopto video"}])
+
+    tool.update.assert_called_once_with(position=1, hidden=False)
+
+
+def test_tab_configuration_numeric_ids_still_accepted() -> None:
+    """Legacy numeric ids (IMSCC escaped-JSON form) remain supported for back-compat."""
+    course = _fake_course_with_tabs("modules", "assignments")
+    tabs = {t.id: t for t in course.get_tabs.return_value}
+
+    _capi.sync_tab_configuration(course, [{"id": 10}, {"id": 3}])
+
+    tabs["modules"].update.assert_called_once_with(position=1, hidden=False)
+    tabs["assignments"].update.assert_called_once_with(position=2, hidden=False)
+
+
+def test_tab_configuration_warns_on_unresolved_external_tool(capsys) -> None:
+    """A tool whose label isn't present in the course is warned + skipped, not created."""
+    course = _fake_course_with_tabs("assignments")  # no tool tabs at all
+
+    _capi.sync_tab_configuration(
+        course, [{"label": "Zoom", "id": "context_external_tool_gOLDHASH"}]
+    )
+
+    out = capsys.readouterr().out
+    assert "Zoom" in out and "WARNING" in out
+
+
+def test_tab_configuration_warns_on_missing_tab(capsys) -> None:
+    """A tab not present in the course (e.g. an imported LTI tool tab) is warned + skipped."""
+    course = _fake_course_with_tabs("home", "assignments")
+
+    _capi.sync_tab_configuration(
+        course,
+        [
+            {"id": 3},  # assignments — exists
+            {"id": "context_external_tool_gdeadbeef", "hidden": True},  # not present
+        ],
+    )
+
+    out = capsys.readouterr().out
+    assert "context_external_tool_gdeadbeef" in out
+    assert "WARNING" in out
+
+
+def test_tab_configuration_warns_on_unknown_numeric_id(capsys) -> None:
+    """An unrecognized numeric tab id is warned + skipped, not applied."""
+    course = _fake_course_with_tabs("home")
+
+    _capi.sync_tab_configuration(course, [{"id": 999}])
+
+    out = capsys.readouterr().out
+    assert "999" in out and "WARNING" in out
+
+
+def test_tab_configuration_dedups_collaborations() -> None:
+    """Ids 16 and 18 both resolve to 'collaborations'; first occurrence wins."""
+    course = _fake_course_with_tabs("collaborations")
+    tab = course.get_tabs.return_value[0]
+
+    _capi.sync_tab_configuration(course, [{"id": 16}, {"id": 18, "hidden": True}])
+
+    tab.update.assert_called_once_with(position=1, hidden=False)
+
+
+def test_tab_configuration_synced_end_to_end(mock_course, mocker, tmp_path) -> None:
+    """tab_configuration in course_settings.toml reaches the Tabs API via run_sync."""
+    mocker.patch("github_to_canvas.manifest.flush")
+    root = tmp_path / "course"
+    root.mkdir()
+    # JSON string, exactly as the importer writes it (TOML escapes the inner quotes).
+    (root / "course_settings.toml").write_text(
+        'title = "Intro to CS"\n'
+        'tab_configuration = "[{\\"id\\":3},{\\"id\\":10,\\"hidden\\":true}]"\n'
+    )
+    assignments_tab = _mock_tab("assignments")
+    modules_tab = _mock_tab("modules")
+    mock_course.get_tabs.return_value = [assignments_tab, modules_tab]
+
+    run_sync(_config(), root)
+
+    assignments_tab.update.assert_called_once_with(position=1, hidden=False)
+    modules_tab.update.assert_called_once_with(position=2, hidden=True)
+
+
+def test_tab_configuration_array_of_tables_end_to_end(mock_course, mocker, tmp_path) -> None:
+    """The new [[tab_configuration]] array-of-tables form drives the Tabs API."""
+    mocker.patch("github_to_canvas.manifest.flush")
+    root = tmp_path / "course"
+    root.mkdir()
+    (root / "course_settings.toml").write_text(
+        'title = "Intro to CS"\n'
+        "\n"
+        "[[tab_configuration]]\n"
+        'id = "assignments"\n'
+        "\n"
+        "[[tab_configuration]]\n"
+        'label = "Zoom"\n'
+        'id = "context_external_tool_gOLDHASH"\n'
+        "hidden = true\n"
+    )
+    assignments_tab = _mock_tab("assignments")
+    zoom_tab = _mock_tab("context_external_tool_4567", label="Zoom")
+    mock_course.get_tabs.return_value = [assignments_tab, zoom_tab]
+
+    run_sync(_config(), root)
+
+    assignments_tab.update.assert_called_once_with(position=1, hidden=False)
+    zoom_tab.update.assert_called_once_with(position=2, hidden=True)
+
+
+# ---------------------------------------------------------------------------
 # Scenario 14: course_settings/ folder not processed as Canvas Pages
 # ---------------------------------------------------------------------------
 

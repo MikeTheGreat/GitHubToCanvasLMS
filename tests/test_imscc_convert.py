@@ -8,6 +8,7 @@ import pytest
 from github_to_canvas.imscc_import import (
     TempEntry,
     _build_frontmatter,
+    _convert_tab_configuration,
     _extract_html_body,
     _parse_assignment_groups,
     _parse_context,
@@ -37,6 +38,51 @@ FIXTURE_DIR = Path(__file__).parent / "fixtures" / "imscc"
 def test_extract_body_strips_wrapper() -> None:
     html = "<html><head><title>T</title></head><body><p>Hello</p></body></html>"
     assert _extract_html_body(html) == "<p>Hello</p>"
+
+
+# ---------------------------------------------------------------------------
+# _convert_tab_configuration
+# ---------------------------------------------------------------------------
+
+
+def test_convert_tab_configuration_builtins_and_hidden() -> None:
+    """Numeric ids become string ids; hidden=true only for hidden tabs; order kept."""
+    raw = '[{"id":0},{"id":3},{"id":10,"hidden":true}]'
+    assert _convert_tab_configuration(raw, {}) == [
+        {"id": "home"},
+        {"id": "assignments"},
+        {"id": "modules", "hidden": True},
+    ]
+
+
+def test_convert_tab_configuration_external_tool_resolves_label() -> None:
+    """An external tool gets a human label (from BLTI title) plus the id for provenance."""
+    raw = '[{"id":3},{"id":"context_external_tool_g22ae550","hidden":true}]'
+    tool_titles = {"g22ae550": "Zoom"}
+    assert _convert_tab_configuration(raw, tool_titles) == [
+        {"id": "assignments"},
+        {"label": "Zoom", "id": "context_external_tool_g22ae550", "hidden": True},
+    ]
+
+
+def test_convert_tab_configuration_unresolved_tool_keeps_id(capsys) -> None:
+    """A tool with no resolvable title keeps just its id and warns."""
+    raw = '[{"id":"context_external_tool_gunknown"}]'
+    result = _convert_tab_configuration(raw, {})
+    assert result == [{"id": "context_external_tool_gunknown"}]
+    assert "WARNING" in capsys.readouterr().out
+
+
+def test_convert_tab_configuration_unknown_numeric_id_warns(capsys) -> None:
+    raw = '[{"id":999}]'
+    result = _convert_tab_configuration(raw, {})
+    assert result == [{"id": 999}]
+    assert "999" in capsys.readouterr().out
+
+
+def test_convert_tab_configuration_invalid_json_drops(capsys) -> None:
+    assert _convert_tab_configuration("not json", {}) == []
+    assert "WARNING" in capsys.readouterr().out
 
 
 def test_extract_body_no_wrapper_returns_as_is() -> None:

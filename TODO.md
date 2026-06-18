@@ -64,7 +64,6 @@ These files are produced by the importer but have no upload path yet:
 
 - **`course_settings/events.md`** — Calendar events. Requires parsing `## Title` / `**Date:**` sections back into structured event data and calling `canvas.create_calendar_event()` per event. Complex (deduplication, update-vs-create). See UPLOADER_CHANGES.md §3.
 - **`course_settings/files_meta.toml`** — File visibility (`locked`, `hidden`, `display_name`, `unlock_at`) and folder visibility. Requires Canvas file IDs from the manifest (needs matching by `local_path` or `display_name`). Import-side fix also needed: `_write_files_meta_toml()` should write `local_path` alongside each file entry. See UPLOADER_CHANGES.md §16.
-- **Tab configuration** in `course_settings.toml` — `tab_configuration` JSON string. Call `tab.update(hidden=...)` per tab via `course.list_tabs()`. See UPLOADER_CHANGES.md §1f.
 
 ## Round-trip fidelity gaps (import → sync)
 

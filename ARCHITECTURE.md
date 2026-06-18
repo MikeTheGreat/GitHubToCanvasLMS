@@ -343,6 +343,7 @@ Boolean fields (`true`/`false`) are stored as TOML booleans. Numeric fields are 
 - **`course_settings.toml` at root** — all course-wide settings (not in `course_settings/` subdir) so they are immediately visible.
 - **Graded discussion metadata captured** — `points_possible`, `due_at`, etc. written to frontmatter even if not currently used by sync.
 - **Quiz question slugification** — question filenames are derived from the QTI `title` attribute via `_slugify()`. Special characters (e.g. `+`) are stripped, so "What is 2+2?" becomes `what-is-22.md`.
+- **Course-navigation tabs humanised** — `course_settings.xml`'s `tab_configuration` (an escaped JSON string of Canvas-internal numeric ids and `context_external_tool_<resource-id>` ids) is rewritten into a readable `[[tab_configuration]]` array. Numeric ids become string ids (`3` → `id = "assignments"`); external-tool ids are resolved to a human `label` via the tool's BLTI `<blti:title>` (with the original id kept for provenance). A tool whose title can't be resolved keeps its id and emits a warning. See `_convert_tab_configuration()`.
 
 ### Console output style
 
@@ -747,7 +748,7 @@ These files are never uploaded as Canvas Pages. Each has a dedicated upload path
 
 | File | Upload behaviour |
 | --- | --- |
-| `course_settings.toml` (repo root) | Applied via `course.update()` for flat metadata; dedicated API calls for grading standards, assignment groups, late policy, post policy, and rubrics |
+| `course_settings.toml` (repo root) | Applied via `course.update()` for flat metadata; dedicated API calls for grading standards, assignment groups, late policy, post policy, course-navigation tabs, and rubrics |
 | `course_settings/syllabus.md` | Body converted to HTML and set as `course.syllabus_body` via `course.update()` |
 | `course_settings/events.md` | Not yet uploaded (future feature) |
 | `course_settings/rubrics.toml` | Each rubric created via `course.create_rubric()` if title not already present |
@@ -761,6 +762,11 @@ The following sections are handled separately from the flat `course.update()` ca
 - `[[assignment_groups]]` — each entry created or updated via `course.create_assignment_group()` / `ag.edit()`, matched by name; processed in `position` order
 - `[late_policy]` — applied via `PATCH /api/v1/courses/:id/late_policy` (raw requester call, not wrapped in `canvasapi`)
 - `[default_post_policy]` — applied via `PUT /api/v1/courses/:id/post_policies` (raw requester call)
+- `tab_configuration` — controls the **course-navigation sidebar** (the left-hand "Assignments", "Modules", … links). An **array of tables** (`[[tab_configuration]]`), one entry per tab, in display order. Each entry is applied via `tab.update(position=…, hidden=…)` against `course.get_tabs()` using 1-based positions; `hidden` defaults to false. Two kinds of entry:
+  - **Built-in tabs** — `id = "assignments"`, using the string ids the live Tabs API exposes (`home`, `syllabus`, `pages`, `assignments`, `quizzes`, `grades`, `people`, `discussions`, `modules`, `files`, `announcements`, `outcomes`, …). Matched by id.
+  - **External-tool tabs** — `label = "Zoom"`, optionally carrying the original `id = "context_external_tool_g…"` for provenance. Matched **by label** (case-insensitive) against the course's installed tool tabs, because the cartridge's tool id never equals a live course's Canvas-assigned tool id (see the import note below). The retained `id` is *not* used for matching.
+
+  Only reordering and hiding are supported — new tabs cannot be created. Entries that don't resolve to a tab already present in the course (e.g. an external tool not installed here, or a built-in tab Canvas doesn't expose) are **warned about and skipped**, never created. The unmovable `home` and `settings` tabs are silently left alone. For backward compatibility the sync also accepts the legacy form: a single JSON-encoded string using Canvas's internal **numeric** tab ids (`0`=home, `3`=assignments, …; see `NUMERIC_TAB_IDS` in `canvas_api.py`), which is what older imports/exports produced.
 
 Read-only or infrastructure fields (`storage_quota`, `root_account_uuid`, `image_identifier_ref`, `last_modified`, `copyright_restrictions`, `copyright_description`, and others) are present in the TOML for round-trip fidelity but are silently ignored by the uploader.
 

@@ -527,7 +527,30 @@ drop_count = 1
 title        = "Exams"
 position     = 2
 group_weight = 60.0
+
+# ── Course navigation (the left-hand sidebar) ────────────────────────────
+# Inline array of objects, one per tab, in the order they should appear.
+# Built-in tabs use a string `id`; external tools use a human `label`
+# (matched by name). Omit `hidden` to leave a tab visible.
+tab_configuration = [
+    { id = "home" },
+    { id = "modules" },
+    { id = "assignments" },
+    { id = "grades" },
+    { label = "Zoom" },                 # an external (LTI) tool, matched by its name
+    { id = "files", hidden = true },    # hide a tab from students
+    { id = "discussions", hidden = true },
+]
 ```
+
+The built-in `id` strings are: `home`, `announcements`, `syllabus`, `modules`,
+`pages`, `assignments`, `quizzes`, `discussions`, `grades`, `people`, `groups`,
+`files`, `outcomes`, `conferences`, `collaborations`, `chat`, and `settings`
+(`home` and `settings` are always shown and can't be moved or hidden). External
+tools are identified by `label` (the tool's name as it appears in Canvas) rather
+than an `id`. Only reordering and hiding are supported — tabs can't be created
+here; any entry that doesn't match a tab already in the course is skipped with a
+warning.
 
 ### Syllabus (`course_settings/syllabus.md`)
 

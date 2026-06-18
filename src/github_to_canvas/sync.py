@@ -1,6 +1,7 @@
 """Main sync pipeline."""
 from __future__ import annotations
 
+import json
 import re
 import tomllib
 from collections import deque
@@ -219,6 +220,25 @@ def sync_course_settings(
                 capi.sync_rubrics(course, rubrics)
             except Exception as exc:
                 print(f"  WARNING: rubrics sync failed: {exc}")
+
+    # Course-navigation (left sidebar) order/visibility. Stored as a JSON string
+    # because that's the raw form Canvas exports in course_settings.xml.
+    tab_config_raw = settings.get("tab_configuration")
+    if tab_config_raw:
+        try:
+            tab_config = (
+                json.loads(tab_config_raw)
+                if isinstance(tab_config_raw, str)
+                else tab_config_raw
+            )
+        except (json.JSONDecodeError, TypeError) as exc:
+            print(f"  WARNING: tab_configuration is not valid JSON; skipping: {exc}")
+            tab_config = None
+        if tab_config:
+            try:
+                capi.sync_tab_configuration(course, tab_config)
+            except Exception as exc:
+                print(f"  WARNING: tab configuration sync failed: {exc}")
 
     manifest_lib.record(manifest, manifest_path, local_key, 0, "course_settings")
 

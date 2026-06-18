@@ -16,6 +16,8 @@ from urllib.parse import unquote
 import pypandoc
 import tomli_w
 
+from .canvas_api import NUMERIC_TAB_IDS, TOOL_TAB_PREFIX
+
 
 # ---------------------------------------------------------------------------
 # Data structures
@@ -1807,6 +1809,86 @@ def _write_files_meta_toml(files_meta: dict[str, Any], output_dir: Path) -> None
     print("Writing: course_settings/files_meta.toml")
 
 
+def _convert_tab_configuration(
+    raw: Any, tool_titles: dict[str, str]
+) -> list[dict[str, Any]]:
+    """Convert Canvas's `tab_configuration` JSON string into a human-readable list.
+
+    Canvas exports an escaped JSON string of ``{"id": <int|str>, "hidden": <bool>}``
+    entries, where built-in tabs use internal numeric ids and external tools use
+    ``context_external_tool_<imscc-resource-id>``.  We rewrite this into an ordered
+    list of dicts suitable for the ``[[tab_configuration]]`` array-of-tables:
+
+    - built-in tabs become ``{"id": "assignments"}`` (the live Tabs API string id);
+    - external tools become ``{"label": "Zoom", "id": "context_external_tool_g…"}``
+      where the label is resolved from the cartridge's BLTI title (``tool_titles``,
+      keyed by resource id) and the id is retained for provenance;
+    - ``hidden = true`` is emitted only for hidden tabs (omitted otherwise);
+    - display order is preserved.
+    """
+    if isinstance(raw, str):
+        try:
+            entries = json.loads(raw)
+        except (json.JSONDecodeError, TypeError):
+            print("  WARNING: course tab_configuration is not valid JSON; dropping it")
+            return []
+    elif isinstance(raw, list):
+        entries = raw
+    else:
+        return []
+
+    result: list[dict[str, Any]] = []
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        raw_id = entry.get("id")
+        out: dict[str, Any] = {}
+
+        if isinstance(raw_id, bool):
+            continue
+        if isinstance(raw_id, int):
+            api_id = NUMERIC_TAB_IDS.get(raw_id)
+            if api_id is None:
+                print(
+                    f"  WARNING: unknown course-navigation tab id {raw_id!r}; "
+                    "keeping the numeric id"
+                )
+                out["id"] = raw_id
+            else:
+                out["id"] = api_id
+        elif isinstance(raw_id, str) and raw_id.startswith(TOOL_TAB_PREFIX):
+            resource_id = raw_id[len(TOOL_TAB_PREFIX):]
+            label = tool_titles.get(resource_id)
+            if label:
+                out["label"] = label
+            else:
+                print(
+                    f"  WARNING: could not resolve a name for external-tool tab "
+                    f"{raw_id!r}; keeping the id only (sync won't be able to match it)"
+                )
+            out["id"] = raw_id
+        elif isinstance(raw_id, str) and raw_id:
+            out["id"] = raw_id
+        else:
+            continue
+
+        if entry.get("hidden"):
+            out["hidden"] = True
+        result.append(out)
+    return result
+
+
+def _resolve_tool_titles(
+    imscc_dir: Path, temp_manifest: dict[str, TempEntry]
+) -> dict[str, str]:
+    """Map each LTI resource id to its human-readable BLTI title."""
+    titles: dict[str, str] = {}
+    for ident, entry in temp_manifest.items():
+        if entry.category == "lti" and entry.imscc_path:
+            titles[ident] = _title_from_xml_element(imscc_dir / entry.imscc_path, "title")
+    return titles
+
+
 def _write_course_settings_toml(
     course_settings: dict[str, Any],
     manifest_meta: dict[str, str],
@@ -1829,7 +1911,7 @@ def _write_course_settings_toml(
 
     # Remaining flat course settings, excluding nested sections handled below
     skip = {"title", "course_code", "default_view", "license", "start_at", "conclude_at",
-            "default_post_policy"}
+            "default_post_policy", "tab_configuration"}
     for key, val in course_settings.items():
         if key not in data and key not in skip:
             data[key] = val
@@ -1845,6 +1927,9 @@ def _write_course_settings_toml(
         data["grading_standards"] = grading_standards
     if assignment_groups:
         data["assignment_groups"] = assignment_groups
+    tab_configuration = course_settings.get("tab_configuration")
+    if tab_configuration:
+        data["tab_configuration"] = tab_configuration
 
     (output_dir / "course_settings.toml").write_text(
         tomli_w.dumps(data), encoding="utf-8"
@@ -1943,6 +2028,11 @@ def create_course_settings(
     imscc_cs_dir = imscc_dir / "course_settings"
     manifest_meta = _parse_manifest_metadata(imscc_dir / "imsmanifest.xml")
     course_settings = _parse_course_settings_full(imscc_cs_dir / "course_settings.xml")
+    if "tab_configuration" in course_settings:
+        tool_titles = _resolve_tool_titles(imscc_dir, temp_manifest)
+        course_settings["tab_configuration"] = _convert_tab_configuration(
+            course_settings["tab_configuration"], tool_titles
+        )
     grading_standards = _parse_grading_standards(imscc_cs_dir / "grading_standards.xml")
     assignment_groups = _parse_assignment_groups(imscc_cs_dir / "assignment_groups.xml")
     late_policy = _parse_late_policy(imscc_cs_dir / "late_policy.xml")

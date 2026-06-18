@@ -151,6 +151,129 @@ def update_post_policy(course, post_manually: bool) -> None:
     )
 
 
+TOOL_TAB_PREFIX = "context_external_tool_"
+
+# The repo's `tab_configuration` uses the live Tabs API's string ids for built-in
+# tabs ("assignments", "modules", ...). For backward compatibility we also accept
+# Canvas's internal numeric tab constants (the form found in an IMSCC export's
+# course_settings.xml) and translate them here.
+NUMERIC_TAB_IDS: dict[int, str] = {
+    0: "home",
+    1: "syllabus",
+    2: "pages",
+    3: "assignments",
+    4: "quizzes",
+    5: "grades",
+    6: "people",
+    7: "groups",
+    8: "discussions",
+    9: "chat",
+    10: "modules",
+    11: "files",
+    12: "conferences",
+    13: "settings",
+    14: "announcements",
+    15: "outcomes",
+    16: "collaborations",
+    18: "collaborations",  # "new" collaborations tab; same live id as 16
+}
+
+# Canvas refuses to move or hide these (see canvasapi Tab.update docstring), so we
+# skip update calls for them rather than emitting a warning on every sync.
+UNMANAGEABLE_TABS: frozenset[str] = frozenset({"home", "settings"})
+
+
+def _resolve_tab_entry(
+    entry: dict[str, Any], by_id: dict, tools_by_label: dict
+) -> tuple[str | None, Any, str]:
+    """Resolve one tab_configuration entry to ``(dedup_key, live_tab_or_None, desc)``.
+
+    Returns ``(None, None, "")`` (after warning) for entries we can't interpret.
+    Built-in tabs are matched by their string id; external-tool tabs are matched by
+    their human-readable ``label`` against the course's live tool tabs, since the
+    cartridge's tool id never matches a live course's Canvas-assigned tool id.
+    """
+    raw_id = entry.get("id")
+    label = entry.get("label")
+
+    if isinstance(raw_id, bool):  # guard: bool is a subclass of int
+        print(f"  WARNING: course-navigation tab has non-id value {raw_id!r}; skipping")
+        return None, None, ""
+
+    is_tool_id = isinstance(raw_id, str) and raw_id.startswith(TOOL_TAB_PREFIX)
+
+    # External tool, matched by human label (the preferred, portable form).
+    if label and (raw_id is None or is_tool_id):
+        norm = str(label).strip().lower()
+        return f"label:{norm}", tools_by_label.get(norm), f"external tool {label!r}"
+
+    # Built-in tab via Canvas's internal numeric constant (legacy/IMSCC form).
+    if isinstance(raw_id, int):
+        api_id = NUMERIC_TAB_IDS.get(raw_id)
+        if api_id is None:
+            print(f"  WARNING: unknown course-navigation tab id {raw_id!r}; skipping")
+            return None, None, ""
+        return api_id, by_id.get(api_id), f"tab {api_id!r}"
+
+    # External-tool id with no resolvable label — best-effort direct match.
+    if is_tool_id:
+        return raw_id, by_id.get(raw_id), f"external tool {raw_id!r}"
+
+    # Built-in tab via string id ("assignments", "modules", ...).
+    if isinstance(raw_id, str) and raw_id:
+        return raw_id, by_id.get(raw_id), f"tab {raw_id!r}"
+
+    print("  WARNING: course-navigation entry has neither a usable id nor label; skipping")
+    return None, None, ""
+
+
+def sync_tab_configuration(course, tab_config: list[dict[str, Any]]) -> None:
+    """Apply course-navigation (left-sidebar) order/visibility from tab_configuration.
+
+    Each entry is a dict in display order: a built-in tab as ``{"id": "assignments"}``
+    or an external tool as ``{"label": "Zoom"}`` (optionally carrying the original
+    ``id`` for provenance). ``hidden`` defaults to false. We can only reorder/hide
+    tabs the course already exposes — entries that don't resolve to an existing tab
+    (e.g. an external tool not installed in this course) are warned about and skipped,
+    never created.
+    """
+    if not tab_config:
+        return
+    live = list(course.get_tabs())
+    by_id = {tab.id: tab for tab in live}
+    tools_by_label: dict[str, Any] = {}
+    for tab in live:
+        if str(tab.id).startswith(TOOL_TAB_PREFIX):
+            label = (getattr(tab, "label", "") or "").strip().lower()
+            if label:
+                tools_by_label.setdefault(label, tab)
+
+    seen: set[str] = set()
+    position = 0
+    for entry in tab_config:
+        hidden = bool(entry.get("hidden", False))
+        key, tab, desc = _resolve_tab_entry(entry, by_id, tools_by_label)
+        if key is None:
+            continue  # _resolve_tab_entry already warned
+        if key in seen:
+            continue  # first occurrence wins
+        seen.add(key)
+        if key in UNMANAGEABLE_TABS:
+            continue  # Canvas pins home/settings; nothing to do
+        if tab is None:
+            print(
+                f"  WARNING: course-navigation {desc} is not present in this course "
+                "(e.g. an external tool that isn't installed here, or a tab Canvas does "
+                "not expose); skipping — it will simply not appear in the nav"
+            )
+            continue
+        position += 1
+        try:
+            tab.update(position=position, hidden=hidden)
+        except Exception as exc:
+            print(f"  WARNING: could not update course-navigation {desc}: {exc}")
+
+
 def get_canvas_updated_at(course, canvas_type: str, identifier) -> datetime | None:
     """Return the updated_at datetime for an existing Canvas item, or None if unavailable.
 
