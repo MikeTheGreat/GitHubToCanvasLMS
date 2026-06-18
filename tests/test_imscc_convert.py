@@ -1183,24 +1183,34 @@ def test_shift_headings_h1_becomes_h2() -> None:
     assert _shift_headings_down("# Title\n") == "## Title\n"
 
 
-def test_shift_headings_h2_becomes_h3() -> None:
-    assert _shift_headings_down("## Sub\n") == "### Sub\n"
+def test_shift_headings_no_h1_left_unchanged() -> None:
+    # No H1 present, so nothing is shifted — an H2 stays an H2.
+    assert _shift_headings_down("## Sub\n") == "## Sub\n"
 
 
-def test_shift_headings_h5_becomes_h6() -> None:
-    assert _shift_headings_down("##### Deep\n") == "###### Deep\n"
+def test_shift_headings_deeper_levels_unchanged_without_h1() -> None:
+    md = "## Sub\n\n### Deeper\n\n##### Deepest\n"
+    assert _shift_headings_down(md) == md
 
 
-def test_shift_headings_h6_stays_h6() -> None:
-    assert _shift_headings_down("###### Max\n") == "###### Max\n"
+def test_shift_headings_h6_stays_h6_when_shifting() -> None:
+    # H6 cannot shift deeper even when an H1 forces a shift.
+    assert _shift_headings_down("# Top\n\n###### Max\n") == "## Top\n\n###### Max\n"
 
 
 def test_shift_headings_h6_prints_warning(capsys: pytest.CaptureFixture) -> None:
-    _shift_headings_down("###### Max\n", "pages/test.md")
+    _shift_headings_down("# Top\n\n###### Max\n", "pages/test.md")
     captured = capsys.readouterr().out
     assert "WARNING" in captured
     assert "H6" in captured
     assert "pages/test.md" in captured
+
+
+def test_shift_headings_h6_no_warning_without_h1(capsys: pytest.CaptureFixture) -> None:
+    # No H1 means no shift, so a lone H6 must not trigger the warning.
+    _shift_headings_down("###### Max\n", "pages/test.md")
+    captured = capsys.readouterr().out
+    assert "WARNING" not in captured
 
 
 def test_shift_headings_multiple_levels() -> None:

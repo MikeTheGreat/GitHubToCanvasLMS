@@ -304,6 +304,14 @@ Applied to raw HTML before calling Pandoc (phases 4–6):
 
 Unknown `gXXX` not in resource map → warn and remove href, keep link text.
 
+### Heading level handling
+
+Canvas LMS silently converts any `<h1>` in page/assignment/discussion content into a styled paragraph, which looks like a heading but is invisible to screen readers (an accessibility regression). To keep imported content H1-free, `_shift_headings_down()` (applied to converted Markdown in phases 4–6 and to the syllabus/events) shifts every ATX heading down one level (H1→H2, H2→H3, …).
+
+This shift is **conditional**: it runs **only when the converted Markdown actually contains an H1**. Canvas itself already prevents H1s in the content it exports, so the common case is that there is nothing to do and headings keep their original levels — an H2 stays an H2 rather than drifting to H3 on every round-trip. The shift kicks in only when an H1 slips through, demoting it (and everything below it) by one. Existing H6 headings cannot be shifted deeper; they are left at H6 with a printed warning.
+
+The complementary check on the **upload** side (`sync.py`) is unconditional: any content whose rendered HTML contains an `<h1>` is rejected with an error so the author fixes the source rather than letting Canvas silently mangle it.
+
 ### Module file generation
 
 - `ContextModuleSubHeader` → `## Title` heading

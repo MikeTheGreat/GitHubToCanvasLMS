@@ -532,15 +532,25 @@ def _html_to_markdown(html: str) -> str:
 
 
 _ATX_HEADING_RE = re.compile(r"^(#{1,6})\s", re.MULTILINE)
+_ATX_H1_RE = re.compile(r"^#\s", re.MULTILINE)
 
 
 def _shift_headings_down(markdown: str, context: str = "") -> str:
-    """Increase every ATX heading level by one (H1→H2, …, H5→H6, H6→H6).
+    """Increase every ATX heading level by one, but only when an H1 is present.
 
-    Canvas LMS silently converts H1 to a styled paragraph, so imported
-    content should start at H2.  Existing H6 headings cannot be shifted
-    further; a warning is printed and they are left at H6.
+    Canvas LMS silently converts H1 to a styled paragraph (which breaks screen
+    readers), so imported content must not start at H1.  Canvas itself already
+    prevents H1s in its exported content, so in the common case there is nothing
+    to do and headings keep their original levels (an H2 stays an H2).  Only when
+    an H1 *does* slip through do we shift the whole document down by one level so
+    the H1 becomes an H2.
+
+    When shifting, existing H6 headings cannot be shifted further; a warning is
+    printed and they are left at H6.
     """
+    if not _ATX_H1_RE.search(markdown):
+        return markdown
+
     has_h6 = False
 
     def _bump(m: re.Match) -> str:
