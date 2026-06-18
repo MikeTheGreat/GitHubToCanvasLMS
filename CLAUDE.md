@@ -11,7 +11,9 @@ When the user asks you to create a git commit message please list your
 contribution as "Authored-By" instead of "Co-Authored-By". Please list
 the user as "Prompted-By", but do not include the user's email (just their name)
 
-## 
+## Never commit to git
+Even if the user asks you to create a git commit message do NOT commit to git.
+Only if the user specifically asks you to commit should you do so; even then you should resume NOT committing to git for all future prompts.
 
 # GitHubToCanvasLMS
 

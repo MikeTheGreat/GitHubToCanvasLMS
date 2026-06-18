@@ -14,6 +14,7 @@ from . import canvas_api as capi
 from . import manifest as manifest_lib
 from .config import Config
 from .convert import markdown_to_html, preprocess_snippets
+from .ignore import IgnoreMatcher, load_ignore_matcher
 from .link_rewrite import extract_local_refs, infer_canvas_type, rewrite_links
 from .orphans import ResourceKey, extract_canvas_refs
 from .quiz import parse_question_file, parse_quiz_file
@@ -232,6 +233,7 @@ def run_sync(
     """Main sync pipeline: assets → content → modules. Returns True if any errors occurred."""
     manifest_path = repo_path / ".canvas-manifest.toml"
     manifest = manifest_lib.load(manifest_path)
+    matcher = load_ignore_matcher(repo_path)
     course = capi.get_course(config)
     snippets_dir = repo_path / "snippets"
     newer_on_canvas: list[str] = []
@@ -275,6 +277,7 @@ def run_sync(
             force_uploads,
             force_overwrite,
             newer_on_canvas,
+            matcher=matcher,
             verbose=verbose,
         )
 
@@ -291,10 +294,17 @@ def run_sync(
     content_dirs = sorted(
         d
         for d in repo_path.iterdir()
-        if d.is_dir() and not d.name.startswith(".") and d.name not in skip
+        if d.is_dir()
+        and not d.name.startswith(".")
+        and d.name not in skip
+        and not matcher.is_ignored(d, repo_path)
     )
     for content_dir in content_dirs:
         for md_file in sorted(content_dir.glob("*.md")):
+            if matcher.is_ignored(md_file, repo_path):
+                if verbose:
+                    print(f"Ignoring: {md_file.relative_to(repo_path).as_posix()}")
+                continue
             _sync_content_file(
                 course,
                 md_file,
@@ -316,6 +326,10 @@ def run_sync(
     quizzes_dir = repo_path / "quizzes"
     if quizzes_dir.exists():
         for quiz_folder in sorted(d for d in quizzes_dir.iterdir() if d.is_dir()):
+            if matcher.is_ignored(quiz_folder, repo_path):
+                if verbose:
+                    print(f"Ignoring: {quiz_folder.relative_to(repo_path).as_posix()}")
+                continue
             quiz_md = quiz_folder / f"{quiz_folder.name}.md"
             if quiz_md.exists():
                 _sync_quiz(
@@ -335,7 +349,9 @@ def run_sync(
                 )
 
     # 2.6. Question banks
-    _sync_question_banks(course, repo_path, manifest, manifest_path, force_uploads, verbose=verbose)
+    _sync_question_banks(
+        course, repo_path, manifest, manifest_path, force_uploads, matcher=matcher, verbose=verbose
+    )
 
     # 2.7. Front page (must run after pages are synced so the manifest entry exists)
     if _front_page_path:
@@ -373,6 +389,8 @@ def run_sync(
         modules_with_updated_refs: set[Path] = set()
         if synced_content_keys:
             for md_file in modules_dir.glob("*.md"):
+                if matcher.is_ignored(md_file, repo_path):
+                    continue
                 try:
                     _, body = parse_frontmatter(md_file.read_text())
                 except yaml.YAMLError:
@@ -383,6 +401,10 @@ def run_sync(
                     modules_with_updated_refs.add(md_file)
 
         for md_file in sorted(modules_dir.glob("*.md")):
+            if matcher.is_ignored(md_file, repo_path):
+                if verbose:
+                    print(f"Ignoring: {md_file.relative_to(repo_path).as_posix()}")
+                continue
             position = position_map.get(md_file.name)
             force_this = (
                 force_uploads
@@ -557,12 +579,17 @@ def _walk_assets(
     force_uploads: bool = False,
     force_overwrite: bool = False,
     newer_on_canvas: list[str] | None = None,
+    matcher: IgnoreMatcher | None = None,
     verbose: bool = False,
 ) -> None:
     if newer_on_canvas is None:
         newer_on_canvas = []
     entries = sorted(dir_path.iterdir(), key=lambda p: (p.is_dir(), p.name))
     for entry in entries:
+        if matcher is not None and matcher.is_ignored(entry, repo_root):
+            if verbose:
+                print(f"Ignoring: {entry.relative_to(repo_root).as_posix()}")
+            continue
         if entry.is_file():
             local_key = entry.relative_to(repo_root).as_posix()
             if not manifest_lib.needs_sync(manifest, local_key, entry, force_uploads):
@@ -596,6 +623,7 @@ def _walk_assets(
                 force_uploads,
                 force_overwrite,
                 newer_on_canvas,
+                matcher=matcher,
                 verbose=verbose,
             )
 
@@ -1075,6 +1103,7 @@ def _sync_question_banks(
     manifest: manifest_lib.ManifestDict,
     manifest_path: Path,
     force_uploads: bool = False,
+    matcher: IgnoreMatcher | None = None,
     verbose: bool = False,
 ) -> None:
     """Sync all question banks from question_banks/ to Canvas."""
@@ -1082,6 +1111,10 @@ def _sync_question_banks(
     if not banks_dir.exists():
         return
     for bank_folder in sorted(d for d in banks_dir.iterdir() if d.is_dir()):
+        if matcher is not None and matcher.is_ignored(bank_folder, repo_root):
+            if verbose:
+                print(f"Ignoring: {bank_folder.relative_to(repo_root).as_posix()}")
+            continue
         toml_path = bank_folder / f"{bank_folder.name}.toml"
         if not toml_path.exists():
             continue

@@ -1923,3 +1923,48 @@ def test_prune_manifest_only_no_orphans_is_noop(
     assert had_errors is False
     flush.assert_not_called()
     assert "pages/kept.md" in manifest
+
+
+# ---------------------------------------------------------------------------
+# Ignore files (.gitignore / .canvasignore)
+# ---------------------------------------------------------------------------
+
+
+def test_ignored_asset_not_uploaded(mock_course, course_root, mocker) -> None:
+    """A stray file matched by .gitignore (e.g. a Word temp file) is skipped."""
+    mocker.patch("github_to_canvas.manifest.flush")
+    _setup_first_sync_mocks(mock_course)
+    # Simulate a Word backup file sitting next to a real asset.
+    (course_root / "assets" / "~$logo.docx").write_text("junk")
+    (course_root / ".gitignore").write_text("~$*\n")
+
+    run_sync(_config(), course_root)
+
+    # Only the real asset (fig.png) is uploaded; the temp file is ignored.
+    mock_course.upload.assert_called_once()
+    uploaded_path = mock_course.upload.call_args[0][0]
+    assert uploaded_path.endswith("fig.png")
+
+
+def test_ignored_asset_uploaded_without_ignore_file(mock_course, course_root, mocker) -> None:
+    """Baseline: with no ignore file, the stray file IS uploaded (proves the filter acts)."""
+    mocker.patch("github_to_canvas.manifest.flush")
+    _setup_first_sync_mocks(mock_course)
+    (course_root / "assets" / "~$logo.docx").write_text("junk")
+
+    run_sync(_config(), course_root)
+
+    assert mock_course.upload.call_count == 2
+
+
+def test_ignored_content_file_not_synced(mock_course, course_root, mocker) -> None:
+    """A page matched by .canvasignore is not created on Canvas."""
+    mocker.patch("github_to_canvas.manifest.flush")
+    _setup_first_sync_mocks(mock_course)
+    (course_root / "pages" / "scratch.md").write_text("---\ntitle: Scratch\n---\n\n## Draft\n")
+    (course_root / ".canvasignore").write_text("scratch.md\n")
+
+    run_sync(_config(), course_root)
+
+    # Only the syllabus stub is created; scratch.md never reaches Canvas.
+    mock_course.create_page.assert_called_once()

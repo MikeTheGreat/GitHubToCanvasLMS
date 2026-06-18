@@ -80,6 +80,8 @@ On each run the tool:
 
 Files are skipped if their local modification time is older than the `last_synced` timestamp in the manifest — so unchanged files cost nothing on repeat runs.
 
+Files matched by a `.gitignore` (or an optional `.canvasignore`, same syntax) at the repo root are never uploaded — handy for excluding editor backups and temp files such as Word's `~$*.docx`.
+
 A `.canvas-manifest.toml` file is written to your course repo to track Canvas IDs and sync times. Commit it so collaborators share the same mapping.
 
 ---

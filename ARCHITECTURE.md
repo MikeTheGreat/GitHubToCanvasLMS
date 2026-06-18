@@ -14,6 +14,8 @@ git clone (local)
 // This tool:
 1. git pull                             (ensure local copy is up-to-date)
 2. load .canvas-manifest.toml           (into in-memory dict; single source of truth during the run)
+2.1. build ignore matcher               (from .gitignore + optional .canvasignore at repo root;
+     any matched file/dir is skipped during discovery in every phase below)
 2.5. if course_settings.toml exists: apply course metadata to Canvas (name, dates, flags, grading
      standards, assignment groups, late policy, post policy, rubrics)
 2.6. if course_settings/syllabus.md exists: convert body to HTML and set as course syllabus body
@@ -65,6 +67,10 @@ assets/images/diagram.png
 assets/slides/
 assets/slides/week1.pdf
 ```
+
+**Ignore files:**
+
+A `.gitignore` and/or an optional `.canvasignore` at the repo root control which files are uploaded. Patterns use git's `gitwildmatch` syntax (via the [`pathspec`](https://pypi.org/project/pathspec/) library), so negation (`!`), `**`, anchoring, and directory-only patterns (`build/`) all behave as in git. The two files are layered together: `.gitignore` keeps a repo's existing rules authoritative, while `.canvasignore` adds Canvas-only exclusions. Matching is applied at every discovery point (assets, content folders, quizzes, question banks, modules), matching repo-root-relative POSIX paths; a matched directory is pruned entirely (its contents are never walked). With neither file present, nothing is matched and every file is processed as before. The tool's own `.canvas-manifest.toml` is always excluded. Ignoring a file only stops future uploads — it does **not** prune anything already on Canvas (the file still exists locally and keeps its manifest entry; see the `prune` subcommand for removing content). Implemented in `ignore.py`.
 
 **Asset upload detail:**
 
