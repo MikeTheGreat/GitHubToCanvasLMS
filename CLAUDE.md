@@ -91,6 +91,7 @@ github-to-canvas/      ← this tool repo
 - **Conversion**: Pandoc for Markdown → HTML conversion (produces clean HTML fragments suitable for Canvas)
 - **Delivery**: Command-line tool, packaged as a `uv` tool for easy installation and running via `uvx`
 - **Canvas content types**: Pages, Assignments, Discussion Forums, Quizzes (Classic), Modules
+- **Snippet staleness**: Editing a snippet file does not trigger re-sync of files that include it (staleness is per-file mtime only). Use `--force-uploads` to propagate snippet changes.
 
 ## Canvas API Notes
 

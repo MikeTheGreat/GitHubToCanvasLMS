@@ -203,6 +203,19 @@ re-syncing has no effect — the existing Canvas rubric is left untouched. To ch
 a rubric you must currently delete it in Canvas first (or rename it). Consider an
 update-in-place path matched by manifest id rather than title.
 
+## Snippet dependency tracking for staleness
+
+Editing a snippet file does not trigger re-sync of content files that include it. The
+sync engine checks each content file's own mtime against `last_synced` in the manifest;
+since changing a snippet only updates the snippet file's mtime, the including files are
+not considered stale. The user must currently use `--force-uploads` or manually `touch`
+the including files.
+
+A fix would track which snippets each content file includes (at sync time) and mark
+those files as stale when any referenced snippet's mtime is newer than the content
+file's `last_synced`. This is similar to how `_quiz_needs_sync` already checks question
+file mtimes in addition to the quiz-level file.
+
 ## Quiz BFS traversal (`-t` with quizzes)
 
 `_get_file_refs()` returns an empty set for `quizzes/` files, so `-t` on a module that includes a quiz will not follow links embedded in quiz description or question HTML. The quiz itself is synced (including link rewriting), but BFS won't pre-upload unreferenced assets or pages that only appear inside quiz content.

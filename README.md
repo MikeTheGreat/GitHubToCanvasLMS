@@ -1088,6 +1088,8 @@ section, and the `## Feedback` / `## Sample Solution` sections all work the same
 
 Any Markdown link whose target resolves inside `snippets/` is replaced with the snippet's content before conversion. Useful for office hours, shared policies, etc.
 
+> **Caveat:** Editing a snippet file does **not** automatically re-sync the files that include it. The sync engine only checks each content file's own modification time, so changing a snippet alone won't trigger an update. Use `--force-uploads` (or `touch` the including files) to propagate snippet changes.
+
 ```markdown
 <!-- in pages/syllabus.md -->
 [My Office Hours](../snippets/office-hours.md)
