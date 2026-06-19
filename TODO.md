@@ -1,5 +1,16 @@
 # Possible Future Features
 
+## `read_only` flag not respected when Canvas restores a soft-deleted rubric
+
+When a rubric is deleted from Canvas and re-created by the sync tool, Canvas
+appears to restore the soft-deleted rubric (matched by title) with its original
+`read_only` value. Neither the `create_rubric` POST nor a follow-up PUT
+successfully overrides `read_only` in this scenario. The PUT works fine for
+rubrics that were never deleted — only the delete-and-recreate path is affected.
+
+Possible workaround: create the rubric with a slightly different title to avoid
+the soft-delete match, then rename it via PUT. Untested.
+
 ## Group sets and group assignments
 Currently we don't manage this, but it would be nice
 

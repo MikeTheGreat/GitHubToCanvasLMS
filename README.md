@@ -600,22 +600,26 @@ See the [Week 1 Assignment](../assignments/week1.md) and the
 
 Optional. Defines reusable grading rubrics for the course. Read during the same
 course-settings sync as `course_settings.toml`. Rubrics are matched **by title** —
-a rubric whose title already exists in Canvas is left untouched (existing rubrics
-are never modified, only missing ones are created).
+a rubric whose title already exists in Canvas is **updated in place**; missing
+rubrics are created.
 
 ```toml
 # course_settings/rubrics.toml — array-of-tables, one [[rubrics]] block per rubric.
 
 [[rubrics]]
-title = "Essay Rubric"   # matched by title; skipped if it already exists in Canvas
+title = "Essay Rubric"   # matched by title; updated in place if it already exists
+reusable = true          # share one rubric across assignments (default: not sent)
+read_only = false        # allow instructors to edit the rubric (default: not sent)
 
 # One [[rubrics.criteria]] block per row of the rubric:
 [[rubrics.criteria]]
 description = "Thesis"
+long_description = "Evaluates the clarity and strength of the thesis statement."
 points = 5
 # One [[rubrics.criteria.ratings]] block per rating level (highest first):
 [[rubrics.criteria.ratings]]
 description = "Clear and arguable"
+long_description = "Thesis is specific, debatable, and well-positioned."
 points = 5
 [[rubrics.criteria.ratings]]
 description = "Present but weak"
@@ -635,11 +639,42 @@ description = "Unsupported"
 points = 0
 ```
 
-> The `import` command also writes read-only metadata to each rubric and criterion
-> (`identifier`, `points_possible`, `criterion_id`, `long_description`, rating
-> `id`, etc.). Those extra fields are preserved in the file but **ignored on
-> upload** — only `title` and each criterion's / rating's `description` and
-> `points` are sent to Canvas.
+`long_description` is optional at both criterion and rating levels. When present,
+it is sent to Canvas as the extended description (visible when expanding a rubric
+row). When absent or empty, only `description` and `points` are sent.
+
+`reusable` and `read_only` are optional rubric-level flags sent to Canvas when
+present. `reusable = true` means Canvas shares one rubric instance across all
+assignments that reference it (instead of copying per assignment). `read_only =
+false` (the default the `import` command writes) lets instructors edit the rubric
+in the Canvas UI.
+
+When writing a rubric from scratch, only `title`, `description`, `points`, and
+`ratings` are required. A minimal rubric looks like:
+
+```toml
+[[rubrics]]
+title = "My Rubric"
+
+[[rubrics.criteria]]
+description = "Quality"
+points = 5
+
+[[rubrics.criteria.ratings]]
+description = "Excellent"
+points = 5
+
+[[rubrics.criteria.ratings]]
+description = "Poor"
+points = 0
+```
+
+> The `import` command also writes metadata to each rubric and criterion
+> (`identifier`, `points_possible`, `criterion_id`, rating `id`, etc.). Those
+> extra fields are preserved in the file but **ignored on upload** — you do not
+> need them when creating rubrics by hand. The `import` command always sets
+> `read_only = false` and `reusable = true`, regardless of the values in the
+> IMSCC export, so that imported rubrics are editable and shared.
 
 ### Other `course_settings/` files (import-only)
 
@@ -736,6 +771,15 @@ assignment_group_id: "Labs"              # name of an assignment group defined i
                                          #   Canvas ID; controls which grade bucket
                                          #   this assignment falls under
 
+# ── Rubric ────────────────────────────────────────────────────────────────
+rubric: "Essay Rubric"                   # title of a rubric defined in
+                                         #   course_settings/rubrics.toml, or a
+                                         #   numeric Canvas rubric ID; creates a
+                                         #   rubric association on the assignment
+use_for_grading: true                    # use the rubric score as the assignment
+                                         #   grade (default: true); set to false
+                                         #   for feedback-only rubrics
+
 # ── Group assignment ──────────────────────────────────────────────────────
 group_category_id: 12345                 # numeric ID of an existing group set
                                          #   (see note below); makes this a
@@ -768,13 +812,19 @@ Description goes here
 Submit a PDF of your solutions by the deadline.
 ```
 
-**Assignment group, group assignments, anonymous/moderated grading, and peer
-reviews** are all settable from the frontmatter above. A few caveats:
+**Assignment group, rubric, group assignments, anonymous/moderated grading, and
+peer reviews** are all settable from the frontmatter above. A few caveats:
 
 - **Assignment group:** `assignment_group_id` accepts either the group name as a
   string (e.g. `"Labs"`) or a numeric Canvas ID. When a name is given the tool
   resolves it to the Canvas ID using the groups defined in `course_settings.toml`.
   If the name is not found a warning is printed and the field is skipped.
+- **Rubric:** `rubric` accepts either a rubric title (string) or numeric Canvas
+  rubric ID. When a title is given the tool resolves it to the Canvas ID using
+  rubrics defined in `course_settings/rubrics.toml`. A rubric association is
+  created (or updated) on each assignment sync. `use_for_grading` defaults to
+  `true`; set it to `false` for advisory-only (feedback without grade impact)
+  rubrics.
 - **Group set:** Canvas identifies a group set (group *category*) by numeric ID,
   not by name. This tool does **not** create or manage group sets — create the
   group set in the Canvas UI (or via the API) first, then put its numeric

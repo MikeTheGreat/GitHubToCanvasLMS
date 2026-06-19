@@ -2272,3 +2272,263 @@ def test_ignored_content_file_not_synced(mock_course, course_root, mocker) -> No
 
     # Only the syllabus stub is created; scratch.md never reaches Canvas.
     mock_course.create_page.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# Rubric sync: _build_criteria_dict
+# ---------------------------------------------------------------------------
+
+
+def test_build_criteria_dict_basic() -> None:
+    from github_to_canvas.canvas_api import _build_criteria_dict
+
+    criteria = [
+        {
+            "description": "Thesis",
+            "points": 5,
+            "ratings": [
+                {"description": "Clear", "points": 5},
+                {"description": "Missing", "points": 0},
+            ],
+        },
+    ]
+    result = _build_criteria_dict(criteria)
+    assert result == {
+        "0": {
+            "description": "Thesis",
+            "points": 5,
+            "ratings": {
+                "0": {"description": "Clear", "points": 5},
+                "1": {"description": "Missing", "points": 0},
+            },
+        },
+    }
+
+
+def test_build_criteria_dict_long_description_included() -> None:
+    from github_to_canvas.canvas_api import _build_criteria_dict
+
+    criteria = [
+        {
+            "description": "Quality",
+            "long_description": "Evaluates overall quality.",
+            "points": 10,
+            "ratings": [
+                {
+                    "description": "Excellent",
+                    "long_description": "Exceeds expectations.",
+                    "points": 10,
+                },
+                {"description": "Poor", "points": 0},
+            ],
+        },
+    ]
+    result = _build_criteria_dict(criteria)
+    assert result["0"]["long_description"] == "Evaluates overall quality."
+    assert result["0"]["ratings"]["0"]["long_description"] == "Exceeds expectations."
+    assert "long_description" not in result["0"]["ratings"]["1"]
+
+
+def test_build_criteria_dict_empty_long_description_omitted() -> None:
+    from github_to_canvas.canvas_api import _build_criteria_dict
+
+    criteria = [
+        {
+            "description": "Thesis",
+            "long_description": "",
+            "points": 5,
+            "ratings": [{"description": "OK", "long_description": "", "points": 5}],
+        },
+    ]
+    result = _build_criteria_dict(criteria)
+    assert "long_description" not in result["0"]
+    assert "long_description" not in result["0"]["ratings"]["0"]
+
+
+# ---------------------------------------------------------------------------
+# Rubric sync: sync_rubrics create vs update
+# ---------------------------------------------------------------------------
+
+
+def _mock_rubric(rubric_id: int, title: str) -> MagicMock:
+    r = MagicMock()
+    r.id = rubric_id
+    r.title = title
+    return r
+
+
+def test_sync_rubrics_creates_new() -> None:
+    from github_to_canvas.canvas_api import sync_rubrics
+
+    course = MagicMock()
+    course.get_rubrics.return_value = []
+    new_rubric = _mock_rubric(42, "Essay Rubric")
+    course.create_rubric.return_value = {"rubric": new_rubric}
+
+    rubrics = [{"title": "Essay Rubric", "criteria": [{"description": "Thesis", "points": 5, "ratings": []}]}]
+    ids, created = sync_rubrics(course, rubrics)
+
+    course.create_rubric.assert_called_once()
+    call_kwargs = course.create_rubric.call_args[1]
+    assert call_kwargs["rubric"]["title"] == "Essay Rubric"
+    assert ids == {"Essay Rubric": 42}
+    assert created == ["Essay Rubric"]
+
+
+def test_sync_rubrics_updates_existing() -> None:
+    from github_to_canvas.canvas_api import sync_rubrics
+
+    course = MagicMock()
+    course.id = 999
+    existing = _mock_rubric(42, "Essay Rubric")
+    course.get_rubrics.return_value = [existing]
+
+    rubrics = [{"title": "Essay Rubric", "criteria": [{"description": "Thesis Updated", "points": 10, "ratings": []}]}]
+    ids, created = sync_rubrics(course, rubrics)
+
+    course.create_rubric.assert_not_called()
+    course._requester.request.assert_called_once()
+    call_args = course._requester.request.call_args
+    assert call_args[0][0] == "PUT"
+    assert "rubrics/42" in call_args[0][1]
+    assert ids == {"Essay Rubric": 42}
+    assert created == []
+
+
+def test_sync_rubrics_empty_returns_existing_ids() -> None:
+    from github_to_canvas.canvas_api import sync_rubrics
+
+    course = MagicMock()
+    existing = _mock_rubric(42, "Essay Rubric")
+    course.get_rubrics.return_value = [existing]
+
+    ids, created = sync_rubrics(course, [])
+    assert ids == {"Essay Rubric": 42}
+    assert created == []
+    course.create_rubric.assert_not_called()
+
+
+def test_sync_rubrics_sends_reusable_and_read_only() -> None:
+    from github_to_canvas.canvas_api import sync_rubrics
+
+    course = MagicMock()
+    course.get_rubrics.return_value = []
+    new_rubric = _mock_rubric(42, "Lab Rubric")
+    course.create_rubric.return_value = {"rubric": new_rubric}
+
+    rubrics = [{"title": "Lab Rubric", "reusable": True, "read_only": False, "criteria": []}]
+    sync_rubrics(course, rubrics)
+
+    call_kwargs = course.create_rubric.call_args[1]
+    assert call_kwargs["rubric"]["reusable"] is True
+    assert call_kwargs["rubric"]["read_only"] is False
+
+
+def test_sync_rubrics_omits_reusable_when_absent() -> None:
+    from github_to_canvas.canvas_api import sync_rubrics
+
+    course = MagicMock()
+    course.get_rubrics.return_value = []
+    new_rubric = _mock_rubric(42, "Lab Rubric")
+    course.create_rubric.return_value = {"rubric": new_rubric}
+
+    rubrics = [{"title": "Lab Rubric", "criteria": []}]
+    sync_rubrics(course, rubrics)
+
+    call_kwargs = course.create_rubric.call_args[1]
+    assert "reusable" not in call_kwargs["rubric"]
+    assert "read_only" not in call_kwargs["rubric"]
+
+
+# ---------------------------------------------------------------------------
+# Rubric-assignment association via frontmatter
+# ---------------------------------------------------------------------------
+
+
+def test_rubric_association_by_name(mock_course, course_root, mocker) -> None:
+    """Assignment with rubric: 'Name' creates a rubric association."""
+    mocker.patch("github_to_canvas.manifest.flush")
+    _setup_first_sync_mocks(mock_course)
+    rubric = _mock_rubric(42, "Essay Rubric")
+    mock_course.get_rubrics.return_value = [rubric]
+
+    (course_root / "assignments" / "week1.md").write_text(
+        '---\ntitle: "Week 1"\nrubric: "Essay Rubric"\npublished: true\n---\n\n## Work\n'
+    )
+
+    run_sync(_config(), course_root)
+
+    mock_course.create_rubric_association.assert_called_once()
+    call_kwargs = mock_course.create_rubric_association.call_args[1]
+    assoc = call_kwargs["rubric_association"]
+    assert assoc["rubric_id"] == 42
+    assert assoc["association_type"] == "Assignment"
+    assert assoc["use_for_grading"] is True
+
+
+def test_rubric_association_by_numeric_id(mock_course, course_root, mocker) -> None:
+    """Assignment with rubric: 999 (numeric) uses the ID directly."""
+    mocker.patch("github_to_canvas.manifest.flush")
+    _setup_first_sync_mocks(mock_course)
+
+    (course_root / "assignments" / "week1.md").write_text(
+        "---\ntitle: \"Week 1\"\nrubric: 999\npublished: true\n---\n\n## Work\n"
+    )
+
+    run_sync(_config(), course_root)
+
+    mock_course.create_rubric_association.assert_called_once()
+    call_kwargs = mock_course.create_rubric_association.call_args[1]
+    assert call_kwargs["rubric_association"]["rubric_id"] == 999
+
+
+def test_rubric_unknown_name_warns(mock_course, course_root, mocker, capsys) -> None:
+    """Unknown rubric name prints a warning and skips association."""
+    mocker.patch("github_to_canvas.manifest.flush")
+    _setup_first_sync_mocks(mock_course)
+    mock_course.get_rubrics.return_value = []
+
+    (course_root / "assignments" / "week1.md").write_text(
+        '---\ntitle: "Week 1"\nrubric: "Nonexistent"\npublished: true\n---\n\n## Work\n'
+    )
+
+    run_sync(_config(), course_root)
+
+    mock_course.create_rubric_association.assert_not_called()
+    captured = capsys.readouterr()
+    assert "Nonexistent" in captured.out
+    assert "not found" in captured.out
+
+
+def test_rubric_use_for_grading_default_true(mock_course, course_root, mocker) -> None:
+    """use_for_grading defaults to True when not specified."""
+    mocker.patch("github_to_canvas.manifest.flush")
+    _setup_first_sync_mocks(mock_course)
+    rubric = _mock_rubric(42, "Essay Rubric")
+    mock_course.get_rubrics.return_value = [rubric]
+
+    (course_root / "assignments" / "week1.md").write_text(
+        '---\ntitle: "Week 1"\nrubric: "Essay Rubric"\npublished: true\n---\n\n## Work\n'
+    )
+
+    run_sync(_config(), course_root)
+
+    call_kwargs = mock_course.create_rubric_association.call_args[1]
+    assert call_kwargs["rubric_association"]["use_for_grading"] is True
+
+
+def test_rubric_use_for_grading_false(mock_course, course_root, mocker) -> None:
+    """use_for_grading can be explicitly set to false."""
+    mocker.patch("github_to_canvas.manifest.flush")
+    _setup_first_sync_mocks(mock_course)
+    rubric = _mock_rubric(42, "Essay Rubric")
+    mock_course.get_rubrics.return_value = [rubric]
+
+    (course_root / "assignments" / "week1.md").write_text(
+        '---\ntitle: "Week 1"\nrubric: "Essay Rubric"\nuse_for_grading: false\npublished: true\n---\n\n## Work\n'
+    )
+
+    run_sync(_config(), course_root)
+
+    call_kwargs = mock_course.create_rubric_association.call_args[1]
+    assert call_kwargs["rubric_association"]["use_for_grading"] is False

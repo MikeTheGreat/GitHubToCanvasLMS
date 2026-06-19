@@ -7,6 +7,7 @@ from typing import Any
 
 from canvasapi import Canvas
 from canvasapi.exceptions import BadRequest, ResourceDoesNotExist
+from canvasapi.util import combine_kwargs
 
 from .config import Config
 
@@ -471,8 +472,12 @@ def create_or_update_page(
 ) -> dict[str, Any]:
     """Create or update a Canvas Page. `canvas_url` is the page URL slug."""
     if canvas_url is not None:
-        page = course.get_page(canvas_url)
-        page = page.edit(wiki_page={"title": title, "body": body, **kwargs})
+        try:
+            page = course.get_page(canvas_url)
+            page = page.edit(wiki_page={"title": title, "body": body, **kwargs})
+        except ResourceDoesNotExist:
+            print(f"  Canvas page '{canvas_url}' was deleted; re-creating")
+            page = course.create_page(wiki_page={"title": title, "body": body, **kwargs})
     else:
         page = course.create_page(wiki_page={"title": title, "body": body, **kwargs})
     return {"canvas_type": "page", "canvas_id": page.page_id, "canvas_url": page.url, "html_url": page.html_url}
@@ -488,8 +493,14 @@ def create_or_update_assignment(
     course, canvas_id: int | None, title: str, body: str, **kwargs
 ) -> dict[str, Any]:
     if canvas_id is not None:
-        assignment = course.get_assignment(canvas_id)
-        assignment = assignment.edit(assignment={"name": title, "description": body, **kwargs})
+        try:
+            assignment = course.get_assignment(canvas_id)
+            assignment = assignment.edit(assignment={"name": title, "description": body, **kwargs})
+        except ResourceDoesNotExist:
+            print(f"  Canvas assignment {canvas_id} was deleted; re-creating")
+            assignment = course.create_assignment(
+                assignment={"name": title, "description": body, **kwargs}
+            )
     else:
         assignment = course.create_assignment(
             assignment={"name": title, "description": body, **kwargs}
@@ -501,8 +512,12 @@ def create_or_update_discussion(
     course, canvas_id: int | None, title: str, body: str, **kwargs
 ) -> dict[str, Any]:
     if canvas_id is not None:
-        topic = course.get_discussion_topic(canvas_id)
-        topic = topic.update(title=title, message=body, **kwargs)
+        try:
+            topic = course.get_discussion_topic(canvas_id)
+            topic = topic.update(title=title, message=body, **kwargs)
+        except ResourceDoesNotExist:
+            print(f"  Canvas discussion {canvas_id} was deleted; re-creating")
+            topic = course.create_discussion_topic(title=title, message=body, **kwargs)
     else:
         topic = course.create_discussion_topic(title=title, message=body, **kwargs)
     return {"canvas_type": "discussion", "canvas_id": topic.id, "html_url": topic.html_url}
@@ -648,37 +663,102 @@ def add_module_item(module, item: dict[str, Any], manifest: dict) -> int | None:
 # Rubrics
 # ---------------------------------------------------------------------------
 
-def sync_rubrics(course, rubrics: list[dict[str, Any]]) -> None:
-    """Create rubrics that don't yet exist (matched by title)."""
+def _build_criteria_dict(criteria: list[dict[str, Any]]) -> dict[str, dict]:
+    result: dict[str, dict] = {}
+    for i, c in enumerate(criteria):
+        entry: dict[str, Any] = {
+            "description": c.get("description", ""),
+            "points": c.get("points", 0),
+        }
+        if c.get("long_description"):
+            entry["long_description"] = c["long_description"]
+        ratings: dict[str, dict] = {}
+        for j, rat in enumerate(c.get("ratings", [])):
+            r_entry: dict[str, Any] = {
+                "description": rat.get("description", ""),
+                "points": rat.get("points", 0),
+            }
+            if rat.get("long_description"):
+                r_entry["long_description"] = rat["long_description"]
+            ratings[str(j)] = r_entry
+        entry["ratings"] = ratings
+        result[str(i)] = entry
+    return result
+
+
+def get_rubric_ids(course) -> dict[str, int]:
+    """Return {title: canvas_id} for all rubrics in the course."""
+    return {r.title: r.id for r in course.get_rubrics()}
+
+
+def sync_rubrics(
+    course, rubrics: list[dict[str, Any]]
+) -> tuple[dict[str, int], list[str]]:
+    """Create or update rubrics (matched by title).
+
+    Returns (id_mapping, created) where id_mapping is {title: canvas_id}
+    and created is a list of titles that were newly created (not updated).
+    """
+    existing = {r.title: r.id for r in course.get_rubrics()}
     if not rubrics:
-        return
-    existing_titles = {r.title for r in course.get_rubrics()}
+        return existing, []
+    created: list[str] = []
     for r in rubrics:
         title = r.get("title", "")
-        if title in existing_titles:
-            continue
-        criteria_dict = {
-            str(i): {
-                "description": c.get("description", ""),
-                "points": c.get("points", 0),
-                "ratings": {
-                    str(j): {
-                        "description": rat.get("description", ""),
-                        "points": rat.get("points", 0),
-                    }
-                    for j, rat in enumerate(c.get("ratings", []))
+        criteria_dict = _build_criteria_dict(r.get("criteria", []))
+        rubric_params: dict[str, Any] = {"title": title, "criteria": criteria_dict}
+        if "reusable" in r:
+            rubric_params["reusable"] = r["reusable"]
+        if "read_only" in r:
+            rubric_params["read_only"] = r["read_only"]
+        if title in existing:
+            flat = combine_kwargs(rubric=rubric_params)
+            course._requester.request(
+                "PUT",
+                f"courses/{course.id}/rubrics/{existing[title]}",
+                _kwargs=flat,
+            )
+        else:
+            result = course.create_rubric(
+                rubric=rubric_params,
+                rubric_association={
+                    "association_type": "Course",
+                    "association_id": course.id,
+                    "purpose": "grading",
                 },
-            }
-            for i, c in enumerate(r.get("criteria", []))
-        }
-        course.create_rubric(
-            rubric={"title": title, "criteria": criteria_dict},
-            rubric_association={
-                "association_type": "Course",
-                "association_id": course.id,
-                "purpose": "grading",
-            },
-        )
+            )
+            if "rubric" in result:
+                new_id = result["rubric"].id
+                existing[title] = new_id
+                # Canvas may restore a soft-deleted rubric with stale
+                # attributes; follow up with a PUT to force them.
+                # NOTE: as of 2026-06, this does not fix read_only —
+                # Canvas still ignores the flag on re-created rubrics.
+                # See TODO.md for details.
+                if "read_only" in r or "reusable" in r:
+                    flat = combine_kwargs(rubric=rubric_params)
+                    course._requester.request(
+                        "PUT",
+                        f"courses/{course.id}/rubrics/{new_id}",
+                        _kwargs=flat,
+                    )
+            created.append(title)
+    return existing, created
+
+
+def associate_rubric_with_assignment(
+    course, rubric_id: int, assignment_id: int, use_for_grading: bool = True
+) -> None:
+    """Associate a rubric with an assignment."""
+    course.create_rubric_association(
+        rubric_association={
+            "rubric_id": rubric_id,
+            "association_id": assignment_id,
+            "association_type": "Assignment",
+            "purpose": "grading",
+            "use_for_grading": use_for_grading,
+        },
+    )
 
 
 # ---------------------------------------------------------------------------

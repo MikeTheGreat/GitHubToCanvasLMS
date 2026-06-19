@@ -176,103 +176,125 @@ def sync_course_settings(
     manifest_path: Path,
     force_uploads: bool = False,
     verbose: bool = False,
-) -> None:
-    """Sync course_settings.toml: metadata, grading standards, assignment groups, policies, rubrics."""
+) -> dict[str, int]:
+    """Sync course_settings.toml: metadata, grading standards, assignment groups, policies, rubrics.
+
+    Returns {rubric_title: canvas_id} for all rubrics in the course.
+    """
     settings_path = repo_path / "course_settings" / "course_settings.toml"
-    if not settings_path.exists():
-        return
-    local_key = "course_settings/course_settings.toml"
     rubrics_path = repo_path / "course_settings" / "rubrics.toml"
-    # Re-sync if either the main settings file or rubrics.toml is newer than last_synced.
-    settings_stale = manifest_lib.needs_sync(
-        manifest, local_key, settings_path, force_uploads
+    settings_key = "course_settings/course_settings.toml"
+    rubrics_key = "course_settings/rubrics.toml"
+
+    settings_stale = settings_path.exists() and manifest_lib.needs_sync(
+        manifest, settings_key, settings_path, force_uploads
     )
     rubrics_stale = rubrics_path.exists() and manifest_lib.needs_sync(
-        manifest, local_key, rubrics_path, force_uploads
+        manifest, rubrics_key, rubrics_path, force_uploads
     )
+
     if not settings_stale and not rubrics_stale:
-        if verbose:
-            print(f"Skipping (up-to-date): {local_key}")
-        return
-    print("Syncing course settings...")
-    with settings_path.open("rb") as fh:
-        settings = tomllib.load(fh)
-
-    grading_standards = settings.get("grading_standards", [])
-    assignment_groups = settings.get("assignment_groups", [])
-    late_policy = settings.get("late_policy", {})
-    default_post_policy = settings.get("default_post_policy", {})
-
-    # §1c: grading standards (needed before §1a so we can set grading_standard_id)
-    gs_id = capi.sync_grading_standards(course, grading_standards)
-
-    # §1a: core course metadata
-    capi.update_course_metadata(course, settings, grading_standard_id=gs_id)
-
-    # §1d: assignment groups
-    capi.sync_assignment_groups(course, assignment_groups)
-
-    # §1e: late policy
-    if late_policy:
+        if verbose and settings_path.exists():
+            print(f"Skipping (up-to-date): {settings_key}")
         try:
-            capi.update_late_policy(course, late_policy)
-        except Exception as exc:
-            print(
-                f"  WARNING: late policy update failed (late_policy={late_policy!r}): {exc}"
-            )
+            return capi.get_rubric_ids(course)
+        except Exception:
+            return {}
 
-    # §1b: default post policy
-    if "post_manually" in default_post_policy:
-        post_manually = default_post_policy["post_manually"]
-        try:
-            capi.update_post_policy(course, post_manually)
-        except Exception as exc:
-            print(
-                f"  WARNING: post policy update failed (post_manually={post_manually!r}): {exc}"
-            )
+    if settings_stale:
+        print("Syncing course settings...")
+        with settings_path.open("rb") as fh:
+            settings = tomllib.load(fh)
 
-    # §15: rubrics
-    if rubrics_path.exists():
+        grading_standards = settings.get("grading_standards", [])
+        assignment_groups = settings.get("assignment_groups", [])
+        late_policy = settings.get("late_policy", {})
+        default_post_policy = settings.get("default_post_policy", {})
+
+        # §1c: grading standards (needed before §1a so we can set grading_standard_id)
+        gs_id = capi.sync_grading_standards(course, grading_standards)
+
+        # §1a: core course metadata
+        capi.update_course_metadata(course, settings, grading_standard_id=gs_id)
+
+        # §1d: assignment groups
+        capi.sync_assignment_groups(course, assignment_groups)
+
+        # §1e: late policy
+        if late_policy:
+            try:
+                capi.update_late_policy(course, late_policy)
+            except Exception as exc:
+                print(
+                    f"  WARNING: late policy update failed (late_policy={late_policy!r}): {exc}"
+                )
+
+        # §1b: default post policy
+        if "post_manually" in default_post_policy:
+            post_manually = default_post_policy["post_manually"]
+            try:
+                capi.update_post_policy(course, post_manually)
+            except Exception as exc:
+                print(
+                    f"  WARNING: post policy update failed (post_manually={post_manually!r}): {exc}"
+                )
+
+        # Course-navigation (left sidebar) order/visibility.
+        tab_config_raw = settings.get("tab_configuration")
+        if tab_config_raw is None:
+            misplaced = _find_nested_key(settings, "tab_configuration")
+            if misplaced:
+                print(
+                    f"  WARNING: 'tab_configuration' was found nested under {misplaced!r}, "
+                    "not at the top level, so course navigation was NOT updated. In TOML a "
+                    "top-level key must come BEFORE any [section]/[[section]] headers — move "
+                    "the tab_configuration block above the first section in course_settings.toml."
+                )
+        elif tab_config_raw:
+            try:
+                tab_config = (
+                    json.loads(tab_config_raw)
+                    if isinstance(tab_config_raw, str)
+                    else tab_config_raw
+                )
+            except (json.JSONDecodeError, TypeError) as exc:
+                print(f"  WARNING: tab_configuration is not valid JSON; skipping: {exc}")
+                tab_config = None
+            if tab_config:
+                try:
+                    capi.sync_tab_configuration(course, tab_config)
+                except Exception as exc:
+                    print(f"  WARNING: tab configuration sync failed: {exc}")
+
+        manifest_lib.record(manifest, manifest_path, settings_key, 0, "course_settings")
+
+    # §15: rubrics (tracked independently from course_settings.toml)
+    rubric_ids: dict[str, int] = {}
+    if rubrics_stale:
+        print("Syncing rubrics...")
         with rubrics_path.open("rb") as fh:
             rubrics_data = tomllib.load(fh)
         rubrics = rubrics_data.get("rubrics", [])
         if rubrics:
             try:
-                capi.sync_rubrics(course, rubrics)
+                rubric_ids, created = capi.sync_rubrics(course, rubrics)
+                if created:
+                    for t in created:
+                        print(f"  Created rubric: {t}")
+                    print(
+                        "  WARNING: Re-run with --force-uploads to re-create rubric "
+                        "associations on assignments that reference these rubrics."
+                    )
             except Exception as exc:
                 print(f"  WARNING: rubrics sync failed: {exc}")
-
-    # Course-navigation (left sidebar) order/visibility. A top-level array (older
-    # imports/exports may use a JSON string). If it's missing, the user may have
-    # accidentally nested it under a [section] header — a silent TOML gotcha — so
-    # check for that and warn rather than doing nothing.
-    tab_config_raw = settings.get("tab_configuration")
-    if tab_config_raw is None:
-        misplaced = _find_nested_key(settings, "tab_configuration")
-        if misplaced:
-            print(
-                f"  WARNING: 'tab_configuration' was found nested under {misplaced!r}, "
-                "not at the top level, so course navigation was NOT updated. In TOML a "
-                "top-level key must come BEFORE any [section]/[[section]] headers — move "
-                "the tab_configuration block above the first section in course_settings.toml."
-            )
-    elif tab_config_raw:
+        manifest_lib.record(manifest, manifest_path, rubrics_key, 0, "rubrics")
+    if not rubric_ids:
         try:
-            tab_config = (
-                json.loads(tab_config_raw)
-                if isinstance(tab_config_raw, str)
-                else tab_config_raw
-            )
-        except (json.JSONDecodeError, TypeError) as exc:
-            print(f"  WARNING: tab_configuration is not valid JSON; skipping: {exc}")
-            tab_config = None
-        if tab_config:
-            try:
-                capi.sync_tab_configuration(course, tab_config)
-            except Exception as exc:
-                print(f"  WARNING: tab configuration sync failed: {exc}")
+            rubric_ids = capi.get_rubric_ids(course)
+        except Exception:
+            pass
 
-    manifest_lib.record(manifest, manifest_path, local_key, 0, "course_settings")
+    return rubric_ids
 
 
 def run_sync(
@@ -299,7 +321,7 @@ def run_sync(
             _front_page_path = tomllib.load(_fh).get("front_page")
 
     # 0. Course settings (metadata, grading standards, assignment groups, policies, rubrics)
-    sync_course_settings(course, repo_path, manifest, manifest_path, force_uploads, verbose=verbose)
+    rubric_ids = sync_course_settings(course, repo_path, manifest, manifest_path, force_uploads, verbose=verbose)
 
     # Fetch assignment group IDs once so assignments can reference groups by name
     assignment_group_ids = capi.get_assignment_group_ids(course)
@@ -370,6 +392,7 @@ def run_sync(
                 newer_on_canvas,
                 errors,
                 assignment_group_ids=assignment_group_ids,
+                rubric_ids=rubric_ids,
                 synced_keys=synced_content_keys,
                 verbose=verbose,
             )
@@ -693,6 +716,7 @@ def _sync_content_file(
     newer_on_canvas: list[str] | None = None,
     errors: list[str] | None = None,
     assignment_group_ids: dict[str, int] | None = None,
+    rubric_ids: dict[str, int] | None = None,
     synced_keys: set[str] | None = None,
     verbose: bool = False,
 ) -> None:
@@ -882,6 +906,35 @@ def _sync_content_file(
         manifest_lib.record(
             manifest, manifest_path, local_key, entry["canvas_id"], "assignment"
         )
+        rubric_ref = frontmatter.get("rubric")
+        if rubric_ref is not None:
+            rubric_canvas_id: int | None = None
+            if isinstance(rubric_ref, str):
+                resolved = (rubric_ids or {}).get(rubric_ref)
+                if resolved is None:
+                    known = list(rubric_ids.keys()) if rubric_ids else []
+                    msg = (
+                        f"WARNING: {local_key}: rubric '{rubric_ref}' not found on Canvas "
+                        f"(known: {known}); skipping rubric association"
+                    )
+                    print(f"  {msg}")
+                    if errors is not None:
+                        errors.append(msg)
+                else:
+                    rubric_canvas_id = resolved
+            else:
+                rubric_canvas_id = int(rubric_ref)
+            if rubric_canvas_id is not None:
+                use_for_grading = frontmatter.get("use_for_grading", True)
+                try:
+                    capi.associate_rubric_with_assignment(
+                        course, rubric_canvas_id, entry["canvas_id"], use_for_grading
+                    )
+                except Exception as exc:
+                    msg = f"WARNING: {local_key}: rubric association failed: {exc}"
+                    print(f"  {msg}")
+                    if errors is not None:
+                        errors.append(msg)
         if synced_keys is not None:
             synced_keys.add(local_key)
     elif canvas_type == "discussion":
@@ -1277,6 +1330,8 @@ def run_targeted_sync(
     assets_root = repo_path / "assets"
     newer_on_canvas: list[str] = []
     errors: list[str] = []
+    assignment_group_ids = capi.get_assignment_group_ids(course)
+    rubric_ids = capi.get_rubric_ids(course)
     _targeted_position_map = _load_module_order(repo_path)
 
     visited: set[str] = set()
@@ -1351,6 +1406,8 @@ def run_targeted_sync(
                 force_overwrite,
                 newer_on_canvas,
                 errors,
+                assignment_group_ids=assignment_group_ids,
+                rubric_ids=rubric_ids,
                 verbose=verbose,
             )
 

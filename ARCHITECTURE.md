@@ -759,7 +759,7 @@ These files are never uploaded as Canvas Pages. Each has a dedicated upload path
 | `course_settings/course_settings.toml` | Applied via `course.update()` for flat metadata; dedicated API calls for grading standards, assignment groups, late policy, post policy, course-navigation tabs, and rubrics |
 | `course_settings/syllabus.md` | Body converted to HTML and set as `course.syllabus_body` via `course.update()` |
 | `course_settings/events.md` | Not yet uploaded (future feature) |
-| `course_settings/rubrics.toml` | Each rubric created via `course.create_rubric()` if title not already present |
+| `course_settings/rubrics.toml` | Each rubric created or updated in place (matched by title) via `course.create_rubric()` / `PUT rubrics/:id`; supports `long_description`, `reusable`, `read_only` |
 | `course_settings/files_meta.toml` | Not yet uploaded (requires matching Canvas file IDs after asset upload) |
 
 **`course_settings/course_settings.toml` upload detail:**

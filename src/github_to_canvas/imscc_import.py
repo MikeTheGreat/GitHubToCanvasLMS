@@ -1801,6 +1801,9 @@ def _parse_events(xml_path: Path) -> list[dict[str, Any]]:
 
 def _write_rubrics_toml(rubrics: list[dict[str, Any]], output_dir: Path) -> None:
     """Write course_settings/rubrics.toml from a list of rubric dicts."""
+    for r in rubrics:
+        r["read_only"] = False
+        r["reusable"] = True
     cs_dir = output_dir / "course_settings"
     cs_dir.mkdir(parents=True, exist_ok=True)
     (cs_dir / "rubrics.toml").write_text(

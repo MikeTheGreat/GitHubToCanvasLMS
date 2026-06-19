@@ -569,6 +569,15 @@ def test_rubrics_toml_has_ratings(output_dir: Path) -> None:
     assert ratings[0]["points"] == 5.0
 
 
+def test_rubrics_toml_overrides_read_only_and_reusable(output_dir: Path) -> None:
+    import tomllib
+    run_import(FIXTURE_DIR, output_dir)
+    data = tomllib.loads((output_dir / "course_settings" / "rubrics.toml").read_text())
+    for rubric in data["rubrics"]:
+        assert rubric["read_only"] is False, f"{rubric['title']} should have read_only=false"
+        assert rubric["reusable"] is True, f"{rubric['title']} should have reusable=true"
+
+
 # --- Files meta ---
 
 def test_files_meta_toml_created(output_dir: Path) -> None:
