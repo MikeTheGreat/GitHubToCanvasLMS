@@ -57,10 +57,19 @@ def test_wrap_query_param_stripped() -> None:
     assert "../assignments/hw.md" in result
 
 
-def test_module_ref_left_as_is_with_warning(capsys: pytest.CaptureFixture) -> None:
+def test_module_ref_resolved_when_in_manifest() -> None:
+    m = {"g_mod1": TempEntry(imscc_id="g_mod1", category="module",
+                             imscc_path="", local_path="modules/my-module.md")}
+    html = '<a href="$CANVAS_OBJECT_REFERENCE$/modules/g_mod1">Module</a>'
+    result = rewrite_imscc_links(html, m, "pages/p.md")
+    assert "../modules/my-module.md" in result
+    assert "$CANVAS_OBJECT_REFERENCE$" not in result
+
+
+def test_module_ref_unknown_warns_and_removes(capsys: pytest.CaptureFixture) -> None:
     html = '<a href="$CANVAS_OBJECT_REFERENCE$/modules/g_mod1">Module</a>'
     result = rewrite_imscc_links(html, {}, "pages/p.md")
-    assert "$CANVAS_OBJECT_REFERENCE$/modules/g_mod1" in result
+    assert "$CANVAS_OBJECT_REFERENCE$" not in result
     assert "WARNING" in capsys.readouterr().out
 
 

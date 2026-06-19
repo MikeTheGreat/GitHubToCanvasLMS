@@ -243,6 +243,12 @@ def parse_imsmanifest(imscc_dir: Path) -> dict[str, TempEntry]:
         # --- Discussions (imsdt_xmlv1p1) ---
         if res_type == "imsdt_xmlv1p1":
             if not href:
+                href = next(
+                    (f_el.get("href", "") for f_el in res
+                     if _strip_ns(f_el.tag) == "file" and f_el.get("href", "")),
+                    "",
+                )
+            if not href:
                 print(f"  WARNING: Discussion resource {identifier!r} has no href — skipping")
                 continue
 
@@ -437,7 +443,6 @@ _CONTENT_TYPE_TO_DIR: dict[str, str] = {
     "pages": "pages",
     "discussion_topics": "discussions",
     "discussions": "discussions",
-    "modules": None,  # can't represent as local file
 }
 
 
@@ -474,10 +479,6 @@ def rewrite_imscc_links(
     def _replace_canvas_ref(m: re.Match) -> str:
         content_type = m.group(1)   # e.g. "assignments", "pages"
         imscc_id = m.group(2)       # e.g. "g_assignment_1"
-
-        if content_type == "modules":
-            print(f"  WARNING: Cannot rewrite module link to local path: {m.group(0)!r}")
-            return m.group(0)  # leave as-is; will become plain text after Pandoc
 
         entry = temp_manifest.get(imscc_id)
         if entry is None:
@@ -1415,11 +1416,14 @@ def generate_module_file(
             continue
 
         if ct == "Attachment":
-            print(
-                f"  WARNING: Skipping {ct} item: {item.title!r} "
-                f"({item.identifierref}) in module {module.title!r}"
-            )
-            lines.append(f"# SKIPPED: {ct} - \"{item.title}\" ({item.identifierref})")
+            entry = temp_manifest.get(item.identifierref)
+            if entry is None:
+                print(
+                    f"  WARNING: Attachment {item.title!r} references unknown "
+                    f"id {item.identifierref!r} in module {module.title!r} — skipping"
+                )
+                continue
+            lines.append(f"- [{item.title}](../{entry.local_path})")
             continue
 
         if ct in ("WikiPage", "Assignment", "Discussion", "DiscussionTopic", "Quizzes::Quiz"):
@@ -2202,6 +2206,18 @@ def run_import(imscc_path: Path, output_dir: Path) -> None:
         print("Parsing IMSCC manifest...")
         temp_manifest = parse_imsmanifest(imscc_dir)
 
+        # Pre-phase: register modules in temp_manifest so content-phase
+        # link rewriting can resolve $CANVAS_OBJECT_REFERENCE$/modules/…
+        modules = parse_module_meta(imscc_dir)
+        for mod in modules:
+            temp_manifest[mod.identifier] = TempEntry(
+                imscc_id=mod.identifier,
+                category="module",
+                imscc_path="",
+                local_path=f"modules/{_slugify(mod.title)}.md",
+                title=mod.title,
+            )
+
         # Phase 2: assets
         copy_assets(imscc_dir, output_dir)
 
@@ -2230,8 +2246,7 @@ def run_import(imscc_path: Path, output_dir: Path) -> None:
             if entry.category == "question_bank":
                 convert_question_bank(entry, imscc_dir, output_dir)
 
-        # Phase 6: modules
-        modules = parse_module_meta(imscc_dir)
+        # Phase 6: modules (parsed earlier for link rewriting)
         for module in modules:
             generate_module_file(module, temp_manifest, output_dir)
         if modules:

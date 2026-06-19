@@ -995,6 +995,37 @@ def test_quiz_module_item_type_is_quiz(mock_course, mocker, tmp_path) -> None:
     assert item_call["content_id"] == 12345
 
 
+def test_file_module_item_type_is_file(mock_course, mocker, tmp_path) -> None:
+    """A module that references an asset file creates a File-type module item."""
+    mocker.patch("github_to_canvas.manifest.flush")
+    root = tmp_path / "course"
+    (root / "modules").mkdir(parents=True)
+    (root / "assets").mkdir()
+    (root / "assets" / "cheatsheet.pdf").write_bytes(b"fake-pdf")
+    (root / "modules" / "m.md").write_text(
+        "---\ntitle: Resources\npublished: true\n---\n\n"
+        "- [Cheat Sheet](../assets/cheatsheet.pdf)\n"
+    )
+    preloaded = {
+        "assets/cheatsheet.pdf": {
+            "canvas_id": 77777, "canvas_type": "file",
+            "canvas_url": "/files/77777/download",
+            "last_synced": _FUTURE_SYNCED,
+        },
+    }
+    mocker.patch("github_to_canvas.manifest.load", return_value=preloaded)
+    module = _mock_module(66666)
+    mock_course.create_module.return_value = module
+    module.create_module_item.return_value = _mock_item(201)
+
+    run_sync(_config(), root)
+
+    module.create_module_item.assert_called_once()
+    item_call = module.create_module_item.call_args[1]["module_item"]
+    assert item_call["type"] == "File"
+    assert item_call["content_id"] == 77777
+
+
 def test_single_target_skipped_when_t_already_uploaded_it(mock_course, course_root, mocker) -> None:
     """-t BFS uploads pages/syllabus.md and updates last_synced. -s then skips it via needs_sync."""
     # Make the page old so -t uploads it (needs_sync=True), setting last_synced=now.

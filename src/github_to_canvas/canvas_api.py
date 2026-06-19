@@ -597,6 +597,7 @@ _CANVAS_ITEM_TYPE = {
     "assignment": "Assignment",
     "discussion": "Discussion",
     "quiz": "Quiz",
+    "file": "File",
 }
 
 
