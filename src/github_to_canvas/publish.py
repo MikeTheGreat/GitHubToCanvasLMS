@@ -118,6 +118,53 @@ def _rewrite_quiz_links(text: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Pandoc → MkDocs Markdown normalisation
+# ---------------------------------------------------------------------------
+
+# Matches Pandoc raw-HTML blocks:  ```{=html}\n<content>\n```  →  <content>
+_RAW_HTML_BLOCK_RE = re.compile(
+    r"^```\{=html\}\s*\n(.*?)^```\s*$", re.MULTILINE | re.DOTALL
+)
+
+# Matches Pandoc spans, including one level of nested [link](url):
+#   [visible text]{#id .cls key="val"}  →  visible text
+_PANDOC_SPAN_RE = re.compile(
+    r"\[((?:[^\[\]]|\[[^\]]*\](?:\([^)]*\))?)*)\]"
+    r"\{(?=[^}]*(?:#[\w-]|\.[\w-]|\w+=\"))[^}]+\}"
+)
+
+# Matches any remaining Pandoc attribute block:  {#id .cls key="val"}
+_PANDOC_ATTR_RE = re.compile(
+    r"\{(?=[^}]*(?:#[\w-]|\.[\w-]|\w+=\"))[^}]+\}"
+)
+
+# Backslash at end of line (Pandoc hard break) → two trailing spaces
+_TRAILING_BACKSLASH_RE = re.compile(r"\\[ \t]*$", re.MULTILINE)
+
+
+def _strip_pandoc_syntax(text: str) -> str:
+    """Normalise Pandoc-flavoured Markdown into MkDocs-compatible Markdown.
+
+    Handles raw-HTML blocks, attribute blocks, Pandoc spans, and backslash
+    escapes while leaving real fenced code blocks untouched.
+    """
+    text = _RAW_HTML_BLOCK_RE.sub(r"\1", text)
+    lines: list[str] = []
+    in_fence = False
+    for line in text.splitlines(keepends=True):
+        stripped = line.lstrip()
+        if stripped.startswith("```") or stripped.startswith("~~~"):
+            in_fence = not in_fence
+        if not in_fence:
+            line = _PANDOC_SPAN_RE.sub(r"\1", line)
+            line = _PANDOC_ATTR_RE.sub("", line)
+            line = line.replace("\\'", "'").replace('\\"', '"')
+            line = _TRAILING_BACKSLASH_RE.sub("  ", line)
+        lines.append(line)
+    return "".join(lines)
+
+
+# ---------------------------------------------------------------------------
 # Navigation building
 # ---------------------------------------------------------------------------
 
@@ -190,6 +237,7 @@ def stage_content_markdown(md_path: Path, repo: Path) -> str:
     frontmatter, body = parse_frontmatter(md_path.read_text())
     body = preprocess_snippets(body, md_path, repo / "snippets")
     body = _rewrite_quiz_links(body)
+    body = _strip_pandoc_syntax(body)
     title = frontmatter.get("title", md_path.stem)
     if not _has_leading_h1(body):
         body = f"# {title}\n\n{body.lstrip()}"

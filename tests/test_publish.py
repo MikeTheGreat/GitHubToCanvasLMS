@@ -109,6 +109,90 @@ def test_stage_content_rewrites_quiz_links(tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# Pandoc syntax normalisation
+# ---------------------------------------------------------------------------
+
+def test_strip_pandoc_attrs_heading():
+    text = '## What is this? {#what-is-this heading="Overview of course"}\n'
+    result = publish._strip_pandoc_syntax(text)
+    assert result == "## What is this? \n"
+
+
+def test_strip_pandoc_attrs_image():
+    text = '![alt](img.png){#239821515 role="presentation" width="776" height="284"}\n'
+    result = publish._strip_pandoc_syntax(text)
+    assert result == "![alt](img.png)\n"
+
+
+def test_strip_pandoc_attrs_link_target():
+    text = '[Click here](https://example.com){.external target="_blank"}\n'
+    result = publish._strip_pandoc_syntax(text)
+    assert result == "[Click here](https://example.com)\n"
+
+
+def test_strip_pandoc_attrs_span():
+    text = '[bold text]{style="background-color: #fff500;"}\n'
+    result = publish._strip_pandoc_syntax(text)
+    assert result == "bold text\n"
+
+
+def test_strip_pandoc_span_with_nested_link():
+    text = (
+        '[Please [watch the video here]'
+        '(https://example.com/video))]{style="font-size: 18pt;"}\n'
+    )
+    result = publish._strip_pandoc_syntax(text)
+    assert result == "Please [watch the video here](https://example.com/video))\n"
+
+
+def test_strip_pandoc_attrs_preserves_code_fences():
+    text = '```\n{#id .class key="val"}\n```\n'
+    result = publish._strip_pandoc_syntax(text)
+    assert result == text
+
+
+def test_strip_pandoc_attrs_ignores_plain_braces():
+    text = "x = {1, 2, 3}\n"
+    result = publish._strip_pandoc_syntax(text)
+    assert result == text
+
+
+def test_strip_pandoc_attrs_raw_html_block():
+    text = "before\n\n```{=html}\n<!-- comment -->\n```\n\nafter\n"
+    result = publish._strip_pandoc_syntax(text)
+    assert "```" not in result
+    assert "<!-- comment -->" in result
+    assert "before" in result
+    assert "after" in result
+
+
+def test_strip_pandoc_escapes_apostrophe():
+    result = publish._strip_pandoc_syntax("you\\'ll need this\n")
+    assert result == "you'll need this\n"
+
+
+def test_strip_pandoc_escapes_double_quote():
+    result = publish._strip_pandoc_syntax('mentions of \\"hybrid format\\"\n')
+    assert result == 'mentions of "hybrid format"\n'
+
+
+def test_strip_pandoc_trailing_backslash():
+    result = publish._strip_pandoc_syntax("end of line\\\nmore text\n")
+    assert result == "end of line  \nmore text\n"
+
+
+def test_strip_pandoc_trailing_backslash_with_spaces():
+    result = publish._strip_pandoc_syntax("end of line\\  \nmore text\n")
+    assert result == "end of line  \nmore text\n"
+
+
+def test_strip_pandoc_escapes_preserved_in_code_fence():
+    text = "```\nyou\\'ll see \\\" here\\\n```\n"
+    result = publish._strip_pandoc_syntax(text)
+    assert result == text
+
+
+# ---------------------------------------------------------------------------
 # Quiz study guide
 # ---------------------------------------------------------------------------
 
