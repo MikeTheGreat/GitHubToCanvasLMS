@@ -1882,8 +1882,6 @@ def _convert_tab_configuration(
         elif isinstance(raw_id, str) and raw_id.startswith(TOOL_TAB_PREFIX):
             resource_id = raw_id[len(TOOL_TAB_PREFIX):]
             label = tool_titles.get(resource_id)
-            # Empty label is a deliberate fill-in slot when the name isn't in the
-            # cartridge; sync ignores it until the user supplies a real label.
             out["label"] = label if label else ""
             out["id"] = raw_id
             if not label:
@@ -1899,11 +1897,12 @@ def _convert_tab_configuration(
 
     if unresolved:
         print(
-            f"  WARNING: {len(unresolved)} external-tool navigation tab(s) have no name "
-            "in this cartridge — Canvas does not export the names of tools used only in "
-            'course navigation. Each was written with an empty label = "". Fill in the '
-            "tool's name as it appears in the destination course to position or hide it; "
-            "otherwise sync leaves that tab untouched."
+            f"  WARNING: {len(unresolved)} external-tool navigation tab(s) in "
+            "course_settings/course_settings.toml have no name — Canvas does not export "
+            "the names of tools used only in course navigation. Each was written with an "
+            'empty label = "" in [[tab_configuration]]. Fill in the tool\'s name as it '
+            "appears in the destination course to position or hide it; otherwise sync "
+            "leaves that tab untouched."
         )
     return result
 
