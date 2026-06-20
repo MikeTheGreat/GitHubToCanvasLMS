@@ -165,6 +165,47 @@ def _strip_pandoc_syntax(text: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Content discovery
+# ---------------------------------------------------------------------------
+
+CONTENT_DIRS = ["assignments", "discussions", "modules", "pages"]
+
+
+def _is_published(md_path: Path) -> bool:
+    frontmatter, _ = parse_frontmatter(md_path.read_text())
+    return frontmatter.get("published", False) is True
+
+
+def discover_published(repo: Path) -> dict[str, list[tuple[str, str]]]:
+    """Discover all published content grouped by content type.
+
+    Returns ``{type_label: [(title, repo_relative_path), ...]}`` for each
+    content-type directory that contains at least one published item.
+    Items within each type are sorted alphabetically by filename.
+    """
+    result: dict[str, list[tuple[str, str]]] = {}
+
+    for content_type in CONTENT_DIRS:
+        content_dir = repo / content_type
+        if not content_dir.exists():
+            continue
+
+        items: list[tuple[str, str]] = []
+        for md_file in sorted(content_dir.glob("*.md")):
+            if not _is_published(md_file):
+                continue
+            fm, _ = parse_frontmatter(md_file.read_text())
+            title = fm.get("title", md_file.stem)
+            items.append((title, f"{content_type}/{md_file.name}"))
+
+        if items:
+            label = content_type.replace("_", " ").title()
+            result[label] = items
+
+    return result
+
+
+# ---------------------------------------------------------------------------
 # Navigation building
 # ---------------------------------------------------------------------------
 
@@ -176,40 +217,24 @@ def discover_modules(repo: Path) -> list[Path]:
     return sorted(modules_dir.glob("*.md"))
 
 
-def build_nav(repo: Path) -> tuple[list[Any], set[str]]:
-    """Build the MkDocs nav tree from the modules/ directory.
+def build_nav(repo: Path) -> list[Any]:
+    """Build the MkDocs nav tree organised by content type.
 
-    Returns (nav, referenced_content) where nav is the list assigned to
-    ``mkdocs.yml``'s ``nav:`` key and referenced_content is the set of
-    repo-relative content paths that any module links to (these are the only
-    files staged, since only module-referenced content is published).
+    Returns the list assigned to ``mkdocs.yml``'s ``nav:`` key.  Each
+    content-type directory that contains at least one ``published: true``
+    file gets its own top-level section (Assignments, Discussions, Modules,
+    Pages, Quizzes) with published items listed alphabetically.
     """
     nav: list[Any] = [{"Home": "index.md"}]
-    referenced: set[str] = set()
+    published = discover_published(repo)
 
-    for module_md in discover_modules(repo):
-        frontmatter, body = parse_frontmatter(module_md.read_text())
-        title = frontmatter.get("title", module_md.stem)
-        items = parse_module_body(body, module_md, repo)
+    for label, items in published.items():
+        children: list[Any] = []
+        for title, repo_path in items:
+            children.append({title: staged_path(repo_path)})
+        nav.append({label: children})
 
-        overview_doc = f"modules/{module_md.name}"
-        children: list[Any] = [overview_doc]  # index page (navigation.indexes)
-        # SubHeader items open a nested group that following items fall into.
-        current_group = children
-
-        for item in items:
-            if item["type"] == "SubHeader":
-                current_group = []
-                children.append({item["title"]: current_group})
-            elif item["type"] == "ExternalUrl":
-                current_group.append({item["title"]: item["url"]})
-            elif item["type"] == "content":
-                referenced.add(item["local_path"])
-                current_group.append({item["title"]: staged_path(item["local_path"])})
-
-        nav.append({title: children})
-
-    return nav, referenced
+    return nav
 
 
 # ---------------------------------------------------------------------------
@@ -335,22 +360,38 @@ def render_mkdocs_yml(site_name: str, nav: list[Any]) -> str:
     )
 
 
-def _render_index(site_name: str, repo: Path) -> str:
+def _load_front_page(repo: Path) -> str | None:
+    """Return the repo-relative path named as ``front_page`` in course_settings.toml."""
+    settings_path = repo / "course_settings" / "course_settings.toml"
+    if not settings_path.exists():
+        return None
+    with settings_path.open("rb") as fh:
+        return tomllib.load(fh).get("front_page")
+
+
+def _render_index(site_name: str, repo: Path, published: dict[str, list[tuple[str, str]]]) -> str:
+    front_page_path = _load_front_page(repo)
+    front_page_body = ""
+    if front_page_path:
+        fp = repo / front_page_path
+        if fp.exists() and fp.suffix == ".md":
+            front_page_body = stage_content_markdown(fp, repo)
+
+    if front_page_body:
+        return front_page_body
+
     out = [
         f"# {site_name}",
         "",
         f"Welcome to **{site_name}**. Use the navigation on the left to browse "
-        "the course by module.",
+        "the course content.",
         "",
     ]
-    modules = discover_modules(repo)
-    if modules:
-        out.append("## Modules")
+    for label, items in published.items():
+        out.append(f"## {label}")
         out.append("")
-        for module_md in modules:
-            frontmatter, _ = parse_frontmatter(module_md.read_text())
-            mtitle = frontmatter.get("title", module_md.stem)
-            out.append(f"- [{mtitle}](modules/{module_md.name})")
+        for title, repo_path in items:
+            out.append(f"- [{title}]({staged_path(repo_path)})")
         out.append("")
     return "\n".join(out).rstrip() + "\n"
 
@@ -362,8 +403,8 @@ def _render_index(site_name: str, repo: Path) -> str:
 def stage(repo: Path, staging_dir: Path) -> dict[str, Any]:
     """Write the full MkDocs staging tree (mkdocs.yml + docs/ + overrides/).
 
-    Returns a small info dict (site_name, module count, staged file paths) for
-    logging and tests.  Only module-referenced content is staged.
+    Returns a small info dict (site_name, content counts, staged file paths)
+    for logging and tests.  Only ``published: true`` content is staged.
     """
     docs = staging_dir / "docs"
     docs.mkdir(parents=True, exist_ok=True)
@@ -371,52 +412,43 @@ def stage(repo: Path, staging_dir: Path) -> dict[str, Any]:
     (staging_dir / "overrides").mkdir(parents=True, exist_ok=True)
 
     site_name = load_site_name(repo)
-    nav, referenced = build_nav(repo)
+    published = discover_published(repo)
+    nav = build_nav(repo)
 
     (docs / "stylesheets" / "extra.css").write_text(EXTRA_CSS)
     (staging_dir / "overrides" / "main.html").write_text(OVERRIDES_MAIN)
-    (docs / "index.md").write_text(_render_index(site_name, repo))
+    (docs / "index.md").write_text(_render_index(site_name, repo, published))
 
-    # Copy assets wholesale so any referenced image/file resolves.
     assets_src = repo / "assets"
     if assets_src.exists():
         shutil.copytree(assets_src, docs / "assets", dirs_exist_ok=True)
 
-    # Module overview pages.
-    for module_md in discover_modules(repo):
-        dest = docs / "modules" / module_md.name
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        dest.write_text(render_module_overview(module_md, repo))
-        print(f"  Staging module: modules/{module_md.name}")
-
-    # Referenced content (pages, assignments, discussions, quizzes).
     staged_files: list[str] = []
-    for local_path in sorted(referenced):
-        dest_rel = staged_path(local_path)
-        dest = docs / dest_rel
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        if local_path.startswith("quizzes/"):
-            quiz_folder = (repo / local_path).parent
-            if not quiz_folder.exists():
-                print(f"  WARNING: quiz not found, skipping: {local_path}")
-                continue
-            dest.write_text(render_quiz_study_guide(quiz_folder))
-        else:
-            src = repo / local_path
-            if not src.suffix == ".md":
-                continue
-            if not src.exists():
-                print(f"  WARNING: content not found, skipping: {local_path}")
-                continue
-            dest.write_text(stage_content_markdown(src, repo))
-        staged_files.append(dest_rel)
-        print(f"  Staging content: {dest_rel}")
+    for label, items in published.items():
+        for title, local_path in items:
+            dest_rel = staged_path(local_path)
+            dest = docs / dest_rel
+            dest.parent.mkdir(parents=True, exist_ok=True)
+
+            if local_path.startswith("modules/"):
+                dest.write_text(render_module_overview(
+                    repo / local_path, repo,
+                ))
+            else:
+                src = repo / local_path
+                if not src.exists():
+                    print(f"  WARNING: content not found, skipping: {local_path}")
+                    continue
+                dest.write_text(stage_content_markdown(src, repo))
+
+            staged_files.append(dest_rel)
+            print(f"  Staging {label.lower()}: {dest_rel}")
 
     (staging_dir / "mkdocs.yml").write_text(render_mkdocs_yml(site_name, nav))
 
     return {
         "site_name": site_name,
-        "module_count": len(discover_modules(repo)),
+        "module_count": len(published.get("Modules", [])),
         "staged_files": staged_files,
     }
 

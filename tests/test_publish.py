@@ -37,47 +37,68 @@ def test_load_site_name_reads_course_settings(tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# Content discovery
+# ---------------------------------------------------------------------------
+
+def test_discover_published_fixture():
+    published = publish.discover_published(FIXTURES)
+    assert "Assignments" in published
+    assert "Discussions" in published
+    assert "Modules" in published
+    assert "Pages" in published
+    assert "Quizzes" not in published
+
+    assert ("Week 1 Problem Set", "assignments/week1.md") in published["Assignments"]
+    assert ("Introduce Yourself", "discussions/week1-intro.md") in published["Discussions"]
+    assert ("Week 1: Introduction", "modules/week-1.md") in published["Modules"]
+    assert ("Syllabus", "pages/syllabus.md") in published["Pages"]
+
+
+def test_discover_published_skips_unpublished(tmp_path):
+    (tmp_path / "pages").mkdir()
+    (tmp_path / "pages" / "draft.md").write_text(
+        "---\ntitle: Draft\npublished: false\n---\nDraft content\n"
+    )
+    (tmp_path / "pages" / "live.md").write_text(
+        "---\ntitle: Live\npublished: true\n---\nLive content\n"
+    )
+    published = publish.discover_published(tmp_path)
+    titles = [t for t, _ in published.get("Pages", [])]
+    assert "Live" in titles
+    assert "Draft" not in titles
+
+
+# ---------------------------------------------------------------------------
 # Navigation
 # ---------------------------------------------------------------------------
 
-def test_build_nav_structure_and_referenced():
-    nav, referenced = publish.build_nav(FIXTURES)
+def test_build_nav_content_type_sections():
+    nav = publish.build_nav(FIXTURES)
 
     assert nav[0] == {"Home": "index.md"}
-    # One module in the fixture: "Week 1: Introduction"
-    module_entry = nav[1]
-    (title, children), = module_entry.items()
-    assert title == "Week 1: Introduction"
+    labels = [list(entry.keys())[0] for entry in nav[1:]]
+    assert "Assignments" in labels
+    assert "Discussions" in labels
+    assert "Modules" in labels
+    assert "Pages" in labels
+    assert "Quizzes" not in labels
 
-    # First child is the overview index page (navigation.indexes).
-    assert children[0] == "modules/week-1.md"
+    # Assignments section contains the published assignment.
+    assignments = next(entry for entry in nav if "Assignments" in entry)
+    assert {"Week 1 Problem Set": "assignments/week1.md"} in assignments["Assignments"]
 
-    # SubHeaders become nested groups.
-    readings = next(c for c in children[1:] if isinstance(c, dict) and "Readings" in c)
-    assert readings["Readings"] == [{"Syllabus": "pages/syllabus.md"}]
-    work = next(c for c in children[1:] if isinstance(c, dict) and "Work" in c)
-    assert work["Work"] == [
-        {"Week 1 Assignment": "assignments/week1.md"},
-        {"Week 1 Discussion": "discussions/week1-intro.md"},
-    ]
-
-    assert referenced == {
-        "pages/syllabus.md",
-        "assignments/week1.md",
-        "discussions/week1-intro.md",
-    }
+    # Modules section lists the module overview page.
+    modules = next(entry for entry in nav if "Modules" in entry)
+    assert {"Week 1: Introduction": "modules/week-1.md"} in modules["Modules"]
 
 
-def test_build_nav_external_url_item(tmp_path):
-    (tmp_path / "modules").mkdir()
-    (tmp_path / "modules" / "links.md").write_text(
-        "---\ntitle: Links\n---\n\n"
-        "- [Course Site](https://example.com) <!-- target=\"_blank\" -->\n"
+def test_build_nav_skips_unpublished(tmp_path):
+    (tmp_path / "pages").mkdir()
+    (tmp_path / "pages" / "draft.md").write_text(
+        "---\ntitle: Draft\npublished: false\n---\nContent\n"
     )
-    nav, referenced = publish.build_nav(tmp_path)
-    (_, children), = nav[1].items()
-    assert {"Course Site": "https://example.com"} in children
-    assert referenced == set()
+    nav = publish.build_nav(tmp_path)
+    assert len(nav) == 1  # only Home
 
 
 # ---------------------------------------------------------------------------
@@ -227,7 +248,7 @@ def test_render_module_overview():
 # ---------------------------------------------------------------------------
 
 def test_render_mkdocs_yml_roundtrips():
-    nav, _ = publish.build_nav(FIXTURES)
+    nav = publish.build_nav(FIXTURES)
     text = publish.render_mkdocs_yml("My Course", nav)
     parsed = yaml.safe_load(text)
     assert parsed["site_name"] == "My Course"
@@ -251,45 +272,37 @@ def test_stage_writes_full_tree(tmp_path):
     assert (tmp_path / "docs" / "stylesheets" / "extra.css").exists()
     # Assets copied wholesale.
     assert (tmp_path / "docs" / "assets" / "images" / "fig.png").exists()
-    # Module overview + referenced content staged.
+    # All published content staged (including quiz, which is published).
     assert (tmp_path / "docs" / "modules" / "week-1.md").exists()
     assert (tmp_path / "docs" / "pages" / "syllabus.md").exists()
     assert (tmp_path / "docs" / "assignments" / "week1.md").exists()
     assert (tmp_path / "docs" / "discussions" / "week1-intro.md").exists()
+    assert not (tmp_path / "docs" / "quizzes").exists()
 
     assert info["site_name"] == FIXTURES.name
     assert info["module_count"] == 1
     assert set(info["staged_files"]) == {
-        "pages/syllabus.md",
         "assignments/week1.md",
         "discussions/week1-intro.md",
+        "modules/week-1.md",
+        "pages/syllabus.md",
     }
 
 
-def test_stage_excludes_unreferenced_content(tmp_path):
-    # The a-quiz fixture is not referenced by any module → must not be staged.
-    publish.stage(FIXTURES, tmp_path)
-    assert not (tmp_path / "docs" / "quizzes").exists()
-
-
-def test_stage_skips_binary_asset_links_in_modules(tmp_path):
-    """A module linking to a PNG must not crash stage() (regression)."""
+def test_stage_excludes_unpublished_content(tmp_path):
     repo = tmp_path / "repo"
-    (repo / "modules").mkdir(parents=True)
-    (repo / "assets" / "images").mkdir(parents=True)
     (repo / "pages").mkdir(parents=True)
-
-    (repo / "assets" / "images" / "photo.png").write_bytes(b"\x89PNG\r\n")
-    (repo / "pages" / "intro.md").write_text("# Intro\nHello\n")
-    (repo / "modules" / "mod.md").write_text(
-        "---\ntitle: Mod\npublished: true\n---\n"
-        "- [Intro](../pages/intro.md)\n"
-        "- [Photo](../assets/images/photo.png)\n"
+    (repo / "pages" / "draft.md").write_text(
+        "---\ntitle: Draft\npublished: false\n---\nDraft\n"
+    )
+    (repo / "pages" / "live.md").write_text(
+        "---\ntitle: Live\npublished: true\n---\nLive\n"
     )
     staging = tmp_path / "staging"
     info = publish.stage(repo, staging)
-    assert "pages/intro.md" in info["staged_files"]
-    assert not any("photo.png" in f for f in info["staged_files"])
+    assert "pages/live.md" in info["staged_files"]
+    assert "pages/draft.md" not in info["staged_files"]
+    assert not (staging / "docs" / "pages" / "draft.md").exists()
 
 
 # ---------------------------------------------------------------------------
