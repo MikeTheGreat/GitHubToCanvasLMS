@@ -10,6 +10,7 @@ from __future__ import annotations
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 import tomllib
 from pathlib import Path
@@ -354,6 +355,8 @@ def stage(repo: Path, staging_dir: Path) -> dict[str, Any]:
             dest.write_text(render_quiz_study_guide(quiz_folder))
         else:
             src = repo / local_path
+            if not src.suffix == ".md":
+                continue
             if not src.exists():
                 print(f"  WARNING: content not found, skipping: {local_path}")
                 continue
@@ -383,10 +386,16 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
 
 jobs:
-  publish:
+  build:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -396,10 +405,45 @@ jobs:
       - name: Install Pandoc
         run: sudo apt-get update && sudo apt-get install -y pandoc
       - name: Install github-to-canvas
-        run: pip install "github-to-canvas[publish] @ git+https://github.com/OWNER/github-to-canvas"
-      - name: Publish to GitHub Pages
-        run: github-to-canvas publish . --deploy
+        run: pip install "github-to-canvas[publish] @ git+https://github.com/MikeTheGreat/GitHubToCanvasLMS"
+      - name: Build site
+        run: github-to-canvas publish .
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
 """
+
+
+def _github_pages_url(repo: Path) -> str | None:
+    """Derive the GitHub Pages URL from the repo's git remote, or None."""
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(repo), "remote", "get-url", "origin"],
+            capture_output=True, text=True,
+        )
+        url = result.stdout.strip()
+    except FileNotFoundError:
+        return None
+    if not url:
+        return None
+    # https://github.com/OWNER/REPO.git or git@github.com:OWNER/REPO.git
+    m = re.search(r"github\.com[:/]([^/]+)/([^/]+?)(?:\.git)?$", url)
+    if not m:
+        return None
+    owner, repo_name = m.group(1), m.group(2)
+    return f"https://{owner}.github.io/{repo_name}/"
 
 
 def emit_workflow(repo: Path) -> Path:
@@ -407,7 +451,18 @@ def emit_workflow(repo: Path) -> Path:
     dest = repo / ".github" / "workflows" / "publish.yml"
     dest.parent.mkdir(parents=True, exist_ok=True)
     dest.write_text(WORKFLOW_YML)
-    print(f"Wrote workflow: {dest.relative_to(repo)}")
+    print(f"Wrote workflow: {dest}")
+    print()
+    print("Before the workflow will run, you need to go to your GitHub")
+    print("repo's Settings > Pages and set the source to \"GitHub Actions\".")
+    pages_url = _github_pages_url(repo)
+    if pages_url:
+        print()
+        print(f"Once deployed, your site will be at: {pages_url}")
+    else:
+        print()
+        print("Once deployed, your site will be at:")
+        print("  https://<your-username>.github.io/<repo-name>/")
     return dest
 
 
@@ -416,7 +471,7 @@ def emit_workflow(repo: Path) -> Path:
 # ---------------------------------------------------------------------------
 
 def _run_mkdocs(args: list[str], staging_dir: Path, cwd: Path) -> None:
-    cmd = ["mkdocs", *args, "-f", str(staging_dir / "mkdocs.yml")]
+    cmd = [sys.executable, "-m", "mkdocs", *args, "-f", str(staging_dir / "mkdocs.yml")]
     print(f"Running: {' '.join(cmd)}")
     try:
         subprocess.run(cmd, cwd=str(cwd), check=True)
@@ -432,16 +487,11 @@ def _run_mkdocs(args: list[str], staging_dir: Path, cwd: Path) -> None:
 def run_publish(
     course_dir: Path,
     output_dir: Path,
-    deploy: bool = False,
-    emit_workflow_flag: bool = False,
 ) -> None:
     """Top-level entry point for the `publish` subcommand."""
     repo = Path(course_dir).resolve()
     if not repo.is_dir():
         raise ValueError(f"Course directory not found: {course_dir}")
-
-    if emit_workflow_flag:
-        emit_workflow(repo)
 
     staging_dir = Path(tempfile.mkdtemp(prefix="g2c-publish-"))
     print(f"Staging site in: {staging_dir}")
@@ -449,10 +499,6 @@ def run_publish(
     print(f"Site: {info['site_name']}  ({info['module_count']} module(s), "
           f"{len(info['staged_files'])} content file(s))")
 
-    if deploy:
-        _run_mkdocs(["gh-deploy", "--force"], staging_dir, cwd=repo)
-        print("Deployed to GitHub Pages (gh-pages branch).")
-    else:
-        out = Path(output_dir).resolve()
-        _run_mkdocs(["build", "--site-dir", str(out)], staging_dir, cwd=repo)
-        print(f"Built static site: {out}")
+    out = Path(output_dir).resolve()
+    _run_mkdocs(["build", "--site-dir", str(out)], staging_dir, cwd=repo)
+    print(f"Built static site: {out}")

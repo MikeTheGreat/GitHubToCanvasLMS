@@ -141,30 +141,35 @@ def import_cmd(imscc_path: Path, output_dir: Path) -> None:
     type=click.Path(path_type=Path),
     help="Where `mkdocs build` writes the static HTML (default: site/).",
 )
-@click.option(
-    "--deploy",
-    is_flag=True,
-    default=False,
-    help="Run `mkdocs gh-deploy` to push to the gh-pages branch instead of a local build.",
-)
-@click.option(
-    "--emit-workflow",
-    is_flag=True,
-    default=False,
-    help="Write a starter .github/workflows/publish.yml into the course repo.",
-)
 def publish(
-    course_dir: Path, output_dir: Path, deploy: bool, emit_workflow: bool
+    course_dir: Path, output_dir: Path
 ) -> None:
     """Generate a public MkDocs static site from the course repo.
 
     COURSE_DIR is the course content repo (defaults to the current directory).
     """
     try:
-        run_publish(
-            course_dir, output_dir, deploy=deploy, emit_workflow_flag=emit_workflow
-        )
+        run_publish(course_dir, output_dir)
     except ValueError as e:
+        die(str(e))
+
+
+@main.command(name="emit-workflow")
+@click.argument(
+    "course_dir",
+    default=".",
+    type=click.Path(exists=True, file_okay=False, path_type=Path),
+)
+def emit_workflow_cmd(course_dir: Path) -> None:
+    """Write a GitHub Actions workflow for publishing to GitHub Pages.
+
+    COURSE_DIR is the course content repo (defaults to the current directory).
+    """
+    from .publish import emit_workflow
+
+    try:
+        emit_workflow(Path(course_dir).resolve())
+    except Exception as e:
         die(str(e))
 
 

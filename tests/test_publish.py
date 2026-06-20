@@ -6,6 +6,7 @@ no MkDocs install.  One test exercises ``run_publish`` end-to-end with the
 """
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 import yaml
@@ -187,6 +188,26 @@ def test_stage_excludes_unreferenced_content(tmp_path):
     assert not (tmp_path / "docs" / "quizzes").exists()
 
 
+def test_stage_skips_binary_asset_links_in_modules(tmp_path):
+    """A module linking to a PNG must not crash stage() (regression)."""
+    repo = tmp_path / "repo"
+    (repo / "modules").mkdir(parents=True)
+    (repo / "assets" / "images").mkdir(parents=True)
+    (repo / "pages").mkdir(parents=True)
+
+    (repo / "assets" / "images" / "photo.png").write_bytes(b"\x89PNG\r\n")
+    (repo / "pages" / "intro.md").write_text("# Intro\nHello\n")
+    (repo / "modules" / "mod.md").write_text(
+        "---\ntitle: Mod\npublished: true\n---\n"
+        "- [Intro](../pages/intro.md)\n"
+        "- [Photo](../assets/images/photo.png)\n"
+    )
+    staging = tmp_path / "staging"
+    info = publish.stage(repo, staging)
+    assert "pages/intro.md" in info["staged_files"]
+    assert not any("photo.png" in f for f in info["staged_files"])
+
+
 # ---------------------------------------------------------------------------
 # emit_workflow
 # ---------------------------------------------------------------------------
@@ -194,8 +215,11 @@ def test_stage_excludes_unreferenced_content(tmp_path):
 def test_emit_workflow(tmp_path):
     dest = publish.emit_workflow(tmp_path)
     assert dest == tmp_path / ".github" / "workflows" / "publish.yml"
-    assert "mkdocs gh-deploy" not in dest.read_text()  # uses the publish subcommand
-    assert "github-to-canvas publish . --deploy" in dest.read_text()
+    text = dest.read_text()
+    assert "actions/deploy-pages@v4" in text
+    assert "actions/upload-pages-artifact@v3" in text
+    assert "github-to-canvas publish ." in text
+    assert "--deploy" not in text
 
 
 # ---------------------------------------------------------------------------
@@ -209,26 +233,15 @@ def test_run_publish_build(tmp_path, monkeypatch):
     monkeypatch.setattr(publish.subprocess, "run", lambda cmd, **kw: calls.append((cmd, kw)) or None)
 
     out = tmp_path / "site"
-    publish.run_publish(FIXTURES, out, deploy=False)
+    publish.run_publish(FIXTURES, out)
 
     assert (staging / "mkdocs.yml").exists()
     (cmd, kw), = calls
-    assert cmd[:2] == ["mkdocs", "build"]
+    assert cmd[:3] == [sys.executable, "-m", "mkdocs"]
+    assert cmd[3] == "build"
     assert "--site-dir" in cmd
     assert str(out.resolve()) in cmd
     assert kw["cwd"] == str(FIXTURES.resolve())
-
-
-def test_run_publish_deploy(tmp_path, monkeypatch):
-    staging = tmp_path / "staging"
-    monkeypatch.setattr(publish.tempfile, "mkdtemp", lambda prefix="": str(staging))
-    calls = []
-    monkeypatch.setattr(publish.subprocess, "run", lambda cmd, **kw: calls.append((cmd, kw)) or None)
-
-    publish.run_publish(FIXTURES, tmp_path / "site", deploy=True)
-
-    (cmd, _), = calls
-    assert cmd[:2] == ["mkdocs", "gh-deploy"]
 
 
 def test_run_publish_missing_mkdocs_raises(tmp_path, monkeypatch):
