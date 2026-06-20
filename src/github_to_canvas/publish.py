@@ -35,40 +35,55 @@ EXTRA_CSS = """\
   --md-accent-fg-color: #E66000;         /* Canvas default institution orange */
 }
 
-/* Make the nav sidebar background match Canvas's sidebar */
-.md-nav--primary .md-nav__title,
+/* Header bar */
 [data-md-color-primary="custom"] .md-header {
   background-color: #2D3B45;
   color: #ffffff;
 }
 
-/* Active nav item: colored left-border indicator (Canvas style) */
-.md-nav__item--active > .md-nav__link {
+/* Nav sidebar title: hide site-name text, show "Materials:" instead */
+.md-nav--primary > .md-nav__title {
+  background-color: #2D3B45;
+  color: transparent;
+  font-size: 0;
+  padding: 0.8rem;
+}
+.md-nav--primary > .md-nav__title::before {
+  content: "Materials:";
+  display: block;
+  color: #ffffff;
+  font-size: 0.9rem;
+  font-weight: 700;
+}
+.md-nav--primary > .md-nav__title > * {
+  font-size: 1rem;
+  color: #ffffff;
+}
+
+/* Category labels in uppercase */
+.md-nav__item--section > .md-nav__link {
+  text-transform: uppercase;
+}
+
+/* Active leaf link: colored left-border indicator */
+.md-nav__item:not(.md-nav__item--nested) > .md-nav__link--active {
   border-left: 3px solid #E66000;
   padding-left: calc(0.6rem - 3px);
   color: #E66000;
   font-weight: 600;
 }
 
-/* Course name shown at the top of the navigation drawer */
-.md-course-name {
-  padding: 0.8rem 0.8rem 0.4rem;
+/* Remove highlight and extra space from category items */
+.md-nav__item--active > .md-nav__link {
+  border-left: 0;
+  padding-left: 0;
+  color: var(--md-default-fg-color);
   font-weight: 700;
-  font-size: 0.9rem;
-  color: #ffffff;
-  background-color: #2D3B45;
 }
 """
 
-# Material customisation hook: prepend the course name to the navigation drawer,
-# mirroring how Canvas shows the course name at the top of its sidebar.
 OVERRIDES_MAIN = """\
 {% extends "base.html" %}
-
-{% block site_nav %}
-  <div class="md-course-name">{{ config.site_name }}</div>
-  {{ super() }}
-{% endblock %}
 """
 
 THEME_FEATURES = [
@@ -206,6 +221,116 @@ def discover_published(repo: Path) -> dict[str, list[tuple[str, str]]]:
 
 
 # ---------------------------------------------------------------------------
+# Selective discovery (Syllabus / Assignments / Modules only)
+# ---------------------------------------------------------------------------
+
+def _discover_type(repo: Path, content_type: str) -> list[tuple[str, str]]:
+    """Discover published items of a single content type."""
+    content_dir = repo / content_type
+    if not content_dir.exists():
+        return []
+    items: list[tuple[str, str]] = []
+    for md_file in sorted(content_dir.glob("*.md")):
+        if not _is_published(md_file):
+            continue
+        fm, _ = parse_frontmatter(md_file.read_text())
+        title = fm.get("title", md_file.stem)
+        items.append((title, f"{content_type}/{md_file.name}"))
+    return items
+
+
+def _find_syllabus(repo: Path) -> tuple[str, str] | None:
+    """Find the published syllabus page.
+
+    Checks ``course_settings/syllabus.md`` first, then falls back to any
+    published page whose filename contains "syllabus".
+    """
+    candidates: list[Path] = []
+
+    cs_syllabus = repo / "course_settings" / "syllabus.md"
+    if cs_syllabus.exists():
+        candidates.append(cs_syllabus)
+
+    pages_dir = repo / "pages"
+    if pages_dir.exists():
+        candidates.extend(
+            f for f in sorted(pages_dir.glob("*.md"))
+            if "syllabus" in f.stem.lower()
+        )
+
+    for md_file in candidates:
+        if not _is_published(md_file):
+            continue
+        fm, _ = parse_frontmatter(md_file.read_text())
+        title = fm.get("title", md_file.stem)
+        rel = md_file.relative_to(repo).as_posix()
+        return (title, rel)
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Reachability traversal
+# ---------------------------------------------------------------------------
+
+_MD_LINK_RE = re.compile(r"!?\[(?:[^\[\]]|\[[^\]]*\])*\]\(([^)\s]+)")
+
+
+def extract_local_refs(text: str, source_file: Path, repo: Path) -> set[str]:
+    """Extract repo-relative paths of local files referenced from Markdown."""
+    refs: set[str] = set()
+    for m in _MD_LINK_RE.finditer(text):
+        href = m.group(1)
+        if href.startswith(("http://", "https://", "mailto:", "#")):
+            continue
+        href = href.split("#")[0]
+        if not href:
+            continue
+        resolved = (source_file.parent / href).resolve()
+        try:
+            rel = resolved.relative_to(repo.resolve()).as_posix()
+        except ValueError:
+            continue
+        if (repo / rel).exists():
+            refs.add(rel)
+    return refs
+
+
+def collect_reachable(repo: Path, seed_paths: set[str]) -> set[str]:
+    """BFS from seed paths to find all locally-referenced content.
+
+    Excludes anything under ``quizzes/`` or ``snippets/`` (snippets are
+    inlined during staging, not linked).
+    """
+    visited: set[str] = set()
+    queue = list(seed_paths)
+
+    while queue:
+        repo_rel = queue.pop(0)
+        if repo_rel in visited:
+            continue
+        if repo_rel.startswith(("quizzes/", "snippets/")):
+            continue
+        visited.add(repo_rel)
+
+        src = repo / repo_rel
+        if not src.exists() or src.suffix != ".md":
+            continue
+
+        _, body = parse_frontmatter(src.read_text())
+
+        if repo_rel.startswith("modules/"):
+            for item in parse_module_body(body, src, repo):
+                if item["type"] == "content" and item["local_path"] not in visited:
+                    queue.append(item["local_path"])
+
+        for ref in extract_local_refs(body, src, repo):
+            if ref not in visited:
+                queue.append(ref)
+
+    return visited
+
+
+# ---------------------------------------------------------------------------
 # Navigation building
 # ---------------------------------------------------------------------------
 
@@ -218,21 +343,28 @@ def discover_modules(repo: Path) -> list[Path]:
 
 
 def build_nav(repo: Path) -> list[Any]:
-    """Build the MkDocs nav tree organised by content type.
+    """Build the MkDocs nav tree: Syllabus, Assignments, Modules.
 
-    Returns the list assigned to ``mkdocs.yml``'s ``nav:`` key.  Each
-    content-type directory that contains at least one ``published: true``
-    file gets its own top-level section (Assignments, Discussions, Modules,
-    Pages, Quizzes) with published items listed alphabetically.
+    Only these three categories appear in the navigation.  Other content
+    (pages, discussions) is published only when reachable from a nav item.
+    Quizzes are explicitly excluded.
     """
     nav: list[Any] = [{"Home": "index.md"}]
-    published = discover_published(repo)
 
-    for label, items in published.items():
-        children: list[Any] = []
-        for title, repo_path in items:
-            children.append({title: staged_path(repo_path)})
-        nav.append({label: children})
+    syllabus = _find_syllabus(repo)
+    if syllabus:
+        title, path = syllabus
+        nav.append({"Syllabus": [{title: staged_path(path)}]})
+
+    assignments = _discover_type(repo, "assignments")
+    if assignments:
+        children = [{t: staged_path(p)} for t, p in assignments]
+        nav.append({"Assignments": children})
+
+    modules = _discover_type(repo, "modules")
+    if modules:
+        children = [{t: staged_path(p)} for t, p in modules]
+        nav.append({"Modules": children})
 
     return nav
 
@@ -369,7 +501,12 @@ def _load_front_page(repo: Path) -> str | None:
         return tomllib.load(fh).get("front_page")
 
 
-def _render_index(site_name: str, repo: Path, published: dict[str, list[tuple[str, str]]]) -> str:
+def _render_index(
+    site_name: str,
+    repo: Path,
+    syllabus: tuple[str, str] | None,
+    nav_sections: dict[str, list[tuple[str, str]]],
+) -> str:
     front_page_path = _load_front_page(repo)
     front_page_body = ""
     if front_page_path:
@@ -387,7 +524,11 @@ def _render_index(site_name: str, repo: Path, published: dict[str, list[tuple[st
         "the course content.",
         "",
     ]
-    for label, items in published.items():
+    if syllabus:
+        title, path = syllabus
+        out.append(f"- [{title}]({staged_path(path)})")
+        out.append("")
+    for label, items in nav_sections.items():
         out.append(f"## {label}")
         out.append("")
         for title, repo_path in items:
@@ -404,7 +545,11 @@ def stage(repo: Path, staging_dir: Path) -> dict[str, Any]:
     """Write the full MkDocs staging tree (mkdocs.yml + docs/ + overrides/).
 
     Returns a small info dict (site_name, content counts, staged file paths)
-    for logging and tests.  Only ``published: true`` content is staged.
+    for logging and tests.
+
+    Only Syllabus, Assignments, and Modules appear in the nav.  Other content
+    (pages, discussions, assets) is staged when reachable from a nav item.
+    Quizzes are explicitly excluded.
     """
     docs = staging_dir / "docs"
     docs.mkdir(parents=True, exist_ok=True)
@@ -412,43 +557,65 @@ def stage(repo: Path, staging_dir: Path) -> dict[str, Any]:
     (staging_dir / "overrides").mkdir(parents=True, exist_ok=True)
 
     site_name = load_site_name(repo)
-    published = discover_published(repo)
+
+    syllabus = _find_syllabus(repo)
+    assignments = _discover_type(repo, "assignments")
+    modules = _discover_type(repo, "modules")
+
     nav = build_nav(repo)
+
+    seed_paths: set[str] = set()
+    if syllabus:
+        seed_paths.add(syllabus[1])
+    for _, path in assignments:
+        seed_paths.add(path)
+    for _, path in modules:
+        seed_paths.add(path)
+
+    reachable = collect_reachable(repo, seed_paths)
+
+    nav_sections: dict[str, list[tuple[str, str]]] = {}
+    if assignments:
+        nav_sections["Assignments"] = assignments
+    if modules:
+        nav_sections["Modules"] = modules
 
     (docs / "stylesheets" / "extra.css").write_text(EXTRA_CSS)
     (staging_dir / "overrides" / "main.html").write_text(OVERRIDES_MAIN)
-    (docs / "index.md").write_text(_render_index(site_name, repo, published))
+    (docs / "index.md").write_text(
+        _render_index(site_name, repo, syllabus, nav_sections)
+    )
 
     assets_src = repo / "assets"
     if assets_src.exists():
         shutil.copytree(assets_src, docs / "assets", dirs_exist_ok=True)
 
     staged_files: list[str] = []
-    for label, items in published.items():
-        for title, local_path in items:
-            dest_rel = staged_path(local_path)
-            dest = docs / dest_rel
-            dest.parent.mkdir(parents=True, exist_ok=True)
+    for repo_rel in sorted(reachable):
+        src = repo / repo_rel
+        if not src.exists():
+            print(f"  WARNING: content not found, skipping: {repo_rel}")
+            continue
 
-            if local_path.startswith("modules/"):
-                dest.write_text(render_module_overview(
-                    repo / local_path, repo,
-                ))
-            else:
-                src = repo / local_path
-                if not src.exists():
-                    print(f"  WARNING: content not found, skipping: {local_path}")
-                    continue
-                dest.write_text(stage_content_markdown(src, repo))
+        dest_rel = staged_path(repo_rel)
+        dest = docs / dest_rel
+        dest.parent.mkdir(parents=True, exist_ok=True)
 
-            staged_files.append(dest_rel)
-            print(f"  Staging {label.lower()}: {dest_rel}")
+        if src.suffix != ".md":
+            shutil.copy2(src, dest)
+        elif repo_rel.startswith("modules/"):
+            dest.write_text(render_module_overview(src, repo))
+        else:
+            dest.write_text(stage_content_markdown(src, repo))
+
+        staged_files.append(dest_rel)
+        print(f"  Staging: {dest_rel}")
 
     (staging_dir / "mkdocs.yml").write_text(render_mkdocs_yml(site_name, nav))
 
     return {
         "site_name": site_name,
-        "module_count": len(published.get("Modules", [])),
+        "module_count": len(modules),
         "staged_files": staged_files,
     }
 

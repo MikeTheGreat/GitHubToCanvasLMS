@@ -68,19 +68,99 @@ def test_discover_published_skips_unpublished(tmp_path):
     assert "Draft" not in titles
 
 
+def test_find_syllabus_fixture():
+    result = publish._find_syllabus(FIXTURES)
+    assert result == ("Syllabus", "pages/syllabus.md")
+
+
+def test_find_syllabus_in_course_settings(tmp_path):
+    cs = tmp_path / "course_settings"
+    cs.mkdir()
+    (cs / "syllabus.md").write_text(
+        "---\ntitle: Course Syllabus\npublished: true\n---\nContent\n"
+    )
+    result = publish._find_syllabus(tmp_path)
+    assert result == ("Course Syllabus", "course_settings/syllabus.md")
+
+
+def test_find_syllabus_missing(tmp_path):
+    assert publish._find_syllabus(tmp_path) is None
+
+
+# ---------------------------------------------------------------------------
+# Reachability
+# ---------------------------------------------------------------------------
+
+def test_extract_local_refs(tmp_path):
+    page = tmp_path / "pages" / "a.md"
+    (tmp_path / "pages").mkdir()
+    (tmp_path / "pages" / "b.md").write_text("other")
+    (tmp_path / "assets" / "img.png").parent.mkdir(parents=True)
+    (tmp_path / "assets" / "img.png").write_text("")
+    page.write_text("See [B](b.md) and ![img](../assets/img.png)\n")
+    refs = publish.extract_local_refs(page.read_text(), page, tmp_path)
+    assert "pages/b.md" in refs
+    assert "assets/img.png" in refs
+
+
+def test_extract_local_refs_skips_external():
+    from pathlib import Path
+    text = "[link](https://example.com) and [anchor](#top)"
+    refs = publish.extract_local_refs(text, Path("/fake/file.md"), Path("/fake"))
+    assert len(refs) == 0
+
+
+def test_collect_reachable_excludes_quizzes(tmp_path):
+    (tmp_path / "modules").mkdir()
+    (tmp_path / "modules" / "m.md").write_text(
+        "---\ntitle: M\npublished: true\n---\n"
+        "- [Quiz](../quizzes/q/q.md)\n"
+        "- [Page](../pages/p.md)\n"
+    )
+    (tmp_path / "quizzes" / "q").mkdir(parents=True)
+    (tmp_path / "quizzes" / "q" / "q.md").write_text(
+        "---\ntitle: Q\npublished: true\n---\nQuiz\n"
+    )
+    (tmp_path / "pages").mkdir()
+    (tmp_path / "pages" / "p.md").write_text(
+        "---\ntitle: P\npublished: true\n---\nPage\n"
+    )
+    reachable = publish.collect_reachable(tmp_path, {"modules/m.md"})
+    assert "modules/m.md" in reachable
+    assert "pages/p.md" in reachable
+    assert "quizzes/q/q.md" not in reachable
+
+
+def test_collect_reachable_follows_chains(tmp_path):
+    (tmp_path / "pages").mkdir()
+    (tmp_path / "pages" / "a.md").write_text(
+        "---\ntitle: A\n---\nSee [B](b.md)\n"
+    )
+    (tmp_path / "pages" / "b.md").write_text(
+        "---\ntitle: B\n---\nSee [C](c.md)\n"
+    )
+    (tmp_path / "pages" / "c.md").write_text(
+        "---\ntitle: C\n---\nEnd\n"
+    )
+    reachable = publish.collect_reachable(tmp_path, {"pages/a.md"})
+    assert reachable == {"pages/a.md", "pages/b.md", "pages/c.md"}
+
+
 # ---------------------------------------------------------------------------
 # Navigation
 # ---------------------------------------------------------------------------
 
-def test_build_nav_content_type_sections():
+def test_build_nav_syllabus_assignments_modules():
     nav = publish.build_nav(FIXTURES)
 
     assert nav[0] == {"Home": "index.md"}
-    labels = [list(entry.keys())[0] for entry in nav[1:]]
+    assert nav[1] == {"Syllabus": [{"Syllabus": "pages/syllabus.md"}]}
+
+    labels = [list(entry.keys())[0] for entry in nav[2:]]
     assert "Assignments" in labels
-    assert "Discussions" in labels
     assert "Modules" in labels
-    assert "Pages" in labels
+    assert "Discussions" not in labels
+    assert "Pages" not in labels
     assert "Quizzes" not in labels
 
     # Assignments section contains the published assignment.
@@ -270,12 +350,12 @@ def test_stage_writes_full_tree(tmp_path):
     assert (tmp_path / "overrides" / "main.html").exists()
     assert (tmp_path / "docs" / "index.md").exists()
     assert (tmp_path / "docs" / "stylesheets" / "extra.css").exists()
-    # Assets copied wholesale.
     assert (tmp_path / "docs" / "assets" / "images" / "fig.png").exists()
-    # All published content staged (including quiz, which is published).
+    # Nav seeds (syllabus, assignments, modules) are staged.
     assert (tmp_path / "docs" / "modules" / "week-1.md").exists()
     assert (tmp_path / "docs" / "pages" / "syllabus.md").exists()
     assert (tmp_path / "docs" / "assignments" / "week1.md").exists()
+    # Discussion is reachable from the module → staged but not in nav.
     assert (tmp_path / "docs" / "discussions" / "week1-intro.md").exists()
     assert not (tmp_path / "docs" / "quizzes").exists()
 
@@ -289,20 +369,20 @@ def test_stage_writes_full_tree(tmp_path):
     }
 
 
-def test_stage_excludes_unpublished_content(tmp_path):
+def test_stage_excludes_unreachable_content(tmp_path):
     repo = tmp_path / "repo"
     (repo / "pages").mkdir(parents=True)
-    (repo / "pages" / "draft.md").write_text(
-        "---\ntitle: Draft\npublished: false\n---\nDraft\n"
+    (repo / "pages" / "private-notes.md").write_text(
+        "---\ntitle: Private Notes\npublished: true\n---\nSecret\n"
     )
-    (repo / "pages" / "live.md").write_text(
-        "---\ntitle: Live\npublished: true\n---\nLive\n"
+    (repo / "pages" / "syllabus.md").write_text(
+        "---\ntitle: Syllabus\npublished: true\n---\nWelcome\n"
     )
     staging = tmp_path / "staging"
     info = publish.stage(repo, staging)
-    assert "pages/live.md" in info["staged_files"]
-    assert "pages/draft.md" not in info["staged_files"]
-    assert not (staging / "docs" / "pages" / "draft.md").exists()
+    assert "pages/syllabus.md" in info["staged_files"]
+    assert "pages/private-notes.md" not in info["staged_files"]
+    assert not (staging / "docs" / "pages" / "private-notes.md").exists()
 
 
 # ---------------------------------------------------------------------------
