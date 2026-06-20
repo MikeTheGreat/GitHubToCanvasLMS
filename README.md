@@ -46,6 +46,7 @@ Write your course content as Markdown files in a Git repository. Run this tool t
     - [Deleting a file in Canvas](#deleting-a-file-in-canvas)
   - [IMSCC import](#imscc-import)
     - [Verifying the import](#verifying-the-import)
+  - [Resolving external-tool labels (`create-tool-aliases`)](#resolving-external-tool-labels-create-tool-aliases)
 
 ---
 
@@ -574,7 +575,9 @@ tab already in the course is skipped with a warning.
 > kept for reference) and a warning is printed. Fill in each label with the tool's
 > name as it appears in the destination course — e.g. `{ label = "Panopto", id =
 > "context_external_tool_g…" }` — to position or hide it; until then sync leaves
-> that tab untouched.
+> that tab untouched. The [`create-tool-aliases`](#resolving-external-tool-labels-create-tool-aliases)
+> subcommand can generate a complete `tab_configuration` block with labels
+> filled in from a Canvas course where you have already imported the IMSCC.
 
 ### Syllabus (`course_settings/syllabus.md`)
 
@@ -1289,3 +1292,51 @@ Results: 44 OK  |  1 MISSING  |  2 skipped (too short)  |  47 total checked
 ```
 
 Exit code 0 means all sampled fragments were found. Exit code 1 means at least one was missing.
+
+## Resolving external-tool labels (`create-tool-aliases`)
+
+Canvas does not export the names of external tools that are used only in course
+navigation, so after `import` the `tab_configuration` in
+`course_settings/course_settings.toml` has empty `label = ""` placeholders for
+those tools. The `create-tool-aliases` subcommand fills in these labels by
+reading the navigation tabs from a live Canvas course.
+
+### Workflow
+
+1. Import the `.imscc` file into an empty Canvas course (via the Canvas UI:
+   Settings → Import Course Content).
+2. Run `create-tool-aliases`, passing any URL from that course:
+
+   ```bash
+   github-to-canvas create-tool-aliases https://school.instructure.com/courses/12345
+   ```
+
+   Any URL containing `/courses/<id>` works — you can paste whatever page you
+   happen to have open (e.g. `.../courses/12345/rubrics`).
+
+3. The subcommand prints a complete `tab_configuration` block to stdout with
+   tool labels filled in:
+
+   ```toml
+   tab_configuration = [
+       { id = "home" },
+       { id = "modules" },
+       { id = "assignments" },
+       { label = "Zoom", id = "context_external_tool_gd9568f5b0d2a343486654adb2ae69aac" },
+       { label = "Panopto Recordings", id = "context_external_tool_g67e4019c6ea3ce88e6856319395ed4e4" },
+       { id = "grades" },
+       { id = "people" },
+   ]
+   ```
+
+4. Compare this output with the `tab_configuration` in your working course's
+   `course_settings/course_settings.toml` and fill in (or replace) the labels.
+
+The API token is read from the `CANVAS_API_TOKEN` environment variable. The
+base URL is extracted from the course URL, so no `canvas.toml` is needed for
+this subcommand.
+
+> **Note:** The tool order in the output should match the order in the imported
+> course's navigation sidebar. If the order differs from your working course's
+> `tab_configuration`, rearrange the entries manually — sync matches tabs by
+> label, not by position or id.

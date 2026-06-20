@@ -10,6 +10,8 @@ from github_to_canvas.imscc_import import (
     _build_frontmatter,
     _convert_tab_configuration,
     _extract_html_body,
+    _extract_iframes,
+    _html_to_markdown,
     _parse_assignment_groups,
     _parse_context,
     _parse_course_settings_full,
@@ -19,6 +21,7 @@ from github_to_canvas.imscc_import import (
     _parse_late_policy,
     _parse_manifest_metadata,
     _parse_rubrics,
+    _restore_iframes,
     _shift_headings_down,
     _strip_canvas_img_attrs,
     parse_assignment_settings,
@@ -1230,3 +1233,92 @@ def test_shift_headings_preserves_body_text() -> None:
     md = "# Title\n\nParagraph text here.\n"
     result = _shift_headings_down(md)
     assert "Paragraph text here." in result
+
+
+# ---------------------------------------------------------------------------
+# _extract_iframes / _restore_iframes
+# ---------------------------------------------------------------------------
+
+
+def test_extract_iframes_panopto() -> None:
+    html = (
+        '<p>Watch this:</p>'
+        '<iframe src="https://example.hosted.panopto.com/Panopto/Pages/Embed.aspx?id=abc-123" '
+        'width="720" height="405" aria-description="My Lecture"></iframe>'
+        '<p>End</p>'
+    )
+    cleaned, iframes = _extract_iframes(html)
+    assert len(iframes) == 1
+    assert "Panopto" in iframes[0]
+    assert "aria-description" in iframes[0]
+    assert "<iframe" not in cleaned
+    assert "IFRAME_PLACEHOLDER_0" in cleaned
+    assert "Watch this" in cleaned
+    assert "End" in cleaned
+
+
+def test_extract_iframes_3play_youtube() -> None:
+    html = (
+        '<p>Video:</p>'
+        '<iframe src="//plugin.3playmedia.com/show?mf=123&video_id=dQw4w9WgXcQ" '
+        'width="640" height="360"></iframe>'
+    )
+    cleaned, iframes = _extract_iframes(html)
+    assert len(iframes) == 1
+    assert "3playmedia" in iframes[0]
+    assert "video_id=dQw4w9WgXcQ" in iframes[0]
+
+
+def test_extract_iframes_multiple() -> None:
+    html = (
+        '<iframe src="https://a.example.com"></iframe>'
+        '<p>Middle</p>'
+        '<iframe src="https://b.example.com"></iframe>'
+    )
+    cleaned, iframes = _extract_iframes(html)
+    assert len(iframes) == 2
+    assert "IFRAME_PLACEHOLDER_0" in cleaned
+    assert "IFRAME_PLACEHOLDER_1" in cleaned
+    assert "a.example.com" in iframes[0]
+    assert "b.example.com" in iframes[1]
+
+
+def test_extract_iframes_none() -> None:
+    html = "<p>No iframes here</p>"
+    cleaned, iframes = _extract_iframes(html)
+    assert iframes == []
+    assert cleaned == html
+
+
+def test_restore_iframes_single() -> None:
+    md = "Watch this:\n\nIFRAME_PLACEHOLDER_0\n\nEnd"
+    iframes = ['<iframe src="https://example.com/video"></iframe>']
+    result = _restore_iframes(md, iframes)
+    assert '<iframe src="https://example.com/video"></iframe>' in result
+    assert "IFRAME_PLACEHOLDER_0" not in result
+
+
+def test_restore_iframes_multiple() -> None:
+    md = "IFRAME_PLACEHOLDER_0\n\ntext\n\nIFRAME_PLACEHOLDER_1"
+    iframes = [
+        '<iframe src="https://a.com"></iframe>',
+        '<iframe src="https://b.com"></iframe>',
+    ]
+    result = _restore_iframes(md, iframes)
+    assert "a.com" in result
+    assert "b.com" in result
+    assert "IFRAME_PLACEHOLDER" not in result
+
+
+def test_html_to_markdown_preserves_iframe() -> None:
+    html = (
+        '<p>Before the video.</p>'
+        '<iframe src="https://example.hosted.panopto.com/Panopto/Pages/Embed.aspx?id=abc-123" '
+        'width="720" height="405" aria-description="My Lecture"></iframe>'
+        '<p>After the video.</p>'
+    )
+    md = _html_to_markdown(html)
+    assert "Before the video." in md
+    assert "After the video." in md
+    assert '<iframe src="https://example.hosted.panopto.com/Panopto/Pages/Embed.aspx?id=abc-123"' in md
+    assert "aria-description" in md

@@ -522,14 +522,45 @@ def _extract_html_body(html: str) -> str:
     return m.group(1).strip() if m else html.strip()
 
 
+_IFRAME_RE = re.compile(r"<iframe\b[^>]*>.*?</iframe>", re.IGNORECASE | re.DOTALL)
+
+
+def _extract_iframes(html: str) -> tuple[str, list[str]]:
+    """Replace <iframe> elements with placeholders, returning (html, iframes).
+
+    Pandoc strips iframes during HTML→Markdown conversion.  We pull them out
+    first, let Pandoc convert the rest, then re-insert them as raw HTML blocks.
+    """
+    iframes: list[str] = []
+
+    def _replace(m: re.Match) -> str:
+        idx = len(iframes)
+        iframes.append(m.group(0))
+        return f"IFRAME_PLACEHOLDER_{idx}"
+
+    return _IFRAME_RE.sub(_replace, html), iframes
+
+
+def _restore_iframes(markdown: str, iframes: list[str]) -> str:
+    """Replace IFRAME_PLACEHOLDER_N tokens with raw HTML blocks."""
+    for idx, iframe in enumerate(iframes):
+        placeholder = f"IFRAME_PLACEHOLDER_{idx}"
+        markdown = markdown.replace(placeholder, f"\n\n{iframe}\n\n")
+    return markdown
+
+
 def _html_to_markdown(html: str) -> str:
     html = _strip_canvas_img_attrs(html)
-    return pypandoc.convert_text(
+    html, iframes = _extract_iframes(html)
+    md = pypandoc.convert_text(
         html,
         to="markdown",
         format="html",
         extra_args=["--wrap=none"],
     )
+    if iframes:
+        md = _restore_iframes(md, iframes)
+    return md
 
 
 _ATX_HEADING_RE = re.compile(r"^(#{1,6})\s", re.MULTILINE)
