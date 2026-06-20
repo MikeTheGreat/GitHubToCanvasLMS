@@ -488,3 +488,28 @@ The subcommand writes to a temp dir (or `--output-dir` staging area) that looks 
   - Maybe if we store the canvas ID in the file?
 - Alternately: what about having "move" / rename commands in the tool to handle this?
   - It'll need to update the manifest file
+
+## Preserve `<iframe>` embeds during IMSCC import
+
+IMSCC HTML content often contains `<iframe>` elements embedding third-party video
+services (Panopto, 3Play Media / YouTube, etc.).  These use direct URLs to the
+video providers — not Canvas migration IDs or `g<hash>` references — so the
+external-tool lookup / `tool_aliases` mechanism does not apply.
+
+Pandoc strips `<iframe>` elements during HTML-to-Markdown conversion, so all
+embedded video references are currently lost on import.
+
+Options:
+
+- **Pass through as raw HTML blocks** in the Markdown output.  Pandoc's
+  `raw_html` extension preserves raw HTML, and the round-trip back through Pandoc
+  to HTML for Canvas upload would keep them intact.
+- **Extract as Markdown links** — pull the `src` URL and a label (e.g. from
+  `aria-description` for Panopto, `video_id` for 3Play/YouTube) and emit a plain
+  `[label](url)` link.  Loses the embedded player but preserves the reference.
+
+Example sources seen in real IMSCC content:
+
+- Panopto: `https://<host>/Panopto/Pages/Embed.aspx?id=<uuid>` with
+  `aria-description` carrying the video title
+- 3Play Media / YouTube: `//plugin.3playmedia.com/show?…&video_id=<yt-id>`

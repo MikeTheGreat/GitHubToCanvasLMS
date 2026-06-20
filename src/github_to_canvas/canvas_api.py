@@ -1,6 +1,7 @@
 """Canvas upload logic via the canvasapi library."""
 from __future__ import annotations
 
+import hashlib
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -332,6 +333,33 @@ def sync_tab_configuration(course, tab_config: list[dict[str, Any]]) -> None:
             tab.update(position=position, hidden=hidden)
         except Exception as exc:
             print(f"  WARNING: could not update course-navigation {desc}: {exc}")
+
+
+def read_tab_configuration(course) -> list[dict[str, Any]]:
+    """Read live course tabs and return them as a ``tab_configuration`` list.
+
+    For external-tool tabs the migration hash is computed so the output can be
+    matched against IMSCC-derived settings on the same Canvas instance.
+    """
+    tabs = sorted(course.get_tabs(), key=lambda t: getattr(t, "position", 0))
+    result: list[dict[str, Any]] = []
+    for tab in tabs:
+        out: dict[str, Any] = {}
+        tab_id = str(tab.id)
+        label = (getattr(tab, "label", "") or "").strip()
+
+        if tab_id.startswith(TOOL_TAB_PREFIX):
+            out["label"] = label
+            g_hash = "g" + hashlib.md5(tab_id.encode()).hexdigest()
+            out["id"] = TOOL_TAB_PREFIX + g_hash
+        else:
+            out["id"] = tab_id
+
+        if getattr(tab, "hidden", False):
+            out["hidden"] = True
+
+        result.append(out)
+    return result
 
 
 def get_canvas_updated_at(course, canvas_type: str, identifier) -> datetime | None:

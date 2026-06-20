@@ -12,7 +12,7 @@ from dotenv import find_dotenv, load_dotenv
 load_dotenv(find_dotenv(usecwd=True), override=True, verbose=True)
 
 
-from .canvas_api import get_course
+from .canvas_api import get_course, read_tab_configuration
 from .config import load as load_config
 from .imscc_import import run_import
 from .orphans import find_orphans, print_report
@@ -277,6 +277,85 @@ def find_orphans_cmd(repo: Path, config: Path | None) -> None:
         die(f"Invalid canvas.toml: {e}")
     except (ValueError, KeyError) as e:
         die("KeyError or ValueError:" + str(e))
+    except Exception as e:
+        raise e
+
+
+def _parse_canvas_url(url: str) -> tuple[str, int]:
+    """Extract (base_url, course_id) from a Canvas course URL.
+
+    Accepts URLs like ``https://school.instructure.com/courses/12345`` or
+    ``https://school.instructure.com/courses/12345/rubrics``.
+    """
+    from urllib.parse import urlparse
+
+    parsed = urlparse(url)
+    if not parsed.scheme or not parsed.netloc:
+        raise click.BadParameter(
+            f"Not a valid Canvas URL: {url!r}\n"
+            "Expected something like https://school.instructure.com/courses/12345"
+        )
+    parts = parsed.path.strip("/").split("/")
+    try:
+        idx = parts.index("courses")
+        course_id = int(parts[idx + 1])
+    except (ValueError, IndexError):
+        raise click.BadParameter(
+            f"Could not find /courses/<id> in URL: {url!r}\n"
+            "Expected something like https://school.instructure.com/courses/12345"
+        )
+    base_url = f"{parsed.scheme}://{parsed.netloc}"
+    return base_url, course_id
+
+
+def _format_tab_configuration(tab_config: list[dict]) -> str:
+    """Format tab_configuration as an inline TOML array of inline tables."""
+    lines = ["tab_configuration = ["]
+    for entry in tab_config:
+        parts = []
+        if "label" in entry:
+            parts.append(f'label = "{entry["label"]}"')
+        parts.append(f'id = "{entry["id"]}"')
+        if entry.get("hidden"):
+            parts.append("hidden = true")
+        lines.append(f"    {{ {', '.join(parts)} }},")
+    lines.append("]")
+    return "\n".join(lines) + "\n"
+
+
+@main.command(name="create-tool-aliases", no_args_is_help=True)
+@click.argument("course_url")
+def create_tool_aliases(course_url: str) -> None:
+    """Read navigation tabs from a Canvas course and print a tab_configuration block.
+
+    COURSE_URL is any Canvas URL containing /courses/<id>, e.g.
+    https://school.instructure.com/courses/12345 or
+    https://school.instructure.com/courses/12345/rubrics.
+
+    The API token is read from the CANVAS_API_TOKEN environment variable.
+
+    The output is a TOML tab_configuration block with external-tool labels
+    filled in, ready to paste into course_settings/course_settings.toml.
+    """
+    from .config import Config
+
+    base_url, course_id = _parse_canvas_url(course_url)
+    api_token = os.environ.get("CANVAS_API_TOKEN", "")
+    if not api_token:
+        die("CANVAS_API_TOKEN environment variable is not set.")
+
+    try:
+        cfg = Config(base_url=base_url, course_id=course_id, api_token=api_token)
+
+        click.echo(f"Course ID: {cfg.course_id}  ({cfg.base_url})", err=True)
+
+        course = get_course(cfg)
+        click.echo(f"Course:    {course.name}", err=True)
+
+        tab_config = read_tab_configuration(course)
+        click.echo(_format_tab_configuration(tab_config))
+    except (ValueError, KeyError) as e:
+        die(str(e))
     except Exception as e:
         raise e
 
