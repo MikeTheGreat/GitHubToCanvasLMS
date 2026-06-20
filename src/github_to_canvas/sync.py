@@ -176,10 +176,11 @@ def sync_course_settings(
     manifest_path: Path,
     force_uploads: bool = False,
     verbose: bool = False,
-) -> dict[str, int]:
+) -> tuple[dict[str, int], bool]:
     """Sync course_settings.toml: metadata, grading standards, assignment groups, policies, rubrics.
 
-    Returns {rubric_title: canvas_id} for all rubrics in the course.
+    Returns ({rubric_title: canvas_id}, settings_synced) where settings_synced is
+    True when course_settings.toml was actually re-uploaded this run.
     """
     settings_path = repo_path / "course_settings" / "course_settings.toml"
     rubrics_path = repo_path / "course_settings" / "rubrics.toml"
@@ -197,9 +198,9 @@ def sync_course_settings(
         if verbose and settings_path.exists():
             print(f"Skipping (up-to-date): {settings_key}")
         try:
-            return capi.get_rubric_ids(course)
+            return capi.get_rubric_ids(course), False
         except Exception:
-            return {}
+            return {}, False
 
     if settings_stale:
         print("Syncing course settings...")
@@ -294,7 +295,7 @@ def sync_course_settings(
         except Exception:
             pass
 
-    return rubric_ids
+    return rubric_ids, settings_stale
 
 
 def run_sync(
@@ -321,7 +322,7 @@ def run_sync(
             _front_page_path = tomllib.load(_fh).get("front_page")
 
     # 0. Course settings (metadata, grading standards, assignment groups, policies, rubrics)
-    rubric_ids = sync_course_settings(course, repo_path, manifest, manifest_path, force_uploads, verbose=verbose)
+    rubric_ids, settings_synced = sync_course_settings(course, repo_path, manifest, manifest_path, force_uploads, verbose=verbose)
 
     # Fetch assignment group IDs once so assignments can reference groups by name
     assignment_group_ids = capi.get_assignment_group_ids(course)
@@ -428,8 +429,10 @@ def run_sync(
         course, repo_path, manifest, manifest_path, force_uploads, matcher=matcher, verbose=verbose
     )
 
-    # 2.7. Front page (must run after pages are synced so the manifest entry exists)
-    if _front_page_path:
+    # 2.7. Front page (only when course_settings.toml or the target page was re-synced)
+    if _front_page_path and (
+        settings_synced or _front_page_path in synced_content_keys
+    ):
         entry = manifest.get(_front_page_path)
         if entry and "canvas_url" in entry:
             print(f"Setting front page: {_front_page_path}")

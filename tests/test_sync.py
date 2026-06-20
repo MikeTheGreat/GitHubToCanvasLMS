@@ -2563,3 +2563,116 @@ def test_rubric_use_for_grading_false(mock_course, course_root, mocker) -> None:
 
     call_kwargs = mock_course.create_rubric_association.call_args[1]
     assert call_kwargs["rubric_association"]["use_for_grading"] is False
+
+
+# ---------------------------------------------------------------------------
+# Front page conditional sync
+# ---------------------------------------------------------------------------
+
+
+def _make_front_page_repo(tmp_path: Path) -> Path:
+    """Minimal course repo with front_page in course_settings and a matching page."""
+    root = tmp_path / "course"
+    root.mkdir()
+    cs_dir = root / "course_settings"
+    cs_dir.mkdir()
+    (cs_dir / "course_settings.toml").write_text(
+        'title = "Test"\nfront_page = "pages/home.md"\n'
+    )
+    pages_dir = root / "pages"
+    pages_dir.mkdir()
+    (pages_dir / "home.md").write_text(
+        '---\ntitle: Home\npublished: true\n---\n\nWelcome!\n'
+    )
+    return root
+
+
+def _assert_front_page_set(page: MagicMock) -> None:
+    """Assert that set_front_page was called (page.edit with front_page=True)."""
+    page.edit.assert_any_call(wiki_page={"front_page": True})
+
+
+def _front_page_was_set(page: MagicMock) -> bool:
+    """Return True if set_front_page was called on the page mock."""
+    return call(wiki_page={"front_page": True}) in page.edit.call_args_list
+
+
+def test_front_page_set_on_first_sync(mock_course, mocker, tmp_path) -> None:
+    """On a first sync both course_settings.toml and the page are new, so set_front_page fires."""
+    page = _mock_page(111, "home")
+    mock_course.create_page.return_value = page
+    mock_course.get_page.return_value = page
+
+    root = _make_front_page_repo(tmp_path)
+    run_sync(_config(), root)
+
+    _assert_front_page_set(page)
+
+
+def test_front_page_skipped_when_nothing_changed(mock_course, mocker, tmp_path) -> None:
+    """When both course_settings.toml and the page are up-to-date, set_front_page is NOT called."""
+    page = _mock_page(111, "home")
+    mock_course.create_page.return_value = page
+    mock_course.get_page.return_value = page
+
+    root = _make_front_page_repo(tmp_path)
+
+    # First sync — everything is new; manifest is written to disk.
+    run_sync(_config(), root)
+
+    # Reset the page mock so we can check the second sync independently.
+    page.edit.reset_mock()
+
+    # Mark files as old so needs_sync returns False.
+    _make_old(root / "course_settings" / "course_settings.toml")
+    _make_old(root / "pages" / "home.md")
+
+    run_sync(_config(), root)
+
+    assert not _front_page_was_set(page), "set_front_page should not have been called"
+
+
+def test_front_page_set_when_page_resynced(mock_course, mocker, tmp_path) -> None:
+    """When the front page's .md file is re-synced, set_front_page fires."""
+    page = _mock_page(111, "home")
+    mock_course.create_page.return_value = page
+    mock_course.get_page.return_value = page
+
+    root = _make_front_page_repo(tmp_path)
+
+    # First sync.
+    run_sync(_config(), root)
+    page.edit.reset_mock()
+
+    # Mark course_settings as old, but touch the page to make it newer than last_synced.
+    _make_old(root / "course_settings" / "course_settings.toml")
+    (root / "pages" / "home.md").write_text(
+        '---\ntitle: Home\npublished: true\n---\n\nUpdated welcome!\n'
+    )
+
+    run_sync(_config(), root)
+
+    _assert_front_page_set(page)
+
+
+def test_front_page_set_when_settings_resynced(mock_course, mocker, tmp_path) -> None:
+    """When course_settings.toml is re-synced, set_front_page fires even if the page hasn't changed."""
+    page = _mock_page(111, "home")
+    mock_course.create_page.return_value = page
+    mock_course.get_page.return_value = page
+
+    root = _make_front_page_repo(tmp_path)
+
+    # First sync.
+    run_sync(_config(), root)
+    page.edit.reset_mock()
+
+    # Mark the page as old, but rewrite course_settings.toml to make it fresh.
+    _make_old(root / "pages" / "home.md")
+    (root / "course_settings" / "course_settings.toml").write_text(
+        'title = "Test Updated"\nfront_page = "pages/home.md"\n'
+    )
+
+    run_sync(_config(), root)
+
+    _assert_front_page_set(page)

@@ -48,6 +48,9 @@ git clone (local)
      → parse bank metadata .toml; parse each question .md in questions/
      → create Canvas question bank and populate with questions
      → update manifest dict and flush to disk
+4d. if front_page is set in course_settings.toml AND either course_settings.toml
+     or the target page's .md was re-synced in this run → set_front_page
+     (skipped when neither file changed, to avoid a redundant API call every run)
 5. sync modules/ alphabetically         (all content IDs now guaranteed in manifest)
      → skip any module whose mtime ≤ manifest last_synced (unless --force-uploads)
 ```
@@ -351,7 +354,7 @@ Boolean fields (`true`/`false`) are stored as TOML booleans. Numeric fields are 
 - **`course_settings/course_settings.toml`** — all course-wide settings, alongside the rest of the course-settings files.
 - **Graded discussion metadata captured** — `points_possible`, `due_at`, etc. written to frontmatter even if not currently used by sync.
 - **Quiz question slugification** — question filenames are derived from the QTI `title` attribute via `_slugify()`. Special characters (e.g. `+`) are stripped, so "What is 2+2?" becomes `what-is-22.md`.
-- **Course-navigation tabs humanised** — `course_settings.xml`'s `tab_configuration` (an escaped JSON string of Canvas-internal numeric ids and `context_external_tool_<resource-id>` ids) is rewritten into a readable `tab_configuration` inline array. Numeric ids become string ids (`3` → `id = "assignments"`); external-tool ids are resolved to a human `label` via the tool's BLTI `<blti:title>` (with the original id kept for provenance). See `_convert_tab_configuration()`. **Caveat:** Canvas only exports a BLTI resource for tools that ship as course *content*; tools used **only in course navigation** have no resource (and no name) in the cartridge — verified against real Canvas exports. Those tabs are written with an empty `label = ""` fill-in slot plus the id, and one summary warning is printed counting them. Sync skips an unfilled placeholder (it can't match a nameless tool); the user supplies the label by hand.
+- **Course-navigation tabs humanised** — `course_settings.xml`'s `tab_configuration` (an escaped JSON string of Canvas-internal numeric ids and `context_external_tool_<resource-id>` ids) is rewritten into a readable `tab_configuration` inline array. Numeric ids become string ids (`3` → `id = "assignments"`); external-tool ids are resolved to a human `label` via the tool's BLTI `<blti:title>` (with the original id kept for provenance). See `_convert_tab_configuration()`. **Caveat:** Canvas only exports a BLTI resource for tools that ship as course *content*; tools used **only in course navigation** have no resource (and no name) in the cartridge — verified against real Canvas exports. Those tabs are written with an empty `label = ""` fill-in slot plus the id, and one summary warning is printed counting them. Sync skips an unfilled placeholder (it can't match a nameless tool); run `create-tool-aliases` against a Canvas course URL to resolve these labels automatically (see README), or supply them by hand.
 
 ### Console output style
 

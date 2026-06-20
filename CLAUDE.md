@@ -15,6 +15,10 @@ the user as "Prompted-By", but do not include the user's email (just their name)
 Even if the user asks you to create a git commit message do NOT commit to git.
 Only if the user specifically asks you to commit should you do so; even then you should resume NOT committing to git for all future prompts.
 
+## TODO.md is for future work only
+
+TODO.md is only for possible future work items. Once a feature is implemented, document it in ARCHITECTURE.md (internal notes) and README.md (user documentation), then remove it from TODO.md. Do not leave completed items in TODO.md marked as "DONE".
+
 # GitHubToCanvasLMS
 
 A tool for managing Canvas LMS course content through Markdown files stored in a GitHub repository. The workflow converts Markdown (and supporting assets) into HTML fragments and uploads them to a Canvas LMS instance via the Canvas API.
