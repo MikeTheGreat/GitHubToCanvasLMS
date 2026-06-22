@@ -738,6 +738,14 @@ published: true          # true = visible to students; false = draft (the defaul
 Welcome to the course. See [Week 1 Assignment](../assignments/week1.md).
 ```
 
+**Images in Markdown:**  Pandoc turns a standalone image paragraph into a `<figure>` with a visible caption. Use the trailing-backslash trick to suppress the caption, or leave the alt text empty for decorative images:
+
+| Goal | Markdown |
+| --- | --- |
+| Image with alt text, no visible caption | `![Alt text](image.svg)\` (trailing `\`) |
+| Decorative image (no alt, no caption) | `![](image.svg)` |
+| Image with visible caption | `![Caption text](image.svg)` (standalone paragraph) |
+
 **WARNING:**  Make sure that you start your headers at H2.  **DO NOT USE H1 HEADERS!!!**  
 Canvas will translate the H1 headers into styled normal paragraphs so it looks right but
 will not work correctly with screen readers!!
