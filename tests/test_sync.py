@@ -1356,6 +1356,98 @@ def test_course_settings_missing_does_not_crash(mock_course, mocker, tmp_path) -
 
 
 # ---------------------------------------------------------------------------
+# Scenario 13a: Dashboard image — dashboard_image in course_settings.toml
+# ---------------------------------------------------------------------------
+
+
+def test_dashboard_image_uploaded_and_set(mock_course, mocker, tmp_path) -> None:
+    """dashboard_image in course_settings.toml uploads the file and sets image_id."""
+    mocker.patch("github_to_canvas.manifest.flush")
+    root = tmp_path / "course"
+    root.mkdir()
+    cs_dir = root / "course_settings"
+    cs_dir.mkdir()
+    # Place image outside assets/ to avoid the asset walker also uploading it
+    image_file = cs_dir / "banner.png"
+    image_file.write_bytes(b"fake-png-data")
+    (cs_dir / "course_settings.toml").write_text(
+        'title = "Intro to CS"\n'
+        'dashboard_image = "course_settings/banner.png"\n'
+    )
+    mock_course.upload.return_value = (True, {"id": 42, "url": "https://example.com/files/42"})
+
+    run_sync(_config(), root)
+
+    # The image file was uploaded via course.upload
+    mock_course.upload.assert_called_once_with(
+        str(image_file), parent_folder_path="course files"
+    )
+    # course.update was called with image_id
+    image_update_calls = [
+        c for c in mock_course.update.call_args_list
+        if "image_id" in c[1].get("course", {})
+    ]
+    assert len(image_update_calls) == 1
+    assert image_update_calls[0][1]["course"]["image_id"] == 42
+
+
+def test_dashboard_image_missing_file_warns(mock_course, mocker, tmp_path, capsys) -> None:
+    """dashboard_image pointing to a non-existent file prints a warning."""
+    mocker.patch("github_to_canvas.manifest.flush")
+    root = tmp_path / "course"
+    root.mkdir()
+    cs_dir = root / "course_settings"
+    cs_dir.mkdir()
+    (cs_dir / "course_settings.toml").write_text(
+        'dashboard_image = "assets/nonexistent.png"\n'
+    )
+
+    run_sync(_config(), root)
+
+    out = capsys.readouterr().out
+    assert "WARNING" in out
+    assert "nonexistent.png" in out
+    # No upload attempted
+    mock_course.upload.assert_not_called()
+
+
+def test_dashboard_image_not_passed_to_course_metadata(mock_course, mocker, tmp_path) -> None:
+    """dashboard_image is handled separately and not passed to course.update as metadata."""
+    mocker.patch("github_to_canvas.manifest.flush")
+    root = tmp_path / "course"
+    root.mkdir()
+    cs_dir = root / "course_settings"
+    cs_dir.mkdir()
+    (cs_dir / "course_settings.toml").write_text(
+        'title = "Test"\n'
+        'dashboard_image = "assets/banner.png"\n'
+    )
+    # No image file exists → warning, but metadata update should still happen without dashboard_image
+    run_sync(_config(), root)
+
+    meta_calls = [c for c in mock_course.update.call_args_list if "name" in c[1].get("course", {})]
+    assert len(meta_calls) == 1
+    assert "dashboard_image" not in meta_calls[0][1]["course"]
+    assert "image_id" not in meta_calls[0][1]["course"]
+
+
+def test_upload_course_image_unit() -> None:
+    """Unit test: upload_course_image uploads and sets image_id on the course."""
+    from github_to_canvas.canvas_api import upload_course_image
+
+    course = MagicMock()
+    course.upload.return_value = (True, {"id": 99, "url": "https://example.com/files/99"})
+
+    file_id = upload_course_image(course, Path("/tmp/banner.png"))
+
+    assert file_id == 99
+    course.upload.assert_called_once_with(
+        "/tmp/banner.png", parent_folder_path="course files"
+    )
+    course.update.assert_called_once_with(course={"image_id": 99})
+
+
+# ---------------------------------------------------------------------------
 # Scenario 13b: Course-navigation (tab_configuration) sync
 # ---------------------------------------------------------------------------
 

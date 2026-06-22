@@ -218,6 +218,19 @@ def sync_course_settings(
         # §1a: core course metadata
         capi.update_course_metadata(course, settings, grading_standard_id=gs_id)
 
+        # Dashboard image
+        dashboard_image = settings.get("dashboard_image")
+        if dashboard_image:
+            image_path = repo_path / dashboard_image
+            if image_path.exists():
+                print(f"  Uploading dashboard image: {dashboard_image}")
+                try:
+                    capi.upload_course_image(course, image_path)
+                except Exception as exc:
+                    print(f"  WARNING: dashboard image upload failed: {exc}")
+            else:
+                print(f"  WARNING: dashboard_image file not found: {dashboard_image}")
+
         # §1d: assignment groups
         capi.sync_assignment_groups(course, assignment_groups)
 

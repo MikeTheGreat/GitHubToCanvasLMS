@@ -61,6 +61,8 @@ _COURSE_METADATA_SKIP = {
     "horizon_course", "career_learning_library_only",
     # nested sections handled separately:
     "default_post_policy", "late_policy", "grading_standards", "assignment_groups",
+    # handled by upload_course_image:
+    "dashboard_image",
 }
 
 
@@ -470,6 +472,17 @@ def unpublish_content(course, canvas_type: str, entry: dict[str, Any]) -> bool:
     except ResourceDoesNotExist:
         return False
     return True
+
+
+def upload_course_image(course, local_path: Path) -> int:
+    """Upload an image and set it as the course dashboard/card image.
+
+    Returns the Canvas file ID of the uploaded image.
+    """
+    _success, response = course.upload(str(local_path), parent_folder_path="course files")
+    file_id = response["id"]
+    course.update(course={"image_id": file_id})
+    return file_id
 
 
 def upload_asset(course, local_path: Path, assets_root: Path) -> dict[str, Any]:

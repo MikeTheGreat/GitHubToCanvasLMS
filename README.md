@@ -449,6 +449,7 @@ default_view = "wiki"   # landing page: feed | wiki | modules | syllabus | assig
 front_page   = "pages/welcome.md"  # wiki home page (only used when default_view = "wiki")
 license      = "private"  # private | public_domain | cc_by | cc_by_sa | cc_by_nc
                           #   | cc_by_nc_sa | cc_by_nd | cc_by_nc_nd
+dashboard_image = "assets/course-banner.png"    # image shown on the Canvas Dashboard card
 
 # ── Visibility & enrollment ──────────────────────────────────────────────
 is_public               = false   # course visible to the public
