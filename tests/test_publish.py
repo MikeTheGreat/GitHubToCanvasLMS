@@ -267,6 +267,29 @@ def test_strip_pandoc_attrs_raw_html_block():
     assert "after" in result
 
 
+def test_strip_pandoc_raw_nonhtml_block_removed():
+    text = "before\n\n```{=comment-for-in-person-sections}\nTHIS SHOULD NOT APPEAR\n```\n\nafter\n"
+    result = publish._strip_pandoc_syntax(text)
+    assert "SHOULD NOT APPEAR" not in result
+    assert "```" not in result
+    assert "before" in result
+    assert "after" in result
+
+
+def test_strip_pandoc_raw_comment_block_removed():
+    text = "before\n\n```{=comment}\nignored text\n```\n\nafter\n"
+    result = publish._strip_pandoc_syntax(text)
+    assert "ignored text" not in result
+    assert "before" in result
+    assert "after" in result
+
+
+def test_strip_pandoc_raw_nonhtml_preserves_html_block():
+    text = "```{=html}\n<div>keep</div>\n```\n"
+    result = publish._strip_pandoc_syntax(text)
+    assert "<div>keep</div>" in result
+
+
 def test_strip_pandoc_escapes_apostrophe():
     result = publish._strip_pandoc_syntax("you\\'ll need this\n")
     assert result == "you'll need this\n"

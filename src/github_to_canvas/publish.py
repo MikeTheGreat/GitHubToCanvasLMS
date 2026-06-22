@@ -136,6 +136,13 @@ def _rewrite_quiz_links(text: str) -> str:
 # Pandoc → MkDocs Markdown normalisation
 # ---------------------------------------------------------------------------
 
+# Matches Pandoc raw-attribute blocks for non-HTML formats (e.g. {=comment},
+# {=comment-for-in-person-sections}).  These are removed entirely — content
+# is format-specific and not meant for HTML output.
+_RAW_NONHTML_BLOCK_RE = re.compile(
+    r"^```\{=(?!html\})[\w-]+\}\s*\n.*?^```\s*\n?", re.MULTILINE | re.DOTALL
+)
+
 # Matches Pandoc raw-HTML blocks:  ```{=html}\n<content>\n```  →  <content>
 _RAW_HTML_BLOCK_RE = re.compile(
     r"^```\{=html\}\s*\n(.*?)^```\s*$", re.MULTILINE | re.DOTALL
@@ -163,6 +170,7 @@ def _strip_pandoc_syntax(text: str) -> str:
     Handles raw-HTML blocks, attribute blocks, Pandoc spans, and backslash
     escapes while leaving real fenced code blocks untouched.
     """
+    text = _RAW_NONHTML_BLOCK_RE.sub("", text)
     text = _RAW_HTML_BLOCK_RE.sub(r"\1", text)
     lines: list[str] = []
     in_fence = False
