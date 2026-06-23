@@ -500,6 +500,23 @@ def test_canvas_toml_has_base_url_key(output_dir: Path) -> None:
     assert "course_id" in text
 
 
+def test_dashboard_image_copied(output_dir: Path) -> None:
+    run_import(FIXTURE_DIR, output_dir)
+    assert (output_dir / "course_settings" / "dashboard_image.png").exists()
+
+
+def test_dashboard_image_in_course_settings_toml(output_dir: Path) -> None:
+    run_import(FIXTURE_DIR, output_dir)
+    data = tomllib.loads((output_dir / "course_settings" / "course_settings.toml").read_text())
+    assert data["dashboard_image"] == "course_settings/dashboard_image.png"
+
+
+def test_image_identifier_ref_not_in_course_settings_toml(output_dir: Path) -> None:
+    run_import(FIXTURE_DIR, output_dir)
+    data = tomllib.loads((output_dir / "course_settings" / "course_settings.toml").read_text())
+    assert "image_identifier_ref" not in data
+
+
 def test_events_md_created(output_dir: Path) -> None:
     run_import(FIXTURE_DIR, output_dir)
     assert (output_dir / "course_settings" / "events.md").exists()

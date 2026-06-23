@@ -378,6 +378,12 @@ def test_course_settings_full_nested_post_policy() -> None:
     assert data["default_post_policy"]["post_manually"] is True
 
 
+def test_course_settings_full_image_identifier_ref() -> None:
+    path = FIXTURE_DIR / "course_settings" / "course_settings.xml"
+    data = _parse_course_settings_full(path)
+    assert data["image_identifier_ref"] == "g_asset_1"
+
+
 def test_course_settings_full_empty_file_returns_empty(tmp_path: Path) -> None:
     data = _parse_course_settings_full(tmp_path / "nonexistent.xml")
     assert data == {}

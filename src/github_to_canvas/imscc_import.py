@@ -1961,7 +1961,7 @@ def _write_course_settings_toml(
     data: dict[str, Any] = {}
 
     # Identity and key settings first (deterministic ordering)
-    for key in ("title", "course_code", "default_view", "license", "start_at", "conclude_at"):
+    for key in ("title", "course_code", "default_view", "license", "dashboard_image", "start_at", "conclude_at"):
         if key in course_settings:
             data[key] = course_settings[key]
 
@@ -1971,7 +1971,7 @@ def _write_course_settings_toml(
 
     # Remaining flat course settings, excluding nested sections handled below
     skip = {"title", "course_code", "default_view", "license", "start_at", "conclude_at",
-            "default_post_policy", "tab_configuration"}
+            "default_post_policy", "tab_configuration", "image_identifier_ref"}
     for key, val in course_settings.items():
         if key not in data and key not in skip:
             data[key] = val
@@ -2104,6 +2104,25 @@ def create_course_settings(
     events = _parse_events(imscc_cs_dir / "events.xml")
     rubrics = _parse_rubrics(imscc_cs_dir / "rubrics.xml")
     files_meta = _parse_files_meta(imscc_cs_dir / "files_meta.xml")
+
+    # Dashboard image: resolve image_identifier_ref → copy image → set dashboard_image
+    image_ref = course_settings.pop("image_identifier_ref", None)
+    if isinstance(image_ref, str) and image_ref:
+        entry = temp_manifest.get(image_ref)
+        if entry and entry.imscc_path:
+            src = imscc_dir / entry.imscc_path
+            if src.exists():
+                ext = src.suffix or ".png"
+                dest_name = f"dashboard_image{ext}"
+                dest = output_dir / "course_settings" / dest_name
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(src, dest)
+                course_settings["dashboard_image"] = f"course_settings/{dest_name}"
+                print(f"Copying dashboard image: course_settings/{dest_name}")
+            else:
+                print(f"  WARNING: dashboard image file not found in IMSCC: {entry.imscc_path}")
+        else:
+            print(f"  WARNING: image_identifier_ref '{image_ref}' not found in IMSCC manifest")
 
     _write_course_settings_toml(
         course_settings, manifest_meta, grading_standards, assignment_groups, late_policy,
