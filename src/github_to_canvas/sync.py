@@ -35,6 +35,7 @@ def parse_frontmatter(text: str) -> tuple[dict[str, Any], str]:
 _MODULE_LINK_RE = re.compile(r"^(\s*)-\s+\[([^\]]+)\]\(([^)]+)\)")
 _MODULE_LINK_TITLE_RE = re.compile(r'''^(.*?)\s+["'].*["']\s*$''')
 _MODULE_HEADER_RE = re.compile(r"^#{1,6}\s+(.+)")
+_MODULE_PLAIN_LIST_RE = re.compile(r"^\s*(?:[-*+]|\d+[.)]) \s*(.+)")
 _INDENT_SPACES_PER_LEVEL = 2
 MAX_CANVAS_INDENT = 5
 _EXTURL_ATTRS_RE = re.compile(r"<!--(.*?)-->")
@@ -91,7 +92,8 @@ def parse_module_body(
             if href.startswith("http://") or href.startswith("https://"):
                 attrs_m = _EXTURL_ATTRS_RE.search(line)
                 attrs = _parse_exturl_attrs(attrs_m.group(1)) if attrs_m else {}
-                new_tab = attrs.get("target", "") in ("_blank", "_new")
+                target = attrs.get("target", "")
+                new_tab = target != "_self"
                 items.append(
                     {
                         "type": "ExternalUrl",
@@ -113,6 +115,13 @@ def parse_module_body(
         if header_m:
             items.append({"type": "SubHeader", "title": header_m.group(1),
                          "indent": 0})
+            continue
+        plain_m = _MODULE_PLAIN_LIST_RE.match(line)
+        if plain_m:
+            print(
+                f"  WARNING: skipping plain-text list item (no link): "
+                f"{plain_m.group(1).strip()!r}  — use a ## header for text-only items"
+            )
     return items
 
 

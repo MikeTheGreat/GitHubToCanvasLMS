@@ -1067,7 +1067,7 @@ def test_single_target_skipped_when_t_already_uploaded_it(mock_course, course_ro
 
 
 def test_parse_module_body_external_url(tmp_path: Path) -> None:
-    """Absolute URLs in module body produce ExternalUrl items."""
+    """Absolute URLs in module body produce ExternalUrl items with new_tab=True."""
     course_root = tmp_path / "course"
     course_root.mkdir()
     (course_root / "modules").mkdir()
@@ -1078,7 +1078,7 @@ def test_parse_module_body_external_url(tmp_path: Path) -> None:
     assert items[0]["type"] == "ExternalUrl"
     assert items[0]["url"] == "https://canvas.example.com"
     assert items[0]["title"] == "Canvas Site"
-    assert items[0]["new_tab"] is False
+    assert items[0]["new_tab"] is True
 
 
 def test_parse_module_body_external_url_new_tab(tmp_path: Path) -> None:
@@ -1093,13 +1093,24 @@ def test_parse_module_body_external_url_new_tab(tmp_path: Path) -> None:
     assert items[0]["new_tab"] is True
 
 
-def test_parse_module_body_external_url_no_comment_new_tab_false(tmp_path: Path) -> None:
-    """ExternalUrl items without a target comment have new_tab=False."""
+def test_parse_module_body_external_url_no_comment_new_tab_true(tmp_path: Path) -> None:
+    """ExternalUrl items without a target comment default to new_tab=True."""
     course_root = tmp_path / "course"
     course_root.mkdir()
     (course_root / "modules").mkdir()
     module_file = course_root / "modules" / "week-1.md"
     body = "- [Link](https://example.com)\n"
+    items = parse_module_body(body, module_file, course_root)
+    assert items[0]["new_tab"] is True
+
+
+def test_parse_module_body_external_url_self_target(tmp_path: Path) -> None:
+    """target='_self' explicitly opts into iframe (new_tab=False)."""
+    course_root = tmp_path / "course"
+    course_root.mkdir()
+    (course_root / "modules").mkdir()
+    module_file = course_root / "modules" / "week-1.md"
+    body = '- [Link](https://example.com) <!-- target="_self" -->\n'
     items = parse_module_body(body, module_file, course_root)
     assert items[0]["new_tab"] is False
 
@@ -1117,6 +1128,56 @@ def test_parse_module_body_mixed_content_and_external(tmp_path: Path) -> None:
     assert items[0]["type"] == "content"
     assert items[0]["local_path"] == "pages/intro.md"
     assert items[1]["type"] == "ExternalUrl"
+
+
+# ---------------------------------------------------------------------------
+# parse_module_body — plain-text list item warnings
+# ---------------------------------------------------------------------------
+
+
+def test_parse_module_body_plain_text_list_item_warns(tmp_path: Path, capsys) -> None:
+    """Plain-text list items (no link) produce a warning and are skipped."""
+    course_root = tmp_path / "course"
+    course_root.mkdir()
+    (course_root / "modules").mkdir()
+    module_file = course_root / "modules" / "week-1.md"
+    body = "- Just some plain text\n- [Valid Link](../pages/foo.md)\n"
+    (course_root / "pages").mkdir()
+    items = parse_module_body(body, module_file, course_root)
+    assert len(items) == 1
+    assert items[0]["type"] == "content"
+    captured = capsys.readouterr()
+    assert "skipping plain-text list item" in captured.out
+    assert "'Just some plain text'" in captured.out
+    assert "## header" in captured.out
+
+
+def test_parse_module_body_ordered_list_plain_text_warns(tmp_path: Path, capsys) -> None:
+    """Ordered list items with plain text also produce a warning."""
+    course_root = tmp_path / "course"
+    course_root.mkdir()
+    (course_root / "modules").mkdir()
+    module_file = course_root / "modules" / "week-1.md"
+    body = "1. Step one without a link\n"
+    items = parse_module_body(body, module_file, course_root)
+    assert len(items) == 0
+    captured = capsys.readouterr()
+    assert "skipping plain-text list item" in captured.out
+    assert "'Step one without a link'" in captured.out
+
+
+def test_parse_module_body_header_not_warned_as_plain_text(tmp_path: Path, capsys) -> None:
+    """Headers are not misidentified as plain-text list items."""
+    course_root = tmp_path / "course"
+    course_root.mkdir()
+    (course_root / "modules").mkdir()
+    module_file = course_root / "modules" / "week-1.md"
+    body = "## Section Title\n"
+    items = parse_module_body(body, module_file, course_root)
+    assert len(items) == 1
+    assert items[0]["type"] == "SubHeader"
+    captured = capsys.readouterr()
+    assert "skipping" not in captured.out
 
 
 # ---------------------------------------------------------------------------
