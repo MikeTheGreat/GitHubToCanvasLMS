@@ -341,9 +341,31 @@ def test_render_module_overview():
     assert md.startswith("# Week 1: Introduction")
     assert "## Readings" in md
     assert "## Work" in md
-    # Links step up out of modules/ to the sibling content dirs.
-    assert "[Syllabus](../pages/syllabus.md)" in md
-    assert "[Week 1 Assignment](../assignments/week1.md)" in md
+    assert "<ul>" in md
+    assert "</ul>" in md
+    # Non-indented item has no style attribute.
+    assert '<li><a href="../pages/syllabus.md">Syllabus</a></li>' in md
+    # Indented items under "Work" get margin-left styling.
+    assert '<li style="margin-left: 2em"><a href="../assignments/week1.md">Week 1 Assignment</a></li>' in md
+    assert '<li style="margin-left: 2em"><a href="../discussions/week1-intro.md">Week 1 Discussion</a></li>' in md
+
+
+def test_render_module_overview_indentation(tmp_path):
+    """render_module_overview renders multi-level indentation as HTML with margin-left."""
+    mod = tmp_path / "modules" / "m.md"
+    mod.parent.mkdir(parents=True)
+    (tmp_path / "pages").mkdir()
+    mod.write_text(
+        "---\ntitle: Indented Module\n---\n\n"
+        "## Section\n"
+        "- [Top](../pages/a.md)\n"
+        "  - [One](../pages/b.md)\n"
+        "    - [Two](../pages/c.md)\n"
+    )
+    md = publish.render_module_overview(mod, tmp_path)
+    assert '<li><a href="../pages/a.md">Top</a></li>' in md
+    assert '<li style="margin-left: 2em"><a href="../pages/b.md">One</a></li>' in md
+    assert '<li style="margin-left: 4em"><a href="../pages/c.md">Two</a></li>' in md
 
 
 # ---------------------------------------------------------------------------

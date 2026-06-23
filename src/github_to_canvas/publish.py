@@ -454,6 +454,11 @@ def render_quiz_study_guide(quiz_folder: Path) -> str:
     return "\n".join(out).rstrip() + "\n"
 
 
+def _render_module_li(title: str, href: str, indent: int) -> str:
+    style = f' style="margin-left: {indent * 2}em"' if indent else ""
+    return f'<li{style}><a href="{href}">{title}</a></li>'
+
+
 def render_module_overview(module_md: Path, repo: Path) -> str:
     """Render a module .md file as a clickable overview/index page."""
     frontmatter, body = parse_frontmatter(module_md.read_text())
@@ -461,17 +466,27 @@ def render_module_overview(module_md: Path, repo: Path) -> str:
     items = parse_module_body(body, module_md, repo)
 
     out: list[str] = [f"# {title}", ""]
+    in_list = False
     for item in items:
+        indent = item.get("indent", 0)
         if item["type"] == "SubHeader":
-            out.append("")
+            if in_list:
+                out.append("</ul>")
+                out.append("")
+                in_list = False
             out.append(f"## {item['title']}")
             out.append("")
-        elif item["type"] == "ExternalUrl":
-            out.append(f"- [{item['title']}]({item['url']})")
-        elif item["type"] == "content":
-            # Links are relative to docs/modules/, so step up one level.
-            target = "../" + staged_path(item["local_path"])
-            out.append(f"- [{item['title']}]({target})")
+        else:
+            if not in_list:
+                out.append("<ul>")
+                in_list = True
+            if item["type"] == "ExternalUrl":
+                out.append(_render_module_li(item["title"], item["url"], indent))
+            elif item["type"] == "content":
+                target = "../" + staged_path(item["local_path"])
+                out.append(_render_module_li(item["title"], target, indent))
+    if in_list:
+        out.append("</ul>")
     return "\n".join(out).rstrip() + "\n"
 
 

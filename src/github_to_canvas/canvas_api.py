@@ -649,9 +649,12 @@ def clear_module_items(module) -> None:
 
 def add_module_item(module, item: dict[str, Any], manifest: dict) -> int | None:
     """Add one item to a Canvas module. Returns the Canvas module item ID, or None if skipped."""
+    indent = item.get("indent", 0)
+
     if item["type"] == "SubHeader":
         mi = module.create_module_item(
-            module_item={"type": "SubHeader", "title": item["title"]}
+            module_item={"type": "SubHeader", "title": item["title"],
+                         "indent": indent}
         )
         return mi.id
 
@@ -662,6 +665,7 @@ def add_module_item(module, item: dict[str, Any], manifest: dict) -> int | None:
                 "title": item["title"],
                 "external_url": item["url"],
                 "new_tab": item.get("new_tab", False),
+                "indent": indent,
             }
         )
         return mi.id
@@ -680,6 +684,7 @@ def add_module_item(module, item: dict[str, Any], manifest: dict) -> int | None:
             "type": canvas_type,
             "page_url": entry["canvas_url"],
             "title": item["title"],
+            "indent": indent,
         }
         stale_id = entry.get("canvas_url")
     else:
@@ -687,6 +692,7 @@ def add_module_item(module, item: dict[str, Any], manifest: dict) -> int | None:
             "type": canvas_type,
             "content_id": entry["canvas_id"],
             "title": item["title"],
+            "indent": indent,
         }
         stale_id = entry.get("canvas_id")
     try:

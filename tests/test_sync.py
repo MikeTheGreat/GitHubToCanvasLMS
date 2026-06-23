@@ -160,11 +160,13 @@ def test_parse_module_body_items_and_subheaders(tmp_path: Path) -> None:
         "- [Assignment](../assignments/week1.md)\n"
     )
     items = parse_module_body(body, module_file, course_root)
-    assert items[0] == {"type": "SubHeader", "title": "Readings"}
+    assert items[0] == {"type": "SubHeader", "title": "Readings", "indent": 0}
     assert items[1]["type"] == "content"
     assert items[1]["local_path"] == "pages/syllabus.md"
-    assert items[2] == {"type": "SubHeader", "title": "Work"}
+    assert items[1]["indent"] == 0
+    assert items[2] == {"type": "SubHeader", "title": "Work", "indent": 0}
     assert items[3]["local_path"] == "assignments/week1.md"
+    assert items[3]["indent"] == 0
 
 
 def test_parse_module_body_empty() -> None:
@@ -428,10 +430,15 @@ def test_module_sync_item_order(mock_course, course_root, mocker) -> None:
     assert types == ["SubHeader", "Page", "SubHeader", "Assignment", "Discussion"]
 
     assert item_calls[0][1]["module_item"]["title"] == "Readings"
+    assert item_calls[0][1]["module_item"]["indent"] == 0
     assert item_calls[1][1]["module_item"]["page_url"] == "syllabus"
+    assert item_calls[1][1]["module_item"]["indent"] == 0
     assert item_calls[2][1]["module_item"]["title"] == "Work"
+    assert item_calls[2][1]["module_item"]["indent"] == 0
     assert item_calls[3][1]["module_item"]["content_id"] == 98765
+    assert item_calls[3][1]["module_item"]["indent"] == 1
     assert item_calls[4][1]["module_item"]["content_id"] == 55555
+    assert item_calls[4][1]["module_item"]["indent"] == 1
 
 
 # ---------------------------------------------------------------------------
@@ -1110,6 +1117,70 @@ def test_parse_module_body_mixed_content_and_external(tmp_path: Path) -> None:
     assert items[0]["type"] == "content"
     assert items[0]["local_path"] == "pages/intro.md"
     assert items[1]["type"] == "ExternalUrl"
+
+
+# ---------------------------------------------------------------------------
+# parse_module_body — indentation levels
+# ---------------------------------------------------------------------------
+
+
+def test_parse_module_body_indentation_levels(tmp_path: Path) -> None:
+    """Indented list items get correct indent levels (2 spaces per level)."""
+    course_root = tmp_path / "course"
+    (course_root / "modules").mkdir(parents=True)
+    module_file = course_root / "modules" / "m.md"
+    body = (
+        "## Welcome\n"
+        "- [Top Level](../pages/a.md)\n"
+        "## Links\n"
+        "  - [Indented Once](../pages/b.md)\n"
+        "    - [Indented Twice](../pages/c.md)\n"
+    )
+    items = parse_module_body(body, module_file, course_root)
+    assert items[0] == {"type": "SubHeader", "title": "Welcome", "indent": 0}
+    assert items[1]["indent"] == 0
+    assert items[2] == {"type": "SubHeader", "title": "Links", "indent": 0}
+    assert items[3]["indent"] == 1
+    assert items[4]["indent"] == 2
+
+
+def test_parse_module_body_indent_clamped_at_max(tmp_path: Path, capsys) -> None:
+    """Indent levels beyond MAX_CANVAS_INDENT are clamped with a warning."""
+    from github_to_canvas.sync import MAX_CANVAS_INDENT
+
+    course_root = tmp_path / "course"
+    (course_root / "modules").mkdir(parents=True)
+    module_file = course_root / "modules" / "m.md"
+    # 12 spaces = indent level 6, exceeding the Canvas max of 5
+    body = "            - [Too Deep](../pages/deep.md)\n"
+    items = parse_module_body(body, module_file, course_root)
+    assert items[0]["indent"] == MAX_CANVAS_INDENT
+    captured = capsys.readouterr()
+    assert "WARNING" in captured.out
+    assert "clamping" in captured.out
+
+
+def test_parse_module_body_external_url_indentation(tmp_path: Path) -> None:
+    """External URL items also get indent from leading whitespace."""
+    course_root = tmp_path / "course"
+    (course_root / "modules").mkdir(parents=True)
+    module_file = course_root / "modules" / "m.md"
+    body = "  - [Link](https://example.com)\n"
+    items = parse_module_body(body, module_file, course_root)
+    assert items[0]["type"] == "ExternalUrl"
+    assert items[0]["indent"] == 1
+
+
+def test_parse_module_body_subheaders_always_indent_zero(tmp_path: Path) -> None:
+    """SubHeaders always have indent 0, regardless of any leading whitespace."""
+    course_root = tmp_path / "course"
+    (course_root / "modules").mkdir(parents=True)
+    module_file = course_root / "modules" / "m.md"
+    body = "## First\n  - [Item](../pages/a.md)\n## Second\n"
+    items = parse_module_body(body, module_file, course_root)
+    assert items[0]["indent"] == 0
+    assert items[1]["indent"] == 1
+    assert items[2]["indent"] == 0
 
 
 # ---------------------------------------------------------------------------

@@ -830,6 +830,8 @@ published: true
 - [Week 1 Discussion](../discussions/week1-intro.md)
 ```
 
+**Item indentation:** Leading spaces on list items control the Canvas module item `indent` parameter (0-5). Every 2 spaces = 1 indent level. `parse_module_body()` captures this from the Markdown and stores it as an `"indent"` key on each item dict. `add_module_item()` passes it through to `module.create_module_item()`. Values exceeding Canvas's maximum of 5 are clamped with a warning. SubHeaders always get indent 0. For the publish website, `render_module_overview()` renders indented items as nested Markdown lists (4 spaces per level).
+
 **Synchronisation notes:**
 
 - All content files linked from a module must already exist in Canvas (i.e., have entries in the manifest) before the module can be synced. The tool should sync content first, modules second.

@@ -9,5 +9,5 @@ published: true
 
 ## Work
 
-- [Week 1 Assignment](../assignments/week1.md)
-- [Week 1 Discussion](../discussions/week1-intro.md)
+  - [Week 1 Assignment](../assignments/week1.md)
+  - [Week 1 Discussion](../discussions/week1-intro.md)

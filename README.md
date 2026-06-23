@@ -903,6 +903,22 @@ The module body uses three kinds of lines:
 
 The `<!-- target="_blank" -->` comment sets `new_tab: true` on the Canvas ExternalUrl item (opens in a new tab). Lines without a comment default to `new_tab: false`.
 
+**Item indentation:** Indent list items with leading spaces to set their Canvas indentation level. Every 2 spaces of indentation adds one indent level. Canvas supports indent levels 0-5; deeper indentation is clamped to 5 with a warning.
+
+```markdown
+## Welcome
+
+- [Course Overview](../pages/overview.md)          <!-- indent 0 (flush left) -->
+
+## Useful Links
+
+  - [Grading Guide](../pages/grading.md)           <!-- indent 1 (2 spaces) -->
+  - [Zoom Links](../pages/zoom.md)                 <!-- indent 1 -->
+    - [Zoom Etiquette](../pages/zoom-etiquette.md)  <!-- indent 2 (4 spaces) -->
+```
+
+SubHeaders (`## headings`) always appear at indent level 0. The same indentation is preserved in the published website as nested Markdown lists.
+
 **Module display order** is controlled by `course_settings/module_order.toml`. Without this file, modules are synced in alphabetical filename order. Create the file to assign explicit Canvas positions:
 
 ```toml

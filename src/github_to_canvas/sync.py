@@ -32,8 +32,10 @@ def parse_frontmatter(text: str) -> tuple[dict[str, Any], str]:
     return yaml.safe_load(text[4:end]) or {}, text[end + 5 :]
 
 
-_MODULE_LINK_RE = re.compile(r"^\s*-\s+\[([^\]]+)\]\(([^)]+)\)")
+_MODULE_LINK_RE = re.compile(r"^(\s*)-\s+\[([^\]]+)\]\(([^)]+)\)")
 _MODULE_HEADER_RE = re.compile(r"^#{1,6}\s+(.+)")
+_INDENT_SPACES_PER_LEVEL = 2
+MAX_CANVAS_INDENT = 5
 _EXTURL_ATTRS_RE = re.compile(r"<!--(.*?)-->")
 _EXTURL_ATTR_KV_RE = re.compile(r'(\w+)=["\']([^"\']*)["\']')
 
@@ -72,7 +74,15 @@ def parse_module_body(
     for line in body.splitlines():
         link_m = _MODULE_LINK_RE.match(line)
         if link_m:
-            title, href = link_m.group(1), link_m.group(2)
+            leading_spaces = len(link_m.group(1))
+            indent = leading_spaces // _INDENT_SPACES_PER_LEVEL
+            title, href = link_m.group(2), link_m.group(3)
+            if indent > MAX_CANVAS_INDENT:
+                print(
+                    f"  WARNING: indent level {indent} exceeds Canvas maximum"
+                    f" ({MAX_CANVAS_INDENT}); clamping: {title}"
+                )
+                indent = MAX_CANVAS_INDENT
             # Detect absolute URLs → ExternalUrl item
             if href.startswith("http://") or href.startswith("https://"):
                 attrs_m = _EXTURL_ATTRS_RE.search(line)
@@ -84,18 +94,21 @@ def parse_module_body(
                         "title": title,
                         "url": href,
                         "new_tab": new_tab,
+                        "indent": indent,
                     }
                 )
             else:
                 resolved = (module_file.parent / href).resolve()
                 local_path = resolved.relative_to(course_root.resolve()).as_posix()
                 items.append(
-                    {"type": "content", "title": title, "local_path": local_path}
+                    {"type": "content", "title": title, "local_path": local_path,
+                     "indent": indent}
                 )
             continue
         header_m = _MODULE_HEADER_RE.match(line)
         if header_m:
-            items.append({"type": "SubHeader", "title": header_m.group(1)})
+            items.append({"type": "SubHeader", "title": header_m.group(1),
+                         "indent": 0})
     return items
 
 
