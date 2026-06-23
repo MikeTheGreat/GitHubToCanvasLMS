@@ -234,3 +234,7 @@ When implemented, the suggested approach:
   - Maybe if we store the canvas ID in the file?
 - Alternately: what about having "move" / rename commands in the tool to handle this?
   - It'll need to update the manifest file
+
+# Subofolders in the pages/ hive
+- Would be nice for organizational purposes
+

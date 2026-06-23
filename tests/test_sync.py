@@ -1184,6 +1184,99 @@ def test_parse_module_body_subheaders_always_indent_zero(tmp_path: Path) -> None
 
 
 # ---------------------------------------------------------------------------
+# Module snippet expansion
+# ---------------------------------------------------------------------------
+
+
+def test_module_inline_snippet_becomes_external_url(tmp_path: Path) -> None:
+    """Inline snippet in a module link expands before parsing, producing an ExternalUrl."""
+    course_root = tmp_path / "course"
+    (course_root / "modules").mkdir(parents=True)
+    snippets_inline = course_root / "snippets" / "inline"
+    snippets_inline.mkdir(parents=True)
+    (snippets_inline / "CANVAS_COURSE_REFERENCE.md").write_text(
+        "https://school.instructure.com/courses/999\n"
+    )
+    module_file = course_root / "modules" / "m.md"
+    body = '- [Syllabus]($../snippets/inline/CANVAS_COURSE_REFERENCE.md$/assignments/syllabus "Syllabus")\n'
+
+    from github_to_canvas.convert import preprocess_snippets
+
+    expanded = preprocess_snippets(body, module_file, course_root / "snippets")
+    items = parse_module_body(expanded, module_file, course_root)
+
+    assert len(items) == 1
+    assert items[0]["type"] == "ExternalUrl"
+    assert items[0]["url"] == "https://school.instructure.com/courses/999/assignments/syllabus"
+    assert items[0]["title"] == "Syllabus"
+
+
+def test_module_inline_snippet_mixed_with_local_content(tmp_path: Path) -> None:
+    """Module with both snippet-expanded URLs and local content links."""
+    course_root = tmp_path / "course"
+    (course_root / "modules").mkdir(parents=True)
+    snippets_inline = course_root / "snippets" / "inline"
+    snippets_inline.mkdir(parents=True)
+    (snippets_inline / "CANVAS_COURSE_REFERENCE.md").write_text(
+        "https://school.instructure.com/courses/999\n"
+    )
+    module_file = course_root / "modules" / "m.md"
+    body = (
+        "- [Local Page](../pages/syllabus.md)\n"
+        '- [Grades]($../snippets/inline/CANVAS_COURSE_REFERENCE.md$/grades "Grades")\n'
+    )
+
+    from github_to_canvas.convert import preprocess_snippets
+
+    expanded = preprocess_snippets(body, module_file, course_root / "snippets")
+    items = parse_module_body(expanded, module_file, course_root)
+
+    assert len(items) == 2
+    assert items[0]["type"] == "content"
+    assert items[0]["local_path"] == "pages/syllabus.md"
+    assert items[1]["type"] == "ExternalUrl"
+    assert items[1]["url"] == "https://school.instructure.com/courses/999/grades"
+
+
+# ---------------------------------------------------------------------------
+# parse_module_body — Markdown link title stripping
+# ---------------------------------------------------------------------------
+
+
+def test_parse_module_body_strips_link_title_from_external_url(tmp_path: Path) -> None:
+    """Markdown link titles are stripped from ExternalUrl hrefs."""
+    course_root = tmp_path / "course"
+    (course_root / "modules").mkdir(parents=True)
+    module_file = course_root / "modules" / "m.md"
+    body = '- [Grades](https://example.com/courses/1/grades "Grades")\n'
+    items = parse_module_body(body, module_file, course_root)
+    assert items[0]["type"] == "ExternalUrl"
+    assert items[0]["url"] == "https://example.com/courses/1/grades"
+
+
+def test_parse_module_body_strips_link_title_from_content(tmp_path: Path) -> None:
+    """Markdown link titles are stripped from local content hrefs."""
+    course_root = tmp_path / "course"
+    (course_root / "modules").mkdir(parents=True)
+    module_file = course_root / "modules" / "m.md"
+    body = '- [Syllabus](../pages/syllabus.md "Syllabus")\n'
+    items = parse_module_body(body, module_file, course_root)
+    assert items[0]["type"] == "content"
+    assert items[0]["local_path"] == "pages/syllabus.md"
+
+
+def test_parse_module_body_no_title_still_works(tmp_path: Path) -> None:
+    """Links without a Markdown title still parse correctly."""
+    course_root = tmp_path / "course"
+    (course_root / "modules").mkdir(parents=True)
+    module_file = course_root / "modules" / "m.md"
+    body = "- [Page](../pages/syllabus.md)\n- [Site](https://example.com)\n"
+    items = parse_module_body(body, module_file, course_root)
+    assert items[0]["local_path"] == "pages/syllabus.md"
+    assert items[1]["url"] == "https://example.com"
+
+
+# ---------------------------------------------------------------------------
 # Scenario 10: Assignment extended fields — lock_at, unlock_at, grading_type
 # ---------------------------------------------------------------------------
 
@@ -1380,6 +1473,33 @@ def test_syllabus_missing_does_not_crash(mock_course, mocker, tmp_path) -> None:
     # No syllabus_body update when file is missing
     for c in mock_course.update.call_args_list:
         assert "syllabus_body" not in c[1].get("course", {})
+
+
+def test_syllabus_expands_inline_snippets(mock_course, mocker, tmp_path) -> None:
+    """Inline snippets in syllabus.md are expanded before conversion."""
+    mocker.patch("github_to_canvas.manifest.flush")
+    root = tmp_path / "course"
+    cs_dir = root / "course_settings"
+    cs_dir.mkdir(parents=True)
+    snippets_inline = root / "snippets" / "inline"
+    snippets_inline.mkdir(parents=True)
+    (snippets_inline / "CANVAS_COURSE_REFERENCE.md").write_text(
+        "https://school.instructure.com/courses/999\n"
+    )
+    (cs_dir / "syllabus.md").write_text(
+        "---\ntitle: Syllabus\n---\n\n"
+        "Check your [Grades]($../snippets/inline/CANVAS_COURSE_REFERENCE.md$/grades) here.\n"
+    )
+
+    run_sync(_config(), root)
+
+    syllabus_calls = [
+        c for c in mock_course.update.call_args_list
+        if "syllabus_body" in c[1].get("course", {})
+    ]
+    assert len(syllabus_calls) == 1
+    body_html = syllabus_calls[0][1]["course"]["syllabus_body"]
+    assert "https://school.instructure.com/courses/999/grades" in body_html
 
 
 # ---------------------------------------------------------------------------

@@ -363,3 +363,54 @@ def test_parse_essay_sample_solution_does_not_bleed_into_question_text(tmp_path)
     )
     q = parse_question_file(md)
     assert "Gravity is a force" not in q["question_text"]
+
+
+# ---------------------------------------------------------------------------
+# Snippet expansion in quiz and question files
+# ---------------------------------------------------------------------------
+
+def test_parse_quiz_file_expands_inline_snippets(tmp_path):
+    """Inline snippets in quiz description are expanded when snippets_dir is provided."""
+    snippets_inline = tmp_path / "snippets" / "inline"
+    snippets_inline.mkdir(parents=True)
+    (snippets_inline / "CANVAS_COURSE_REFERENCE.md").write_text(
+        "https://school.instructure.com/courses/999\n"
+    )
+    quiz_dir = tmp_path / "quizzes" / "q1"
+    (quiz_dir / "questions").mkdir(parents=True)
+    (quiz_dir / "questions" / "q.md").write_text(
+        "---\ntitle: Q\nquestion_type: essay_question\npoints_possible: 1\n---\n\nExplain.\n"
+    )
+    quiz_md = quiz_dir / "q1.md"
+    quiz_md.write_text(
+        "---\ntitle: Quiz\n---\n\n"
+        "See your [Grades]($../../snippets/inline/CANVAS_COURSE_REFERENCE.md$/grades) in Canvas.\n\n"
+        "1. [Q](questions/q.md)\n"
+    )
+    _, desc_html, _ = parse_quiz_file(quiz_md, tmp_path / "snippets")
+    assert "https://school.instructure.com/courses/999/grades" in desc_html
+
+
+def test_parse_question_file_expands_inline_snippets(tmp_path):
+    """Inline snippets in question text are expanded when snippets_dir is provided."""
+    snippets_inline = tmp_path / "snippets" / "inline"
+    snippets_inline.mkdir(parents=True)
+    (snippets_inline / "CANVAS_COURSE_REFERENCE.md").write_text(
+        "https://school.instructure.com/courses/999\n"
+    )
+    q_dir = tmp_path / "quizzes" / "q1" / "questions"
+    q_dir.mkdir(parents=True)
+    q_md = q_dir / "q.md"
+    q_md.write_text(
+        "---\ntitle: Q\nquestion_type: essay_question\npoints_possible: 1\n---\n\n"
+        "Review your [Grades]($../../../snippets/inline/CANVAS_COURSE_REFERENCE.md$/grades) and answer.\n"
+    )
+    q = parse_question_file(q_md, tmp_path / "snippets")
+    assert "https://school.instructure.com/courses/999/grades" in q["question_text"]
+
+
+def test_parse_quiz_file_works_without_snippets_dir():
+    """parse_quiz_file still works when snippets_dir is not provided (backward compat)."""
+    fm, desc_html, q_paths = parse_quiz_file(QUIZ_MD)
+    assert fm["title"] == "A Quiz"
+    assert len(q_paths) == 2

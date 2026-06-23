@@ -33,6 +33,7 @@ def parse_frontmatter(text: str) -> tuple[dict[str, Any], str]:
 
 
 _MODULE_LINK_RE = re.compile(r"^(\s*)-\s+\[([^\]]+)\]\(([^)]+)\)")
+_MODULE_LINK_TITLE_RE = re.compile(r'''^(.*?)\s+["'].*["']\s*$''')
 _MODULE_HEADER_RE = re.compile(r"^#{1,6}\s+(.+)")
 _INDENT_SPACES_PER_LEVEL = 2
 MAX_CANVAS_INDENT = 5
@@ -77,6 +78,9 @@ def parse_module_body(
             leading_spaces = len(link_m.group(1))
             indent = leading_spaces // _INDENT_SPACES_PER_LEVEL
             title, href = link_m.group(2), link_m.group(3)
+            title_m = _MODULE_LINK_TITLE_RE.match(href)
+            if title_m:
+                href = title_m.group(1)
             if indent > MAX_CANVAS_INDENT:
                 print(
                     f"  WARNING: indent level {indent} exceeds Canvas maximum"
@@ -169,6 +173,8 @@ def sync_syllabus(
         if errors is not None:
             errors.append(msg)
         return
+    snippets_dir = repo_path / "snippets"
+    body = preprocess_snippets(body, syllabus_md, snippets_dir)
     html = markdown_to_html(body.strip()) if body.strip() else ""
     error_count_before = len(errors) if errors is not None else 0
     # Stub creator is not needed for the syllabus; pass a no-op
@@ -499,6 +505,7 @@ def run_sync(
                     _, body = parse_frontmatter(md_file.read_text())
                 except yaml.YAMLError:
                     continue
+                body = preprocess_snippets(body, md_file, snippets_dir)
                 items = parse_module_body(body, md_file, repo_path)
                 refs = {i["local_path"] for i in items if i["type"] == "content"}
                 if refs & synced_content_keys:
@@ -1032,6 +1039,8 @@ def _sync_module(
         if errors is not None:
             errors.append(msg)
         return False
+    snippets_dir = repo_root / "snippets"
+    body = preprocess_snippets(body, md_file, snippets_dir)
     items = parse_module_body(body, md_file, repo_root)
 
     existing = manifest.get(local_key)
@@ -1134,7 +1143,8 @@ def _sync_quiz(
 
     print(f"Processing quiz: {local_key}")
 
-    frontmatter, desc_html, question_paths = parse_quiz_file(quiz_md)
+    snippets_dir = repo_root / "snippets"
+    frontmatter, desc_html, question_paths = parse_quiz_file(quiz_md, snippets_dir)
     title = frontmatter.get("title", quiz_folder.name)
     published = frontmatter.get("published", False)
 
@@ -1189,7 +1199,7 @@ def _sync_quiz(
             print(f"  ERROR: question file not found: {q_path}")
             continue
         rel_path = q_path.relative_to(quiz_folder).as_posix()
-        q_data = parse_question_file(q_path)
+        q_data = parse_question_file(q_path, snippets_dir)
         # §7: rewrite links in question text
         if q_data.get("question_text"):
             q_data["question_text"] = rewrite_links(
@@ -1262,11 +1272,12 @@ def _sync_question_banks(
         with toml_path.open("rb") as fh:
             bank_meta = tomllib.load(fh)
         bank_title = bank_meta.get("bank_title", bank_folder.name)
+        snippets_dir = repo_root / "snippets"
         questions_dir = bank_folder / "questions"
         questions: list[dict[str, Any]] = []
         if questions_dir.exists():
             for q_path in sorted(questions_dir.glob("*.md")):
-                q_data = parse_question_file(q_path)
+                q_data = parse_question_file(q_path, snippets_dir)
                 q_data["rel_path"] = q_path.relative_to(bank_folder).as_posix()
                 questions.append(q_data)
         print(f"  Uploading question bank: {local_key}")
@@ -1286,6 +1297,7 @@ def _get_file_refs(
             _, body = parse_frontmatter(file_path.read_text())
         except yaml.YAMLError:
             return set()
+        body = preprocess_snippets(body, file_path, snippets_dir)
         items = parse_module_body(body, file_path, repo_root)
         return {item["local_path"] for item in items if item["type"] == "content"}
     if folder in ("assets", "snippets"):

@@ -7,7 +7,7 @@ from typing import Any
 
 import yaml
 
-from .convert import markdown_to_html
+from .convert import markdown_to_html, preprocess_snippets
 
 
 def _parse_frontmatter(text: str) -> tuple[dict[str, Any], str]:
@@ -27,7 +27,9 @@ _SECTION_HEADING_RE = re.compile(r"^##\s+(.+)$", re.MULTILINE)
 _SUBSECTION_HEADING_RE = re.compile(r"^###\s+(.+)$", re.MULTILINE)
 
 
-def parse_quiz_file(quiz_md: Path) -> tuple[dict[str, Any], str, list[Path]]:
+def parse_quiz_file(
+    quiz_md: Path, snippets_dir: Path | None = None
+) -> tuple[dict[str, Any], str, list[Path]]:
     """Parse a quiz-level .md file.
 
     Returns (frontmatter, description_html, question_paths_in_order).
@@ -36,6 +38,9 @@ def parse_quiz_file(quiz_md: Path) -> tuple[dict[str, Any], str, list[Path]]:
     """
     text = quiz_md.read_text(encoding="utf-8")
     frontmatter, body = _parse_frontmatter(text)
+
+    if snippets_dir is not None:
+        body = preprocess_snippets(body, quiz_md, snippets_dir)
 
     question_files: list[Path] = []
     description_lines: list[str] = []
@@ -109,7 +114,9 @@ def _parse_answers_section(answers_text: str, correct, question_type: str) -> li
     ]
 
 
-def parse_question_file(q_path: Path) -> dict[str, Any]:
+def parse_question_file(
+    q_path: Path, snippets_dir: Path | None = None
+) -> dict[str, Any]:
     """Parse a quiz question .md file.
 
     Returns a dict with: title, question_type, points_possible, question_text (HTML),
@@ -119,6 +126,9 @@ def parse_question_file(q_path: Path) -> dict[str, Any]:
     """
     text = q_path.read_text(encoding="utf-8")
     frontmatter, body = _parse_frontmatter(text)
+
+    if snippets_dir is not None:
+        body = preprocess_snippets(body, q_path, snippets_dir)
 
     question_type = frontmatter.get("question_type", "essay_question")
     points = frontmatter.get("points_possible", 0)
