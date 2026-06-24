@@ -9,6 +9,7 @@ from github_to_canvas.imscc_import import (
     TempEntry,
     _build_frontmatter,
     _convert_tab_configuration,
+    _dedup_question_slugs,
     _extract_html_body,
     _extract_iframes,
     _html_to_markdown,
@@ -1130,6 +1131,26 @@ def test_rewrite_imscc_links_canvas_course_id_and_object_ref_together() -> None:
     assert "../assignments/hw.md" in result
 
 
+# rewrite_imscc_links — $WIKI_REFERENCE$ token handling
+# ---------------------------------------------------------------------------
+
+
+def test_rewrite_imscc_links_wiki_reference_resolved() -> None:
+    """$WIKI_REFERENCE$/pages/id is resolved the same as $CANVAS_OBJECT_REFERENCE$."""
+    manifest = {
+        "g_page_1": TempEntry(
+            imscc_id="g_page_1",
+            category="page",
+            imscc_path="wiki_content/syllabus.html",
+            local_path="pages/syllabus.md",
+        )
+    }
+    html = '<a href="$WIKI_REFERENCE$/pages/g_page_1">Syllabus</a>'
+    result = rewrite_imscc_links(html, manifest, "quizzes/quiz-1/quiz-1.md")
+    assert "$WIKI_REFERENCE$" not in result
+    assert "../../pages/syllabus.md" in result
+
+
 # rewrite_imscc_links — $CANVAS_COURSE_REFERENCE$ token handling
 # ---------------------------------------------------------------------------
 
@@ -1328,3 +1349,48 @@ def test_html_to_markdown_preserves_iframe() -> None:
     assert "After the video." in md
     assert '<iframe src="https://example.hosted.panopto.com/Panopto/Pages/Embed.aspx?id=abc-123"' in md
     assert "aria-description" in md
+
+
+class TestDedupQuestionSlugs:
+    def test_no_duplicates_unchanged(self) -> None:
+        questions = [
+            {"slug": "alpha", "title": "Alpha"},
+            {"slug": "beta", "title": "Beta"},
+        ]
+        _dedup_question_slugs(questions)
+        assert questions[0]["slug"] == "alpha"
+        assert questions[0]["title"] == "Alpha"
+        assert questions[1]["slug"] == "beta"
+        assert questions[1]["title"] == "Beta"
+
+    def test_all_same_slug(self) -> None:
+        questions = [{"slug": "question", "title": "Question"} for _ in range(4)]
+        _dedup_question_slugs(questions)
+        assert questions[0]["slug"] == "question"
+        assert questions[0]["title"] == "Question"
+        assert questions[1]["slug"] == "question-1"
+        assert questions[1]["title"] == "Question 1"
+        assert questions[2]["slug"] == "question-2"
+        assert questions[2]["title"] == "Question 2"
+        assert questions[3]["slug"] == "question-3"
+        assert questions[3]["title"] == "Question 3"
+
+    def test_mixed_duplicates(self) -> None:
+        questions = [
+            {"slug": "question", "title": "Question"},
+            {"slug": "unique", "title": "Unique"},
+            {"slug": "question", "title": "Question"},
+            {"slug": "other", "title": "Other"},
+            {"slug": "question", "title": "Question"},
+        ]
+        _dedup_question_slugs(questions)
+        assert questions[0]["slug"] == "question"
+        assert questions[0]["title"] == "Question"
+        assert questions[1]["slug"] == "unique"
+        assert questions[1]["title"] == "Unique"
+        assert questions[2]["slug"] == "question-1"
+        assert questions[2]["title"] == "Question 1"
+        assert questions[3]["slug"] == "other"
+        assert questions[3]["title"] == "Other"
+        assert questions[4]["slug"] == "question-2"
+        assert questions[4]["title"] == "Question 2"

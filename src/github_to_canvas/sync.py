@@ -40,6 +40,9 @@ _INDENT_SPACES_PER_LEVEL = 2
 MAX_CANVAS_INDENT = 5
 _ITEM_ATTRS_RE = re.compile(r"<!--(.*?)-->")
 _ITEM_ATTR_KV_RE = re.compile(r'(\w+)=["\']([^"\']*)["\']')
+_RAW_NONHTML_BLOCK_RE = re.compile(
+    r"^```\{=(?!html\})[\w-]+\}\s*\n.*?^```\s*\n?", re.MULTILINE | re.DOTALL
+)
 
 
 def _parse_item_attrs(comment_text: str) -> dict[str, str]:
@@ -72,6 +75,7 @@ def parse_module_body(
     body: str, module_file: Path, course_root: Path
 ) -> list[dict[str, Any]]:
     """Parse a module body into an ordered list of item dicts."""
+    body = _RAW_NONHTML_BLOCK_RE.sub("", body)
     items: list[dict[str, Any]] = []
     for line in body.splitlines():
         link_m = _MODULE_LINK_RE.match(line)
@@ -1216,7 +1220,7 @@ def _sync_quiz(
         if not q_path.exists():
             print(f"  ERROR: question file not found: {q_path}")
             continue
-        rel_path = q_path.relative_to(quiz_folder).as_posix()
+        rel_path = q_path.relative_to(quiz_folder.resolve()).as_posix()
         q_data = parse_question_file(q_path, snippets_dir)
         # §7: rewrite links in question text
         if q_data.get("question_text"):

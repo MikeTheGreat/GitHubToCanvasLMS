@@ -139,9 +139,11 @@ def parse_question_file(
     feedback_section = sections.get("feedback", "")
     feedback = _parse_feedback_section(feedback_section) if feedback_section.strip() else {}
 
+    # Question text: prefer ## Question section, fall back to implicit first section
+    desc = sections.get("question", sections.get("", "")).strip()
+    question_text_html = markdown_to_html(desc) if desc else ""
+
     if question_type == "true_false_question":
-        desc = sections.get("", "").strip()
-        question_text_html = markdown_to_html(desc) if desc else ""
         answers = [
             {"text": "True", "weight": 100 if correct is True else 0},
             {"text": "False", "weight": 100 if correct is False else 0},
@@ -156,8 +158,6 @@ def parse_question_file(
         }
 
     if question_type in ("multiple_choice_question", "multiple_response_question"):
-        desc = sections.get("", "").strip()
-        question_text_html = markdown_to_html(desc) if desc else ""
         answers_text = sections.get("answers", "")
         answers = _parse_answers_section(answers_text, correct, question_type)
         return {
@@ -170,8 +170,6 @@ def parse_question_file(
         }
 
     if question_type == "fill_in_blank_question":
-        desc = sections.get("", "").strip()
-        question_text_html = markdown_to_html(desc) if desc else ""
         accepted = frontmatter.get("answers", [])
         answers = [{"text": a, "weight": 100} for a in accepted]
         return {
@@ -184,8 +182,6 @@ def parse_question_file(
         }
 
     if question_type == "pattern_match_question":
-        desc = sections.get("", "").strip()
-        question_text_html = markdown_to_html(desc) if desc else ""
         patterns = frontmatter.get("answers", [])
         answers = [{"text": patterns[0], "weight": 100}] if patterns else []
         return {
@@ -203,8 +199,6 @@ def parse_question_file(
     if sample_solution and "neutral_comments" not in feedback:
         feedback["neutral_comments"] = sample_solution
 
-    desc = sections.get("", "").strip()
-    question_text_html = markdown_to_html(desc) if desc else ""
     return {
         "title": title,
         "question_type": question_type,

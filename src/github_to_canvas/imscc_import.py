@@ -73,6 +73,20 @@ def _slugify(text: str) -> str:
     return text.strip("-")
 
 
+def _dedup_question_slugs(questions: list[dict[str, Any]]) -> None:
+    """Append -1, -2, etc. to duplicate question slugs and titles (modifies in place)."""
+    seen: dict[str, int] = {}
+    for q in questions:
+        slug = q["slug"]
+        if slug in seen:
+            seen[slug] += 1
+            n = seen[slug]
+            q["slug"] = f"{slug}-{n}"
+            q["title"] = f"{q['title']} {n}"
+        else:
+            seen[slug] = 0
+
+
 def _title_from_html_file(html_path: Path) -> str:
     """Extract <title> text from an HTML file, falling back to the stem."""
     try:
@@ -426,9 +440,10 @@ def copy_assets(imscc_dir: Path, output_dir: Path) -> None:
 # Group 3: IMSCC link rewriter
 # ---------------------------------------------------------------------------
 
-# Matches $CANVAS_OBJECT_REFERENCE$/type/identifier or $IMS-CC-FILEBASE$/path
+# Matches $CANVAS_OBJECT_REFERENCE$/type/identifier, $WIKI_REFERENCE$/pages/id,
+# or $IMS-CC-FILEBASE$/path
 _CANVAS_REF_RE = re.compile(
-    r'\$CANVAS_OBJECT_REFERENCE\$/([^/]+)/([^"\'?\s]+?)(?:\?[^"\']*)?(?=["\'\s])',
+    r'\$(?:CANVAS_OBJECT_REFERENCE|WIKI_REFERENCE)\$/([^/]+)/([^"\'?\s]+?)(?:\?[^"\']*)?(?=["\'\s])',
 )
 _FILEBASE_RE = re.compile(
     r'\$IMS-CC-FILEBASE\$/([^"\'?\s]+?)(?:\?[^"\']*)?(?=["\'\s])',
@@ -549,8 +564,43 @@ def _restore_iframes(markdown: str, iframes: list[str]) -> str:
     return markdown
 
 
+_OPEN_DIV_RE = re.compile(r"<div(?:\s[^>]*)?>", re.IGNORECASE)
+_CLOSE_DIV_RE = re.compile(r"</div>", re.IGNORECASE)
+_DIV_TAG_RE = re.compile(r"</?div(?:\s[^>]*)?>", re.IGNORECASE)
+
+
+def _inner_divs_balanced(html: str) -> bool:
+    """Return True if <div> tags in *html* are properly nested (depth never goes negative)."""
+    depth = 0
+    for m in _DIV_TAG_RE.finditer(html):
+        if m.group().startswith("</"):
+            depth -= 1
+            if depth < 0:
+                return False
+        else:
+            depth += 1
+    return depth == 0
+
+
+def _unwrap_outer_divs(html: str) -> str:
+    """Strip meaningless outer <div> wrappers that Canvas adds around content."""
+    while True:
+        stripped = html.strip()
+        m_open = _OPEN_DIV_RE.match(stripped)
+        if not m_open:
+            break
+        if not stripped.endswith("</div>"):
+            break
+        inner = stripped[m_open.end():-len("</div>")]
+        if not _inner_divs_balanced(inner):
+            break
+        html = inner
+    return html
+
+
 def _html_to_markdown(html: str) -> str:
     html = _strip_canvas_img_attrs(html)
+    html = _unwrap_outer_divs(html)
     html, iframes = _extract_iframes(html)
     md = pypandoc.convert_text(
         html,
@@ -1139,6 +1189,8 @@ def _write_question_file(q: dict[str, Any], q_path: Path) -> None:
     if orig_ids:
         fm_fields["original_answer_ids"] = orig_ids
 
+    question_md = _html_to_markdown(q["question_text"]).strip() if q.get("question_text") else ""
+
     body_lines: list[str] = []
 
     if qt == "true_false_question":
@@ -1150,7 +1202,6 @@ def _write_question_file(q: dict[str, Any], q_path: Path) -> None:
         if correct_val is None and correct_ident:
             correct_val = True
         fm_fields["correct"] = correct_val
-        body_lines.append(q["question_text"] or "")
 
     elif qt == "multiple_choice_question":
         correct_idx: int | None = None
@@ -1159,12 +1210,11 @@ def _write_question_file(q: dict[str, Any], q_path: Path) -> None:
                 correct_idx = i
                 break
         fm_fields["correct"] = correct_idx
-        body_lines.append(q["question_text"] or "")
-        body_lines.append("")
         body_lines.append("## Answers")
         body_lines.append("")
         for _, text in answers:
-            body_lines.append(f"1. {text}")
+            answer_md = _html_to_markdown(text).strip() if text else ""
+            body_lines.append(f"1. {answer_md}")
 
     elif qt == "multiple_response_question":
         correct_idents_set = set(q.get("correct_idents", []))
@@ -1173,35 +1223,31 @@ def _write_question_file(q: dict[str, Any], q_path: Path) -> None:
             if ident in correct_idents_set
         ]
         fm_fields["correct"] = correct_indices
-        body_lines.append(q["question_text"] or "")
-        body_lines.append("")
         body_lines.append("## Answers")
         body_lines.append("")
         for _, text in answers:
-            body_lines.append(f"1. {text}")
+            answer_md = _html_to_markdown(text).strip() if text else ""
+            body_lines.append(f"1. {answer_md}")
 
     elif qt == "fill_in_blank_question":
         fm_fields["answers"] = q.get("fib_answers", [])
-        body_lines.append(q["question_text"] or "")
 
     elif qt == "pattern_match_question":
         fm_fields["answers"] = q.get("fib_answers", [])
         fm_fields["match_type"] = "substring"
-        body_lines.append(q["question_text"] or "")
-
-    else:
-        # essay
-        body_lines.append(q["question_text"] or "")
 
     # Feedback section (spec §4.10.7)
     if feedback:
         body_lines.extend(["", "## Feedback", ""])
         if "general_fb" in feedback:
-            body_lines.extend(["### General", "", feedback["general_fb"], ""])
+            fb_md = _html_to_markdown(feedback["general_fb"]).strip()
+            body_lines.extend(["### General", "", fb_md, ""])
         if "correct_fb" in feedback:
-            body_lines.extend(["### Correct", "", feedback["correct_fb"], ""])
+            fb_md = _html_to_markdown(feedback["correct_fb"]).strip()
+            body_lines.extend(["### Correct", "", fb_md, ""])
         if "general_incorrect_fb" in feedback:
-            body_lines.extend(["### Incorrect", "", feedback["general_incorrect_fb"], ""])
+            fb_md = _html_to_markdown(feedback["general_incorrect_fb"]).strip()
+            body_lines.extend(["### Incorrect", "", fb_md, ""])
         per_answer = {
             k: v for k, v in feedback.items()
             if k not in ("general_fb", "correct_fb", "general_incorrect_fb")
@@ -1212,11 +1258,17 @@ def _write_question_file(q: dict[str, Any], q_path: Path) -> None:
             for i, (ident, _) in enumerate(answers, start=1):
                 fb_key = f"{ident}_fb"
                 if fb_key in per_answer:
-                    body_lines.append(f"- answer {i}: {per_answer[fb_key]}")
+                    fb_md = _html_to_markdown(per_answer[fb_key]).strip()
+                    body_lines.append(f"- answer {i}: {fb_md}")
 
     # Sample solution for essay questions (spec §4.10.11.2)
     if solution:
-        body_lines.extend(["", "## Sample Solution", "", solution])
+        solution_md = _html_to_markdown(solution).strip()
+        body_lines.extend(["", "## Sample Solution", "", solution_md])
+
+    # Question text goes last under its own heading
+    if question_md:
+        body_lines.extend(["", "## Question", "", question_md])
 
     fm = _build_frontmatter(fm_fields)
     body = "\n".join(body_lines).strip()
@@ -1226,7 +1278,10 @@ def _write_question_file(q: dict[str, Any], q_path: Path) -> None:
 def convert_quiz(
     entry: TempEntry,
     imscc_dir: Path,
+    temp_manifest: dict[str, TempEntry],
     output_dir: Path,
+    course_id: int | str | None = None,
+    base_url: str | None = None,
 ) -> None:
     """Convert assessment_meta.xml + QTI questions file to quizzes/{slug}/ folder."""
     meta_path_str = entry.metadata.get("meta_path", "")
@@ -1240,6 +1295,7 @@ def convert_quiz(
         fm_fields = {"title": entry.title, "published": False, "quiz_type": "assignment"}
 
     questions = parse_qti_questions(qti_path) if qti_path else []
+    _dedup_question_slugs(questions)
 
     # Derive slug from the local_path (e.g. "quizzes/a-quiz/a-quiz.md" → "a-quiz")
     slug = Path(entry.local_path).stem
@@ -1256,9 +1312,16 @@ def convert_quiz(
         q_links.append(f"{i}. [{q['title']}](questions/{q_filename})")
         print(f"  Converting question: quizzes/{slug}/questions/{q_filename}")
 
+    # Rewrite Canvas placeholder links and convert description to Markdown
+    if description.strip():
+        description = rewrite_imscc_links(
+            description, temp_manifest, entry.local_path, course_id, base_url,
+        )
+        description = _html_to_markdown(description).strip()
+
     # Write quiz-level file
     quiz_md_path = quiz_dir / f"{slug}.md"
-    desc_block = (description.strip() + "\n\n") if description.strip() else ""
+    desc_block = (description + "\n\n") if description else ""
     body = desc_block + "\n".join(q_links) + "\n"
     quiz_md_path.write_text(_build_frontmatter(fm_fields) + "\n\n" + body, encoding="utf-8")
     print(f"Converting quiz: {entry.local_path}")
@@ -1304,6 +1367,7 @@ def convert_question_bank(
                     bank_meta[key] = val
 
     questions = _parse_qti_items(bank_el)
+    _dedup_question_slugs(questions)
 
     slug = Path(entry.local_path).stem
     bank_dir = output_dir / "question_banks" / slug
@@ -2301,7 +2365,7 @@ def run_import(imscc_path: Path, output_dir: Path) -> None:
         # Phase 5b: quizzes
         for entry in temp_manifest.values():
             if entry.category == "quiz":
-                convert_quiz(entry, imscc_dir, output_dir)
+                convert_quiz(entry, imscc_dir, temp_manifest, output_dir, course_id, base_url)
 
         # Phase 5c: question banks
         for entry in temp_manifest.values():
