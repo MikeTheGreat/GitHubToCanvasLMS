@@ -23,6 +23,12 @@ TODO.md is only for possible future work items. Once a feature is implemented, d
 
 The three most important subcommands are **update**, **import**, and **publish**. When making changes to any one of them, ensure the same change is reflected in the other two where applicable.
 
+## When asked to update documentation, you should normally consider three main files
+- README.md is for notes that humans using the tool will read
+- ARCHTECTURE.md is for notes, mostly for yourself, about the internals of the tool work
+- TODO.md is a list of possible future features.  After changing the code "updating the docs" should include checking to see if anything in TODO.md should be removed or updated.
+
+
 # GitHubToCanvasLMS
 
 A tool for managing Canvas LMS course content through Markdown files stored in a GitHub repository. The workflow converts Markdown (and supporting assets) into HTML fragments and uploads them to a Canvas LMS instance via the Canvas API.
