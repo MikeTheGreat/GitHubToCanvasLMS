@@ -317,11 +317,13 @@ The complementary check on the **upload** side (`sync.py`) is unconditional: any
 
 ### Module file generation
 
-- `ContextModuleSubHeader` → `## Title` heading
+- `ContextModuleSubHeader` indent 0 → `## Title` heading
+- `ContextModuleSubHeader` indent ≥ 1 → `- Title` plain-text list item (with `(indent-1)*2` leading spaces)
 - `WikiPage` / `Assignment` / `Discussion` / `DiscussionTopic` / `Quizzes::Quiz` → `- [display_title](../type/file.md)` (`DiscussionTopic` is the name used in real Canvas IMSCC exports; `Discussion` is the IMS CC name — both are handled)
 - `ExternalUrl` → `- [display_title](https://url)` — if the linked webLink resource has `target` or `windowFeatures` attributes on its `<url>` element, they are appended as an HTML comment: `<!-- target="_blank" windowFeatures="width=800" -->`
 - `ContextExternalTool` (LTI embedded tool) → `- [display_title](url)` (URL comes from the module item's own `url` field, not the LTI resource XML)
 - `Attachment` (Canvas File) → `# SKIPPED: Attachment - "title"` comment line + printed warning (no local file equivalent)
+- **Per-item published state:** Items with `workflow_state` != `active` in `module_meta.xml` get `<!-- published="false" -->` appended. During sync, the comment is parsed and passed as the `published` field on the Canvas module item API call. The `publish` subcommand skips unpublished items entirely (not rendered in the HTML, not followed for reachability).
 
 ### Course settings output (`course_settings/course_settings.toml`)
 
@@ -810,9 +812,12 @@ The link text becomes the display title of the item within the module. The link 
 - [Course Website](https://example.com) <!-- target="_blank" windowFeatures="width=800" -->
 ```
 
-The `target` attribute is mapped to Canvas's `new_tab` boolean; `windowFeatures` is discarded (no Canvas equivalent). External URL items without a comment default to `new_tab: false`.
+The `target` attribute is mapped to Canvas's `new_tab` boolean; `windowFeatures` is discarded (no Canvas equivalent). External URL items default to `new_tab: true` (opens in a new window); add `<!-- target="_self" -->` to embed in an iframe instead.
 
-**Section sub-headers** within a module (Canvas calls these `SubHeader` items) are represented as Markdown headings in the body:
+**Section sub-headers** within a module (Canvas calls these `SubHeader` items) can be written two ways:
+
+1. A `## heading` line becomes a SubHeader at **indent 0**. These stand out visually in both the Markdown source and Canvas.
+2. A **plain-text list item** (a bullet with no link) becomes a SubHeader starting at **indent 1**. Nesting with leading spaces increases the indent level (2 spaces per level, same as link items).
 
 ```markdown
 ---
@@ -820,17 +825,19 @@ title: "Week 1: Introduction"
 published: true
 ---
 
-## Readings
+## Readings                                         <!-- SubHeader indent 0 -->
 
 - [Week 1 Lecture Notes](../pages/week1-lecture.md)
 
-## Work
+## Work                                             <!-- SubHeader indent 0 -->
 
 - [Week 1 Assignment](../assignments/week1.md)
 - [Week 1 Discussion](../discussions/week1-intro.md)
+- Please read the instructions carefully            <!-- SubHeader indent 1 -->
+  - And bring your textbook                         <!-- SubHeader indent 2 -->
 ```
 
-**Item indentation:** Leading spaces on list items control the Canvas module item `indent` parameter (0-5). Every 2 spaces = 1 indent level. `parse_module_body()` captures this from the Markdown and stores it as an `"indent"` key on each item dict. `add_module_item()` passes it through to `module.create_module_item()`. Values exceeding Canvas's maximum of 5 are clamped with a warning. SubHeaders always get indent 0. For the publish website, `render_module_overview()` renders indented items as nested Markdown lists (4 spaces per level).
+**Item indentation:** Leading spaces on list items control the Canvas module item `indent` parameter (0-5). Every 2 spaces = 1 indent level. `parse_module_body()` captures this from the Markdown and stores it as an `"indent"` key on each item dict. `add_module_item()` passes it through to `module.create_module_item()`. Values exceeding Canvas's maximum of 5 are clamped with a warning. `## headings` always get indent 0; plain-text list items start at indent 1. For the publish website, `render_module_overview()` renders indent-0 SubHeaders as `## headings` and indented SubHeaders as bold `<li>` elements.
 
 **Synchronisation notes:**
 

@@ -1131,53 +1131,47 @@ def test_parse_module_body_mixed_content_and_external(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# parse_module_body — plain-text list item warnings
+# parse_module_body — plain-text list items as indented SubHeaders
 # ---------------------------------------------------------------------------
 
 
-def test_parse_module_body_plain_text_list_item_warns(tmp_path: Path, capsys) -> None:
-    """Plain-text list items (no link) produce a warning and are skipped."""
+def test_parse_module_body_plain_text_list_item_becomes_subheader(tmp_path: Path) -> None:
+    """Plain-text list items become SubHeaders starting at indent 1."""
     course_root = tmp_path / "course"
     course_root.mkdir()
     (course_root / "modules").mkdir()
+    (course_root / "pages").mkdir()
     module_file = course_root / "modules" / "week-1.md"
     body = "- Just some plain text\n- [Valid Link](../pages/foo.md)\n"
-    (course_root / "pages").mkdir()
     items = parse_module_body(body, module_file, course_root)
-    assert len(items) == 1
-    assert items[0]["type"] == "content"
-    captured = capsys.readouterr()
-    assert "skipping plain-text list item" in captured.out
-    assert "'Just some plain text'" in captured.out
-    assert "## header" in captured.out
+    assert len(items) == 2
+    assert items[0] == {"type": "SubHeader", "title": "Just some plain text", "indent": 1}
+    assert items[1]["type"] == "content"
 
 
-def test_parse_module_body_ordered_list_plain_text_warns(tmp_path: Path, capsys) -> None:
-    """Ordered list items with plain text also produce a warning."""
+def test_parse_module_body_ordered_list_plain_text_becomes_subheader(tmp_path: Path) -> None:
+    """Ordered list items with plain text also become SubHeaders."""
     course_root = tmp_path / "course"
     course_root.mkdir()
     (course_root / "modules").mkdir()
     module_file = course_root / "modules" / "week-1.md"
     body = "1. Step one without a link\n"
     items = parse_module_body(body, module_file, course_root)
-    assert len(items) == 0
-    captured = capsys.readouterr()
-    assert "skipping plain-text list item" in captured.out
-    assert "'Step one without a link'" in captured.out
+    assert len(items) == 1
+    assert items[0] == {"type": "SubHeader", "title": "Step one without a link", "indent": 1}
 
 
-def test_parse_module_body_header_not_warned_as_plain_text(tmp_path: Path, capsys) -> None:
-    """Headers are not misidentified as plain-text list items."""
+def test_parse_module_body_indented_plain_text_subheader(tmp_path: Path) -> None:
+    """Indented plain-text list items get higher indent levels (2 spaces per level, starting at 1)."""
     course_root = tmp_path / "course"
     course_root.mkdir()
     (course_root / "modules").mkdir()
     module_file = course_root / "modules" / "week-1.md"
-    body = "## Section Title\n"
+    body = "- Flush\n  - One level\n    - Two levels\n"
     items = parse_module_body(body, module_file, course_root)
-    assert len(items) == 1
-    assert items[0]["type"] == "SubHeader"
-    captured = capsys.readouterr()
-    assert "skipping" not in captured.out
+    assert items[0] == {"type": "SubHeader", "title": "Flush", "indent": 1}
+    assert items[1] == {"type": "SubHeader", "title": "One level", "indent": 2}
+    assert items[2] == {"type": "SubHeader", "title": "Two levels", "indent": 3}
 
 
 # ---------------------------------------------------------------------------
@@ -1232,8 +1226,8 @@ def test_parse_module_body_external_url_indentation(tmp_path: Path) -> None:
     assert items[0]["indent"] == 1
 
 
-def test_parse_module_body_subheaders_always_indent_zero(tmp_path: Path) -> None:
-    """SubHeaders always have indent 0, regardless of any leading whitespace."""
+def test_parse_module_body_hash_headers_always_indent_zero(tmp_path: Path) -> None:
+    """## headers always have indent 0, regardless of any leading whitespace."""
     course_root = tmp_path / "course"
     (course_root / "modules").mkdir(parents=True)
     module_file = course_root / "modules" / "m.md"
@@ -3020,3 +3014,52 @@ def test_front_page_set_when_settings_resynced(mock_course, mocker, tmp_path) ->
     run_sync(_config(), root)
 
     _assert_front_page_set(page)
+
+
+# ---------------------------------------------------------------------------
+# parse_module_body — per-item published attribute
+# ---------------------------------------------------------------------------
+
+
+def test_parse_module_body_items_default_published_true(tmp_path: Path) -> None:
+    """Module items without a published comment default to published=True."""
+    course_root = tmp_path / "course"
+    (course_root / "modules").mkdir(parents=True)
+    module_file = course_root / "modules" / "m.md"
+    body = "- [Page](../pages/intro.md)\n"
+    items = parse_module_body(body, module_file, course_root)
+    assert items[0]["published"] is True
+
+
+def test_parse_module_body_content_published_false(tmp_path: Path) -> None:
+    """Content items with published='false' comment are marked unpublished."""
+    course_root = tmp_path / "course"
+    (course_root / "modules").mkdir(parents=True)
+    module_file = course_root / "modules" / "m.md"
+    body = '- [Page](../pages/intro.md) <!-- published="false" -->\n'
+    items = parse_module_body(body, module_file, course_root)
+    assert items[0]["type"] == "content"
+    assert items[0]["published"] is False
+
+
+def test_parse_module_body_external_url_published_false(tmp_path: Path) -> None:
+    """ExternalUrl items with published='false' comment are marked unpublished."""
+    course_root = tmp_path / "course"
+    (course_root / "modules").mkdir(parents=True)
+    module_file = course_root / "modules" / "m.md"
+    body = '- [Link](https://example.com) <!-- published="false" -->\n'
+    items = parse_module_body(body, module_file, course_root)
+    assert items[0]["type"] == "ExternalUrl"
+    assert items[0]["published"] is False
+
+
+def test_parse_module_body_mixed_published_attrs(tmp_path: Path) -> None:
+    """published='false' can coexist with other comment attributes."""
+    course_root = tmp_path / "course"
+    (course_root / "modules").mkdir(parents=True)
+    module_file = course_root / "modules" / "m.md"
+    body = '- [Link](https://example.com) <!-- target="_self" published="false" -->\n'
+    items = parse_module_body(body, module_file, course_root)
+    assert items[0]["type"] == "ExternalUrl"
+    assert items[0]["new_tab"] is False
+    assert items[0]["published"] is False

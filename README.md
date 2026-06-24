@@ -872,7 +872,7 @@ Post your initial response by Wednesday, then reply to two classmates.
 
 ### Module (`modules/`)
 
-Module files don't have a body that becomes HTML. The body lists content items and optional sub-headers. Links to local `.md` files become Canvas content items; absolute URLs become ExternalUrl items.
+Module files don't have a body that becomes HTML. The body lists content items and text headers (SubHeaders). Links to local `.md` files become Canvas content items; absolute URLs become ExternalUrl items.
 
 ```markdown
 ---
@@ -882,42 +882,60 @@ unlock_at: "2025-01-20T00:00:00-05:00" # module stays locked until this time
 require_sequential_progress: false     # true = students must complete items in order
 ---
 
-## Readings                            <!-- a "## heading" becomes a SubHeader item -->
+## Readings                            <!-- a "## heading" becomes a SubHeader at indent 0 -->
 
 - [Syllabus](../pages/syllabus.md)                  <!-- link to a local .md → content item -->
-- [Course Website](https://example.com) <!-- target="_blank" -->  <!-- absolute URL → ExternalUrl item -->
+- [Course Website](https://example.com)              <!-- absolute URL → ExternalUrl item -->
 
 ## Work
 
 - [Week 1 Assignment](../assignments/week1.md)
 - [Week 1 Discussion](../discussions/week1-intro.md)
 - [Week 1 Quiz](../quizzes/week-1-quiz/week-1-quiz.md)
+- Please read the instructions carefully    <!-- plain-text list item → SubHeader at indent 1 -->
 ```
 
-The module body uses three kinds of lines:
+The module body uses four kinds of lines:
 
-- A `## heading` becomes a **SubHeader** item.
+- A `## heading` becomes a **SubHeader** item at indent level 0.
+- A **plain-text list item** (no link) becomes a **SubHeader** item starting at indent level 1. Indenting with leading spaces increases the level (2 spaces per level).
 - A bullet linking to a local `.md` file becomes a **content item** (Page,
   Assignment, Discussion, or Quiz — inferred from the target's folder).
 - A bullet linking to an absolute `http(s)://` URL becomes an **ExternalUrl** item.
 
-The `<!-- target="_blank" -->` comment sets `new_tab: true` on the Canvas ExternalUrl item (opens in a new tab). Lines without a comment default to `new_tab: false`.
+ExternalUrl items default to `new_tab: true` (Canvas opens the link in a new window). Add `<!-- target="_self" -->` after the link to embed in an iframe instead.
+
+**Per-item published state:** By default every item in a module is published (visible to students). To mark an individual item as unpublished, add `<!-- published="false" -->` after the link:
+
+```markdown
+- [Visible Page](../pages/intro.md)
+- [Hidden Draft](../pages/draft.md) <!-- published="false" -->
+- [Hidden Link](https://example.com) <!-- published="false" -->
+```
+
+This sets the Canvas module item's published state — the item still appears in Canvas for instructors but is hidden from students. Multiple attributes can be combined in a single comment: `<!-- target="_self" published="false" -->`.
+
+Unpublished items are also excluded from the `publish` subcommand's static website.
+
+The `import` subcommand preserves per-item published state from the Canvas export — unpublished items in the original course get the `<!-- published="false" -->` comment automatically.
 
 **Item indentation:** Indent list items with leading spaces to set their Canvas indentation level. Every 2 spaces of indentation adds one indent level. Canvas supports indent levels 0-5; deeper indentation is clamped to 5 with a warning.
 
 ```markdown
-## Welcome
+## Welcome                                          <!-- SubHeader indent 0 -->
 
-- [Course Overview](../pages/overview.md)          <!-- indent 0 (flush left) -->
+- [Course Overview](../pages/overview.md)           <!-- indent 0 (flush left) -->
 
-## Useful Links
+## Useful Links                                     <!-- SubHeader indent 0 -->
 
-  - [Grading Guide](../pages/grading.md)           <!-- indent 1 (2 spaces) -->
-  - [Zoom Links](../pages/zoom.md)                 <!-- indent 1 -->
+  - [Grading Guide](../pages/grading.md)            <!-- indent 1 (2 spaces) -->
+  - [Zoom Links](../pages/zoom.md)                  <!-- indent 1 -->
     - [Zoom Etiquette](../pages/zoom-etiquette.md)  <!-- indent 2 (4 spaces) -->
+  - Important reminder about Zoom                   <!-- SubHeader indent 2 -->
+    - Another note                                  <!-- SubHeader indent 3 -->
 ```
 
-SubHeaders (`## headings`) always appear at indent level 0. The same indentation is preserved in the published website as nested Markdown lists.
+Top-level `## headings` always appear at indent level 0. Plain-text list items start at indent 1 (flush `- text`) and increase with nesting. The same indentation is preserved in the published website.
 
 **Module display order** is controlled by `course_settings/module_order.toml`. Without this file, modules are synced in alphabetical filename order. Create the file to assign explicit Canvas positions:
 

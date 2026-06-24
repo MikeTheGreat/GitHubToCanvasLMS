@@ -222,6 +222,13 @@ def test_module_subheaders_as_headings(output_dir: Path) -> None:
     assert "## Work" in text
 
 
+def test_module_indented_subheader_as_plain_list_item(output_dir: Path) -> None:
+    run_import(FIXTURE_DIR, output_dir)
+    text = (output_dir / "modules" / "week-1.md").read_text()
+    assert "- Indented Note" in text
+    assert "## Indented Note" not in text
+
+
 def test_module_page_link(output_dir: Path) -> None:
     run_import(FIXTURE_DIR, output_dir)
     text = (output_dir / "modules" / "week-1.md").read_text()
@@ -1187,3 +1194,30 @@ def test_run_import_canvas_course_reference_snippet_roundtrip(output_dir: Path) 
     result = preprocess_snippets(page.read_text(), page, snippets_dir)
 
     assert "https://test.instructure.com/courses/12345/assignments/syllabus" in result
+
+
+# ---------------------------------------------------------------------------
+# Module item published attribute in IMSCC import
+# ---------------------------------------------------------------------------
+
+
+def test_module_unpublished_item_gets_comment(output_dir: Path) -> None:
+    """An unpublished module item in module_meta.xml gets a published='false' comment."""
+    run_import(FIXTURE_DIR, output_dir)
+    text = (output_dir / "modules" / "week-1.md").read_text()
+    assert 'published="false"' in text
+    for line in text.splitlines():
+        if "Hidden Draft" in line:
+            assert '<!-- published="false" -->' in line
+            break
+    else:
+        raise AssertionError("Hidden Draft item not found in module file")
+
+
+def test_module_published_items_no_comment(output_dir: Path) -> None:
+    """Published module items do not get a published comment."""
+    run_import(FIXTURE_DIR, output_dir)
+    text = (output_dir / "modules" / "week-1.md").read_text()
+    for line in text.splitlines():
+        if "My Page" in line and "Hidden Draft" not in line:
+            assert 'published="false"' not in line

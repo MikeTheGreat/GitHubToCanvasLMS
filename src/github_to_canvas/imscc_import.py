@@ -1334,6 +1334,8 @@ class ModuleItem:
     identifierref: str     # content resource identifier
     url: str = ""          # for ExternalUrl items
     position: int = 0
+    indent: int = 0
+    published: bool = True
 
 
 @dataclass
@@ -1383,6 +1385,8 @@ def parse_module_meta(imscc_dir: Path) -> list[ModuleData]:
                 i_ref = _child_text(item_el, "identifierref")
                 i_url = _child_text(item_el, "url")
                 i_pos_raw = _child_text(item_el, "position")
+                i_indent_raw = _child_text(item_el, "indent")
+                i_workflow = _child_text(item_el, "workflow_state")
                 items.append(ModuleItem(
                     content_type=i_type,
                     title=i_title,
@@ -1390,6 +1394,8 @@ def parse_module_meta(imscc_dir: Path) -> list[ModuleData]:
                     identifierref=i_ref,
                     url=i_url,
                     position=int(i_pos_raw) if i_pos_raw.isdigit() else 0,
+                    indent=int(i_indent_raw) if i_indent_raw.isdigit() else 0,
+                    published=i_workflow == "active",
                 ))
 
         items.sort(key=lambda i: i.position)
@@ -1424,27 +1430,34 @@ def generate_module_file(
     lines: list[str] = []
     for item in module.items:
         ct = item.content_type
+        prefix = "  " * item.indent
 
         if ct == "ContextModuleSubHeader":
-            lines.append(f"## {item.title}")
-            lines.append("")
+            if item.indent >= 1:
+                spaces = "  " * (item.indent - 1)
+                lines.append(f"{spaces}- {item.title}")
+            else:
+                lines.append(f"## {item.title}")
+                lines.append("")
             continue
 
         if ct in ("ExternalUrl", "ContextExternalTool"):
             url = item.url or "#"
-            extra = ""
+            attr_parts: list[str] = []
             if ct == "ExternalUrl":
                 entry = temp_manifest.get(item.identifierref)
                 if entry is not None and entry.category == "external_url":
-                    parts: list[str] = []
                     if entry.metadata.get("target"):
-                        parts.append(f'target="{entry.metadata["target"]}"')
+                        attr_parts.append(f'target="{entry.metadata["target"]}"')
                     if entry.metadata.get("window_features"):
-                        parts.append(f'windowFeatures="{entry.metadata["window_features"]}"')
-                    if parts:
-                        extra = " <!-- " + " ".join(parts) + " -->"
-            lines.append(f"- [{item.title}]({url}){extra}")
+                        attr_parts.append(f'windowFeatures="{entry.metadata["window_features"]}"')
+            if not item.published:
+                attr_parts.append('published="false"')
+            extra = (" <!-- " + " ".join(attr_parts) + " -->") if attr_parts else ""
+            lines.append(f"{prefix}- [{item.title}]({url}){extra}")
             continue
+
+        unpub = ' <!-- published="false" -->' if not item.published else ""
 
         if ct == "Attachment":
             entry = temp_manifest.get(item.identifierref)
@@ -1454,7 +1467,7 @@ def generate_module_file(
                     f"id {item.identifierref!r} in module {module.title!r} — skipping"
                 )
                 continue
-            lines.append(f"- [{item.title}](../{entry.local_path})")
+            lines.append(f"{prefix}- [{item.title}](../{entry.local_path}){unpub}")
             continue
 
         if ct in ("WikiPage", "Assignment", "Discussion", "DiscussionTopic", "Quizzes::Quiz"):
@@ -1465,7 +1478,7 @@ def generate_module_file(
                     f"id {item.identifierref!r} — skipping"
                 )
                 continue
-            lines.append(f"- [{item.title}](../{entry.local_path})")
+            lines.append(f"{prefix}- [{item.title}](../{entry.local_path}){unpub}")
             continue
 
         # Unknown content type — warn and skip

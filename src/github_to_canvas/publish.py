@@ -328,12 +328,14 @@ def collect_reachable(repo: Path, seed_paths: set[str]) -> set[str]:
 
         if repo_rel.startswith("modules/"):
             for item in parse_module_body(body, src, repo):
+                if not item.get("published", True):
+                    continue
                 if item["type"] == "content" and item["local_path"] not in visited:
                     queue.append(item["local_path"])
-
-        for ref in extract_local_refs(body, src, repo):
-            if ref not in visited:
-                queue.append(ref)
+        else:
+            for ref in extract_local_refs(body, src, repo):
+                if ref not in visited:
+                    queue.append(ref)
 
     return visited
 
@@ -468,14 +470,23 @@ def render_module_overview(module_md: Path, repo: Path) -> str:
     out: list[str] = [f"# {title}", ""]
     in_list = False
     for item in items:
+        if not item.get("published", True):
+            continue
         indent = item.get("indent", 0)
         if item["type"] == "SubHeader":
-            if in_list:
-                out.append("</ul>")
+            if indent == 0:
+                if in_list:
+                    out.append("</ul>")
+                    out.append("")
+                    in_list = False
+                out.append(f"## {item['title']}")
                 out.append("")
-                in_list = False
-            out.append(f"## {item['title']}")
-            out.append("")
+            else:
+                if not in_list:
+                    out.append("<ul>")
+                    in_list = True
+                style = f' style="margin-left: {indent * 2}em"' if indent else ""
+                out.append(f'<li{style}><strong>{item["title"]}</strong></li>')
         else:
             if not in_list:
                 out.append("<ul>")

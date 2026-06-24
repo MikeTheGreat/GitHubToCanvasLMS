@@ -235,6 +235,6 @@ When implemented, the suggested approach:
 - Alternately: what about having "move" / rename commands in the tool to handle this?
   - It'll need to update the manifest file
 
-# Subofolders in the pages/ hive
+# Subfolders in the pages/ hive
 - Would be nice for organizational purposes
 

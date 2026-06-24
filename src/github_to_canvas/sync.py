@@ -35,16 +35,16 @@ def parse_frontmatter(text: str) -> tuple[dict[str, Any], str]:
 _MODULE_LINK_RE = re.compile(r"^(\s*)-\s+\[([^\]]+)\]\(([^)]+)\)")
 _MODULE_LINK_TITLE_RE = re.compile(r'''^(.*?)\s+["'].*["']\s*$''')
 _MODULE_HEADER_RE = re.compile(r"^#{1,6}\s+(.+)")
-_MODULE_PLAIN_LIST_RE = re.compile(r"^\s*(?:[-*+]|\d+[.)]) \s*(.+)")
+_MODULE_PLAIN_LIST_RE = re.compile(r"^(\s*)(?:[-*+]|\d+[.])\s+(.+)")
 _INDENT_SPACES_PER_LEVEL = 2
 MAX_CANVAS_INDENT = 5
-_EXTURL_ATTRS_RE = re.compile(r"<!--(.*?)-->")
-_EXTURL_ATTR_KV_RE = re.compile(r'(\w+)=["\']([^"\']*)["\']')
+_ITEM_ATTRS_RE = re.compile(r"<!--(.*?)-->")
+_ITEM_ATTR_KV_RE = re.compile(r'(\w+)=["\']([^"\']*)["\']')
 
 
-def _parse_exturl_attrs(comment_text: str) -> dict[str, str]:
+def _parse_item_attrs(comment_text: str) -> dict[str, str]:
     """Parse key="value" pairs from an HTML comment string."""
-    return {m.group(1): m.group(2) for m in _EXTURL_ATTR_KV_RE.finditer(comment_text)}
+    return {m.group(1): m.group(2) for m in _ITEM_ATTR_KV_RE.finditer(comment_text)}
 
 
 def _find_nested_key(obj: Any, target: str) -> str | None:
@@ -88,10 +88,12 @@ def parse_module_body(
                     f" ({MAX_CANVAS_INDENT}); clamping: {title}"
                 )
                 indent = MAX_CANVAS_INDENT
+            attrs_m = _ITEM_ATTRS_RE.search(line)
+            attrs = _parse_item_attrs(attrs_m.group(1)) if attrs_m else {}
+            published = attrs.get("published", "true").lower() != "false"
+
             # Detect absolute URLs → ExternalUrl item
             if href.startswith("http://") or href.startswith("https://"):
-                attrs_m = _EXTURL_ATTRS_RE.search(line)
-                attrs = _parse_exturl_attrs(attrs_m.group(1)) if attrs_m else {}
                 target = attrs.get("target", "")
                 new_tab = target != "_self"
                 items.append(
@@ -101,6 +103,7 @@ def parse_module_body(
                         "url": href,
                         "new_tab": new_tab,
                         "indent": indent,
+                        "published": published,
                     }
                 )
             else:
@@ -108,7 +111,7 @@ def parse_module_body(
                 local_path = resolved.relative_to(course_root.resolve()).as_posix()
                 items.append(
                     {"type": "content", "title": title, "local_path": local_path,
-                     "indent": indent}
+                     "indent": indent, "published": published}
                 )
             continue
         header_m = _MODULE_HEADER_RE.match(line)
@@ -118,10 +121,16 @@ def parse_module_body(
             continue
         plain_m = _MODULE_PLAIN_LIST_RE.match(line)
         if plain_m:
-            print(
-                f"  WARNING: skipping plain-text list item (no link): "
-                f"{plain_m.group(1).strip()!r}  — use a ## header for text-only items"
-            )
+            leading_spaces = len(plain_m.group(1))
+            indent = leading_spaces // _INDENT_SPACES_PER_LEVEL + 1
+            if indent > MAX_CANVAS_INDENT:
+                print(
+                    f"  WARNING: indent level {indent} exceeds Canvas maximum"
+                    f" ({MAX_CANVAS_INDENT}); clamping: {plain_m.group(2).strip()}"
+                )
+                indent = MAX_CANVAS_INDENT
+            items.append({"type": "SubHeader",
+                         "title": plain_m.group(2).strip(), "indent": indent})
     return items
 
 

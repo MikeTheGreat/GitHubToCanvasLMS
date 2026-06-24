@@ -476,3 +476,38 @@ def test_run_publish_missing_mkdocs_raises(tmp_path, monkeypatch):
     import pytest
     with pytest.raises(ValueError, match="mkdocs is not installed"):
         publish.run_publish(FIXTURES, tmp_path / "site")
+
+
+# ---------------------------------------------------------------------------
+# Unpublished module items
+# ---------------------------------------------------------------------------
+
+
+def test_collect_reachable_skips_unpublished_items(tmp_path):
+    """Unpublished module items are not followed into the reachable set."""
+    (tmp_path / "modules").mkdir()
+    (tmp_path / "modules" / "m.md").write_text(
+        "---\ntitle: M\npublished: true\n---\n"
+        "- [Visible](../pages/vis.md)\n"
+        '- [Hidden](../pages/hid.md) <!-- published="false" -->\n'
+    )
+    (tmp_path / "pages").mkdir()
+    (tmp_path / "pages" / "vis.md").write_text("---\ntitle: V\n---\nV\n")
+    (tmp_path / "pages" / "hid.md").write_text("---\ntitle: H\n---\nH\n")
+    reachable = publish.collect_reachable(tmp_path, {"modules/m.md"})
+    assert "pages/vis.md" in reachable
+    assert "pages/hid.md" not in reachable
+
+
+def test_render_module_overview_omits_unpublished(tmp_path):
+    """render_module_overview does not include unpublished items in HTML output."""
+    (tmp_path / "modules").mkdir()
+    mod = tmp_path / "modules" / "m.md"
+    mod.write_text(
+        "---\ntitle: Test\npublished: true\n---\n"
+        "- [Shown](../pages/a.md)\n"
+        '- [Hidden](../pages/b.md) <!-- published="false" -->\n'
+    )
+    html = publish.render_module_overview(mod, tmp_path)
+    assert "Shown" in html
+    assert "Hidden" not in html

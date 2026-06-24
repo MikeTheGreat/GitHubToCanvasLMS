@@ -658,6 +658,8 @@ def add_module_item(module, item: dict[str, Any], manifest: dict) -> int | None:
         )
         return mi.id
 
+    published = item.get("published", True)
+
     if item["type"] == "ExternalUrl":
         mi = module.create_module_item(
             module_item={
@@ -666,6 +668,7 @@ def add_module_item(module, item: dict[str, Any], manifest: dict) -> int | None:
                 "external_url": item["url"],
                 "new_tab": item.get("new_tab", False),
                 "indent": indent,
+                "published": published,
             }
         )
         return mi.id
@@ -685,6 +688,7 @@ def add_module_item(module, item: dict[str, Any], manifest: dict) -> int | None:
             "page_url": entry["canvas_url"],
             "title": item["title"],
             "indent": indent,
+            "published": published,
         }
         stale_id = entry.get("canvas_url")
     else:
@@ -693,6 +697,7 @@ def add_module_item(module, item: dict[str, Any], manifest: dict) -> int | None:
             "content_id": entry["canvas_id"],
             "title": item["title"],
             "indent": indent,
+            "published": published,
         }
         stale_id = entry.get("canvas_id")
     try:
