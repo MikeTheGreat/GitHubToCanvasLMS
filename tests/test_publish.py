@@ -205,7 +205,7 @@ def test_stage_content_rewrites_quiz_links(tmp_path):
     page = tmp_path / "page.md"
     page.write_text("---\ntitle: P\n---\n\nSee [the quiz](../quizzes/a-quiz/a-quiz.md).\n")
     md = publish.stage_content_markdown(page, tmp_path)
-    assert "../quizzes/a-quiz.md" in md
+    assert "../quiz-not-published.md" in md
     assert "a-quiz/a-quiz.md" not in md
 
 
@@ -350,6 +350,27 @@ def test_render_module_overview():
     assert '<li style="margin-left: 2em"><a href="../discussions/week1-intro.md">Week 1 Discussion</a></li>' in md
 
 
+def test_render_module_overview_redirects_quiz_links(tmp_path):
+    """Quiz items in a module overview link to the not-published placeholder."""
+    mod = tmp_path / "modules" / "m.md"
+    mod.parent.mkdir(parents=True)
+    (tmp_path / "quizzes" / "q").mkdir(parents=True)
+    (tmp_path / "quizzes" / "q" / "q.md").write_text(
+        "---\ntitle: Q\npublished: true\n---\nQuiz\n"
+    )
+    (tmp_path / "pages").mkdir()
+    (tmp_path / "pages" / "p.md").write_text("---\ntitle: P\n---\nPage\n")
+    mod.write_text(
+        "---\ntitle: Test\npublished: true\n---\n"
+        "- [My Quiz](../quizzes/q/q.md)\n"
+        "- [My Page](../pages/p.md)\n"
+    )
+    html = publish.render_module_overview(mod, tmp_path)
+    assert "../../quiz-not-published/" in html
+    assert "quizzes/q" not in html
+    assert '<a href="../pages/p.md">My Page</a>' in html
+
+
 def test_render_module_overview_indentation(tmp_path):
     """render_module_overview renders multi-level indentation as HTML with margin-left."""
     mod = tmp_path / "modules" / "m.md"
@@ -403,10 +424,13 @@ def test_stage_writes_full_tree(tmp_path):
     # Discussion is reachable from the module → staged but not in nav.
     assert (tmp_path / "docs" / "discussions" / "week1-intro.md").exists()
     assert not (tmp_path / "docs" / "quizzes").exists()
+    # Placeholder page for quiz links exists.
+    assert (tmp_path / "docs" / "quiz-not-published.md").exists()
 
     assert info["site_name"] == FIXTURES.name
     assert info["module_count"] == 1
     assert set(info["staged_files"]) == {
+        "assets/images/fig.png",
         "assignments/week1.md",
         "discussions/week1-intro.md",
         "modules/week-1.md",
@@ -497,6 +521,38 @@ def test_collect_reachable_skips_unpublished_items(tmp_path):
     reachable = publish.collect_reachable(tmp_path, {"modules/m.md"})
     assert "pages/vis.md" in reachable
     assert "pages/hid.md" not in reachable
+
+
+def test_collect_reachable_skips_unpublished_asset(tmp_path):
+    """An asset linked only from an unpublished module item is not reachable."""
+    (tmp_path / "modules").mkdir()
+    (tmp_path / "modules" / "m.md").write_text(
+        "---\ntitle: M\npublished: true\n---\n"
+        "- [Visible](../pages/vis.md)\n"
+        '- [Solutions](../assets/solutions.docx) <!-- published="false" -->\n'
+    )
+    (tmp_path / "pages").mkdir()
+    (tmp_path / "pages" / "vis.md").write_text("---\ntitle: V\n---\nV\n")
+    (tmp_path / "assets").mkdir()
+    (tmp_path / "assets" / "solutions.docx").write_bytes(b"fake")
+    reachable = publish.collect_reachable(tmp_path, {"modules/m.md"})
+    assert "pages/vis.md" in reachable
+    assert "assets/solutions.docx" not in reachable
+
+
+def test_stage_excludes_unpublished_asset(tmp_path):
+    """Assets linked only from unpublished module items are not staged."""
+    repo = tmp_path / "repo"
+    (repo / "modules").mkdir(parents=True)
+    (repo / "modules" / "m.md").write_text(
+        "---\ntitle: M\npublished: true\n---\n"
+        '- [Solutions](../assets/solutions.docx) <!-- published="false" -->\n'
+    )
+    (repo / "assets").mkdir()
+    (repo / "assets" / "solutions.docx").write_bytes(b"fake")
+    staging = tmp_path / "staging"
+    publish.stage(repo, staging)
+    assert not (staging / "docs" / "assets" / "solutions.docx").exists()
 
 
 def test_render_module_overview_omits_unpublished(tmp_path):

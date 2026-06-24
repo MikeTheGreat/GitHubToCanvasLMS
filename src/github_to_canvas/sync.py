@@ -561,6 +561,7 @@ def run_sync(
             errors.append(msg)
 
     # 3. Modules (alphabetical, with optional explicit position from module_order.toml)
+    unpublishable_items: list[tuple[str, str]] = []
     _order_key = "course_settings/module_order.toml"
     _order_path = repo_path / _order_key
     position_map = _load_module_order(repo_path)
@@ -607,6 +608,7 @@ def run_sync(
                 newer_on_canvas,
                 position=position,
                 verbose=verbose,
+                unpublishable_items=unpublishable_items,
             )
             if had_module_warnings:
                 errors.append(f"module {md_file.name}: some items could not be added")
@@ -614,6 +616,7 @@ def run_sync(
         manifest_lib.record(manifest, manifest_path, _order_key, 0, "module_order")
 
     _print_newer_on_canvas_summary(newer_on_canvas)
+    _print_unpublishable_summary(unpublishable_items)
     _print_errors_summary(errors)
     return bool(errors)
 
@@ -1088,6 +1091,7 @@ def _sync_module(
     newer_on_canvas: list[str] | None = None,
     position: int | None = None,
     verbose: bool = False,
+    unpublishable_items: list[tuple[str, str]] | None = None,
 ) -> bool:
     if newer_on_canvas is None:
         newer_on_canvas = []
@@ -1135,7 +1139,9 @@ def _sync_module(
     had_warnings = False
     canvas_item_ids: dict[str, int] = {}
     for item in items:
-        item_id = capi.add_module_item(module, item, manifest)
+        item_id, unpub_warn = capi.add_module_item(module, item, manifest)
+        if unpub_warn is not None and unpublishable_items is not None:
+            unpublishable_items.append((title, unpub_warn))
         if item["type"] == "content":
             if item_id is not None:
                 canvas_item_ids[item["local_path"]] = item_id
@@ -1415,6 +1421,18 @@ def _print_newer_on_canvas_summary(newer_on_canvas: list[str]) -> None:
         print(f"  {key}")
 
 
+def _print_unpublishable_summary(items: list[tuple[str, str]]) -> None:
+    if not items:
+        return
+    print(
+        "\nThe following module items could not be unpublished because of an"
+        " internal Canvas bug.\nYou will need to unpublish them in the Canvas"
+        " web UI yourself, manually:"
+    )
+    for module_title, item_title in items:
+        print(f"  In module \"{module_title}\": \"{item_title}\"")
+
+
 def _print_errors_summary(errors: list[str]) -> None:
     if not errors:
         return
@@ -1445,6 +1463,7 @@ def run_targeted_sync(
     assets_root = repo_path / "assets"
     newer_on_canvas: list[str] = []
     errors: list[str] = []
+    unpublishable_items: list[tuple[str, str]] = []
     assignment_group_ids = capi.get_assignment_group_ids(course)
     rubric_ids = capi.get_rubric_ids(course)
     _targeted_position_map = _load_module_order(repo_path)
@@ -1489,6 +1508,7 @@ def run_targeted_sync(
                 newer_on_canvas,
                 position=_targeted_position_map.get(file_path.name),
                 verbose=verbose,
+                unpublishable_items=unpublishable_items,
             )
             if had_module_warnings:
                 errors.append(f"module {file_path.name}: some items could not be added")
@@ -1573,5 +1593,6 @@ def run_targeted_sync(
         _process(local_key)
 
     _print_newer_on_canvas_summary(newer_on_canvas)
+    _print_unpublishable_summary(unpublishable_items)
     _print_errors_summary(errors)
     return bool(errors)

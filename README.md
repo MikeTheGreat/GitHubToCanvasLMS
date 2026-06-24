@@ -924,7 +924,14 @@ ExternalUrl items default to `new_tab: true` (Canvas opens the link in a new win
 
 This sets the Canvas module item's published state — the item still appears in Canvas for instructors but is hidden from students. Multiple attributes can be combined in a single comment: `<!-- target="_self" published="false" -->`.
 
-Unpublished items are also excluded from the `publish` subcommand's static website.
+> **Known Canvas limitation:** The Canvas API returns a server error (500) when
+> trying to set `published=false` on **File-type** module items (e.g. `.docx`,
+> `.pdf`, or other non-Markdown assets linked directly in a module). Pages,
+> assignments, discussions, quizzes, and external URLs all work correctly. For
+> File items the tool prints a summary at the end listing which items you need
+> to unpublish manually in the Canvas web UI.
+
+Unpublished items are also excluded from the `publish` subcommand's static website (including any assets reachable only through unpublished links).
 
 The `import` subcommand preserves per-item published state from the Canvas export — unpublished items in the original course get the `<!-- published="false" -->` comment automatically.
 

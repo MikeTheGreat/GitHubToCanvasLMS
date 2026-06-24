@@ -95,6 +95,20 @@ THEME_FEATURES = [
     "search.suggest",
 ]
 
+QUIZ_NOT_PUBLISHED_PAGE = "quiz-not-published"
+
+QUIZ_NOT_PUBLISHED_MD = """\
+# Content Not Published
+
+The item you just clicked on is not available on this site.
+
+Quizzes, exams, and similar assessments are not published here
+in order to protect the integrity of the assessment.
+
+Please check your course's learning management system (e.g. Canvas)
+for access to this content.
+"""
+
 
 # ---------------------------------------------------------------------------
 # Course name
@@ -121,6 +135,9 @@ def load_site_name(repo: Path) -> str:
 # single study-guide file at quizzes/<slug>.md in the published site.
 _QUIZ_PATH_RE = re.compile(r"quizzes/([^/)]+)/\1\.md")
 
+# Matches any path starting with quizzes/ (for detecting quiz content items).
+_QUIZ_DIR_PREFIX = "quizzes/"
+
 
 def staged_path(local_path: str) -> str:
     """Map a repo-relative content path to its path within the staged docs/ dir."""
@@ -128,8 +145,16 @@ def staged_path(local_path: str) -> str:
 
 
 def _rewrite_quiz_links(text: str) -> str:
-    """Rewrite Markdown links pointing at quiz folders to the flattened quiz file."""
-    return _QUIZ_PATH_RE.sub(r"quizzes/\1.md", text)
+    """Rewrite Markdown links pointing at quizzes to the not-published placeholder.
+
+    Preserves the ``../`` prefix so the relative path stays correct from the
+    source file's location.
+    """
+    return re.sub(
+        r"(\[[^\]]*\])\(((?:\.\./)*?)quizzes/[^)]*\.md\)",
+        rf"\1(\2{QUIZ_NOT_PUBLISHED_PAGE}.md)",
+        text,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -496,7 +521,10 @@ def render_module_overview(module_md: Path, repo: Path) -> str:
             if item["type"] == "ExternalUrl":
                 out.append(_render_module_li(item["title"], item["url"], indent))
             elif item["type"] == "content":
-                target = "../" + staged_path(item["local_path"])
+                if item["local_path"].startswith(_QUIZ_DIR_PREFIX):
+                    target = f"../../{QUIZ_NOT_PUBLISHED_PAGE}/"
+                else:
+                    target = "../" + staged_path(item["local_path"])
                 out.append(_render_module_li(item["title"], target, indent))
     if in_list:
         out.append("</ul>")
@@ -618,13 +646,10 @@ def stage(repo: Path, staging_dir: Path) -> dict[str, Any]:
 
     (docs / "stylesheets" / "extra.css").write_text(EXTRA_CSS)
     (staging_dir / "overrides" / "main.html").write_text(OVERRIDES_MAIN)
+    (docs / f"{QUIZ_NOT_PUBLISHED_PAGE}.md").write_text(QUIZ_NOT_PUBLISHED_MD)
     (docs / "index.md").write_text(
         _render_index(site_name, repo, syllabus, nav_sections)
     )
-
-    assets_src = repo / "assets"
-    if assets_src.exists():
-        shutil.copytree(assets_src, docs / "assets", dirs_exist_ok=True)
 
     staged_files: list[str] = []
     for repo_rel in sorted(reachable):

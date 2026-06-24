@@ -115,7 +115,7 @@ def _setup_first_sync_mocks(mock_course) -> MagicMock:
     )
     module = _mock_module(66666)
     mock_course.create_module.return_value = module
-    module.create_module_item.side_effect = [_mock_item(i) for i in [201, 202, 203, 204, 205]]
+    module.create_module_item.side_effect = [_mock_item(i) for i in [201, 202, 203, 204, 205, 206]]
     return stub_page
 
 
@@ -269,7 +269,7 @@ def test_second_sync_updates_not_creates(mock_course, course_root, mocker) -> No
     mock_course.get_discussion_topic.return_value = _mock_discussion(55555)
     module = _mock_module(66666)
     mock_course.get_module.return_value = module
-    module.create_module_item.side_effect = [_mock_item(i) for i in [201, 202, 203, 204, 205]]
+    module.create_module_item.side_effect = [_mock_item(i) for i in [201, 202, 203, 204, 205, 206]]
 
     run_sync(_config(), course_root)
 
@@ -420,15 +420,15 @@ def test_module_sync_item_order(mock_course, course_root, mocker) -> None:
 
     module = _mock_module(66666)
     mock_course.create_module.return_value = module
-    module.create_module_item.side_effect = [_mock_item(i) for i in [201, 202, 203, 204, 205]]
+    module.create_module_item.side_effect = [_mock_item(i) for i in [201, 202, 203, 204, 205, 206]]
 
     run_sync(_config(), course_root)
 
     item_calls = module.create_module_item.call_args_list
-    assert len(item_calls) == 5
+    assert len(item_calls) == 6
 
     types = [c[1]["module_item"]["type"] for c in item_calls]
-    assert types == ["SubHeader", "Page", "SubHeader", "Assignment", "Discussion"]
+    assert types == ["SubHeader", "Page", "SubHeader", "Assignment", "Discussion", "File"]
 
     assert item_calls[0][1]["module_item"]["title"] == "Readings"
     assert item_calls[0][1]["module_item"]["indent"] == 0
@@ -787,6 +787,10 @@ def test_recursive_target_traverses_refs(mock_course, course_root, mocker) -> No
     mock_course.create_assignment.return_value = _mock_assignment(98765)
     mock_course.get_assignment.return_value = _mock_assignment(98765)
     mock_course.create_discussion_topic.return_value = _mock_discussion(55555)
+    mock_course.upload.return_value = (
+        True,
+        {"id": 77777, "url": "https://school.instructure.com/files/77777/download"},
+    )
     module = _mock_module(66666)
     mock_course.create_module.return_value = module
     module.create_module_item.side_effect = [_mock_item(i) for i in range(201, 210)]
@@ -801,8 +805,8 @@ def test_recursive_target_traverses_refs(mock_course, course_root, mocker) -> No
     mock_course.create_module.assert_called_once()
     # Discussion referenced by module is synced
     mock_course.create_discussion_topic.assert_called_once()
-    # Assets not referenced from any module-linked content are not uploaded
-    mock_course.upload.assert_not_called()
+    # Asset referenced by module is uploaded
+    mock_course.upload.assert_called_once()
 
 
 def test_recursive_target_no_duplicate_processing(mock_course, course_root, mocker) -> None:
@@ -1034,6 +1038,38 @@ def test_file_module_item_type_is_file(mock_course, mocker, tmp_path) -> None:
     assert item_call["content_id"] == 77777
 
 
+def test_unpublished_file_item_warns(mock_course, mocker, tmp_path, capsys) -> None:
+    """An unpublished File module item prints a summary warning at the end."""
+    mocker.patch("github_to_canvas.manifest.flush")
+    root = tmp_path / "course"
+    (root / "modules").mkdir(parents=True)
+    (root / "assets").mkdir()
+    (root / "assets" / "solutions.docx").write_bytes(b"fake")
+    (root / "modules" / "m.md").write_text(
+        "---\ntitle: Unit 1\npublished: true\n---\n\n"
+        '- [Solutions](../assets/solutions.docx) <!-- published="false" -->\n'
+    )
+    preloaded = {
+        "assets/solutions.docx": {
+            "canvas_id": 77777, "canvas_type": "file",
+            "canvas_url": "/files/77777/download",
+            "last_synced": _FUTURE_SYNCED,
+        },
+    }
+    mocker.patch("github_to_canvas.manifest.load", return_value=preloaded)
+    module = _mock_module(66666)
+    mock_course.create_module.return_value = module
+    mi = _mock_item(201)
+    mi.type = "File"
+    module.create_module_item.return_value = mi
+
+    run_sync(_config(), root)
+
+    out = capsys.readouterr().out
+    assert "internal Canvas bug" in out
+    assert 'In module "Unit 1": "Solutions"' in out
+
+
 def test_single_target_skipped_when_t_already_uploaded_it(mock_course, course_root, mocker) -> None:
     """-t BFS uploads pages/syllabus.md and updates last_synced. -s then skips it via needs_sync."""
     # Make the page old so -t uploads it (needs_sync=True), setting last_synced=now.
@@ -1046,6 +1082,10 @@ def test_single_target_skipped_when_t_already_uploaded_it(mock_course, course_ro
     mock_course.create_assignment.return_value = _mock_assignment(98765)
     mock_course.get_assignment.return_value = _mock_assignment(98765)
     mock_course.create_discussion_topic.return_value = _mock_discussion(55555)
+    mock_course.upload.return_value = (
+        True,
+        {"id": 77777, "url": "https://school.instructure.com/files/77777/download"},
+    )
     module = _mock_module(66666)
     mock_course.create_module.return_value = module
     module.create_module_item.side_effect = [_mock_item(i) for i in range(201, 210)]

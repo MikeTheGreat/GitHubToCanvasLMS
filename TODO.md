@@ -233,3 +233,7 @@ When implemented, the suggested approach:
   - Maybe if we store the canvas ID in the file?
 - Alternately: what about having "move" / rename commands in the tool to handle this?
   - It'll need to update the manifest file
+
+
+# Bugs to Fix:
+- Text headers in modules are unpublished in Canvas

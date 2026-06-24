@@ -647,8 +647,46 @@ def clear_module_items(module) -> None:
         item.delete()
 
 
-def add_module_item(module, item: dict[str, Any], manifest: dict) -> int | None:
-    """Add one item to a Canvas module. Returns the Canvas module item ID, or None if skipped."""
+def _unpublish_module_item(module, mi, title: str) -> str | None:
+    """Set published=false on a just-created module item.
+
+    Canvas ignores the published flag during create_module_item, so we follow
+    up with a PUT.  We use the module's requester directly (with JSON encoding)
+    because create_module_item does not always populate module_id on the
+    returned ModuleItem, which makes mi.edit() construct a broken URL.
+
+    Canvas's API returns 500 for File-type module items — a known server-side
+    bug.  For those we return a warning string; for all others we return None
+    on success.
+    """
+    canvas_type = getattr(mi, "type", None)
+    if canvas_type == "File":
+        return title
+
+    import requests as _requests
+
+    req = module._requester
+    full_url = "{}courses/{}/modules/{}/items/{}".format(
+        req.base_url, module.course_id, module.id, mi.id
+    )
+    r = _requests.put(
+        full_url,
+        headers={"Authorization": "Bearer {}".format(req.access_token)},
+        json={"module_item": {"published": False}},
+    )
+    if r.status_code >= 400:
+        print(f"  WARNING: could not unpublish module item '{title}': HTTP {r.status_code}")
+    return None
+
+
+def add_module_item(
+    module, item: dict[str, Any], manifest: dict
+) -> tuple[int | None, str | None]:
+    """Add one item to a Canvas module.
+
+    Returns ``(canvas_item_id, unpublish_warning)``.  *unpublish_warning* is
+    the item title when Canvas cannot unpublish it (File-type bug), else None.
+    """
     indent = item.get("indent", 0)
 
     if item["type"] == "SubHeader":
@@ -656,7 +694,7 @@ def add_module_item(module, item: dict[str, Any], manifest: dict) -> int | None:
             module_item={"type": "SubHeader", "title": item["title"],
                          "indent": indent}
         )
-        return mi.id
+        return mi.id, None
 
     published = item.get("published", True)
 
@@ -671,17 +709,18 @@ def add_module_item(module, item: dict[str, Any], manifest: dict) -> int | None:
                 "published": published,
             }
         )
-        return mi.id
+        warn = _unpublish_module_item(module, mi, item["title"]) if not published else None
+        return mi.id, warn
 
     local_path = item["local_path"]
     if local_path not in manifest:
         print(f"  WARNING: module item not in manifest (skipping): {local_path}")
-        return None
+        return None, None
     entry = manifest[local_path]
     canvas_type = _CANVAS_ITEM_TYPE.get(entry.get("canvas_type", ""))
     if canvas_type is None:
         print(f"  WARNING: unsupported canvas_type for module item (skipping): {local_path}")
-        return None
+        return None, None
     if canvas_type == "Page":
         module_item_params = {
             "type": canvas_type,
@@ -708,8 +747,10 @@ def add_module_item(module, item: dict[str, Any], manifest: dict) -> int | None:
             f"  The Canvas ID {stale_id!r} may be stale or belong to a different course.\n"
             f"  Re-sync '{local_path}' first, then re-sync this module."
         )
-        return None
-    return mi.id
+        return None, None
+    # Canvas ignores published=false on create; patch it afterwards.
+    warn = _unpublish_module_item(module, mi, item["title"]) if not published else None
+    return mi.id, warn
 
 
 # ---------------------------------------------------------------------------

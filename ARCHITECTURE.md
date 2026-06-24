@@ -334,7 +334,7 @@ The complementary check on the **upload** side (`sync.py`) is unconditional: any
 - `ExternalUrl` → `- [display_title](https://url)` — if the linked webLink resource has `target` or `windowFeatures` attributes on its `<url>` element, they are appended as an HTML comment: `<!-- target="_blank" windowFeatures="width=800" -->`
 - `ContextExternalTool` (LTI embedded tool) → `- [display_title](url)` (URL comes from the module item's own `url` field, not the LTI resource XML)
 - `Attachment` (Canvas File) → `# SKIPPED: Attachment - "title"` comment line + printed warning (no local file equivalent)
-- **Per-item published state:** Items with `workflow_state` != `active` in `module_meta.xml` get `<!-- published="false" -->` appended. During sync, the comment is parsed and passed as the `published` field on the Canvas module item API call. The `publish` subcommand skips unpublished items entirely (not rendered in the HTML, not followed for reachability).
+- **Per-item published state:** Items with `workflow_state` != `active` in `module_meta.xml` get `<!-- published="false" -->` appended. During sync, the comment is parsed and the tool attempts to set `published=false` on the Canvas module item via a follow-up PUT (Canvas ignores the flag on the initial create call). **Known Canvas bug:** the API returns 500 for File-type module items, so those cannot be unpublished programmatically — the tool prints a summary of affected items at the end of the run. The `publish` subcommand skips unpublished items entirely (not rendered in the HTML, not followed for reachability — including any assets reachable only through unpublished links).
 
 ### Course settings output (`course_settings/course_settings.toml`)
 
