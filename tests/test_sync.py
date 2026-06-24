@@ -12,6 +12,7 @@ from canvasapi.exceptions import ResourceDoesNotExist
 
 from github_to_canvas.config import Config
 from github_to_canvas.sync import (
+    check_title_collisions,
     parse_frontmatter,
     parse_module_body,
     run_prune,
@@ -3107,3 +3108,127 @@ def test_parse_module_body_mixed_published_attrs(tmp_path: Path) -> None:
     assert items[0]["type"] == "ExternalUrl"
     assert items[0]["new_tab"] is False
     assert items[0]["published"] is False
+
+
+# ---------------------------------------------------------------------------
+# Subfolder support: title collision detection
+# ---------------------------------------------------------------------------
+
+
+def test_check_title_collisions_no_collision(tmp_path: Path) -> None:
+    """No errors when all files have unique titles."""
+    (tmp_path / "pages").mkdir()
+    (tmp_path / "pages" / "week1").mkdir()
+    p1 = tmp_path / "pages" / "intro.md"
+    p2 = tmp_path / "pages" / "week1" / "notes.md"
+    p1.write_text("---\ntitle: Intro\n---\nBody\n")
+    p2.write_text("---\ntitle: Week 1 Notes\n---\nBody\n")
+    errors = check_title_collisions([p1, p2], tmp_path)
+    assert errors == []
+
+
+def test_check_title_collisions_detects_same_title(tmp_path: Path) -> None:
+    """Detects collision when two files in different subfolders share a title."""
+    (tmp_path / "pages" / "a").mkdir(parents=True)
+    (tmp_path / "pages" / "b").mkdir(parents=True)
+    p1 = tmp_path / "pages" / "a" / "intro.md"
+    p2 = tmp_path / "pages" / "b" / "intro.md"
+    p1.write_text("---\ntitle: Introduction\n---\nBody A\n")
+    p2.write_text("---\ntitle: Introduction\n---\nBody B\n")
+    errors = check_title_collisions([p1, p2], tmp_path)
+    assert len(errors) == 1
+    assert "Introduction" in errors[0]
+    assert "pages/a/intro.md" in errors[0]
+    assert "pages/b/intro.md" in errors[0]
+
+
+def test_check_title_collisions_uses_stem_fallback(tmp_path: Path) -> None:
+    """When no title in frontmatter, uses filename stem — detects stem collisions."""
+    (tmp_path / "assignments" / "week1").mkdir(parents=True)
+    (tmp_path / "assignments" / "week2").mkdir(parents=True)
+    p1 = tmp_path / "assignments" / "week1" / "hw.md"
+    p2 = tmp_path / "assignments" / "week2" / "hw.md"
+    p1.write_text("Body A\n")
+    p2.write_text("Body B\n")
+    errors = check_title_collisions([p1, p2], tmp_path)
+    assert len(errors) == 1
+    assert "hw" in errors[0]
+
+
+def test_check_title_collisions_different_dirs_no_collision(tmp_path: Path) -> None:
+    """Same title in different content types (pages vs assignments) is fine."""
+    (tmp_path / "pages").mkdir()
+    (tmp_path / "assignments").mkdir()
+    p1 = tmp_path / "pages" / "intro.md"
+    p2 = tmp_path / "assignments" / "intro.md"
+    p1.write_text("---\ntitle: Introduction\n---\nBody\n")
+    p2.write_text("---\ntitle: Introduction\n---\nBody\n")
+    errors = check_title_collisions([p1, p2], tmp_path)
+    assert errors == []
+
+
+# ---------------------------------------------------------------------------
+# Subfolder support: sync discovers files in subfolders
+# ---------------------------------------------------------------------------
+
+
+def test_sync_discovers_pages_in_subfolders(
+    tmp_path: Path, mock_course, mocker
+) -> None:
+    """run_sync finds .md files in subfolders of pages/ and assignments/."""
+    root = tmp_path / "course"
+    (root / "pages" / "week1").mkdir(parents=True)
+    (root / "pages" / "week1" / "notes.md").write_text(
+        "---\ntitle: Week 1 Notes\npublished: true\n---\n\n## Notes\n\nContent here.\n"
+    )
+    (root / "pages" / "overview.md").write_text(
+        "---\ntitle: Overview\npublished: true\n---\n\n## Overview\n\nTop-level page.\n"
+    )
+    (root / "course_settings").mkdir()
+    (root / "course_settings" / "canvas.toml").write_text(
+        'base_url = "https://school.instructure.com"\ncourse_id = 999\n'
+    )
+
+    page1 = _mock_page(101, "week-1-notes")
+    page2 = _mock_page(102, "overview")
+    mock_course.create_page.side_effect = [page2, page1]
+    mock_course.get_tabs.return_value = []
+    mock_course.get_assignment_groups.return_value = []
+
+    config = _config()
+    run_sync(config, root, force_uploads=True)
+
+    assert mock_course.create_page.call_count == 2
+    titles = [
+        c.kwargs["wiki_page"]["title"]
+        for c in mock_course.create_page.call_args_list
+    ]
+    assert "Overview" in titles
+    assert "Week 1 Notes" in titles
+
+
+def test_sync_aborts_on_title_collision(
+    tmp_path: Path, mock_course, mocker
+) -> None:
+    """run_sync detects title collision and returns True (error) without uploading."""
+    root = tmp_path / "course"
+    (root / "pages" / "a").mkdir(parents=True)
+    (root / "pages" / "b").mkdir(parents=True)
+    (root / "pages" / "a" / "intro.md").write_text(
+        "---\ntitle: Intro\npublished: true\n---\n\n## Body\n"
+    )
+    (root / "pages" / "b" / "intro.md").write_text(
+        "---\ntitle: Intro\npublished: true\n---\n\n## Body\n"
+    )
+    (root / "course_settings").mkdir()
+    (root / "course_settings" / "canvas.toml").write_text(
+        'base_url = "https://school.instructure.com"\ncourse_id = 999\n'
+    )
+    mock_course.get_tabs.return_value = []
+    mock_course.get_assignment_groups.return_value = []
+
+    config = _config()
+    had_errors = run_sync(config, root, force_uploads=True)
+
+    assert had_errors is True
+    mock_course.create_page.assert_not_called()

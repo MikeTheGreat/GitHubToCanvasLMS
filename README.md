@@ -54,15 +54,17 @@ Write your course content as Markdown files in a Git repository. Run this tool t
 
 ```
 course-repo/
-├── pages/
-│   └── syllabus.md
-├── assignments/
+├── pages/                  ← subfolders OK (flattened to Canvas)
+│   ├── syllabus.md
+│   └── week1/
+│       └── notes.md
+├── assignments/            ← subfolders OK
 │   └── week1.md
-├── discussions/
+├── discussions/            ← subfolders OK
 │   └── week1-intro.md
 ├── modules/
 │   └── week-1.md
-├── snippets/          ← reusable Markdown fragments
+├── snippets/               ← reusable Markdown fragments
 │   └── office-hours.md
 └── assets/
     └── images/
@@ -74,7 +76,7 @@ On each run the tool:
 1. Applies `course_settings.toml` (name, dates, grading standards, assignment groups, policies)
 2. Uploads `course_settings/syllabus.md` as the course syllabus body
 3. Uploads everything in `assets/` to Canvas Files
-4. Converts each `.md` in `pages/`, `assignments/`, `discussions/` to HTML via Pandoc and uploads
+4. Converts each `.md` in `pages/`, `assignments/`, `discussions/` (including subfolders) to HTML via Pandoc and uploads
 5. Syncs `quizzes/` (Classic Quizzes API) and `question_banks/`
 6. Rewrites cross-links between files to correct Canvas URLs
 7. Syncs `modules/` last (after all content has Canvas IDs)
@@ -412,6 +414,13 @@ anything on Canvas; it only forgets the local bookkeeping.
 Content files (`pages/`, `assignments/`, `discussions/`, `modules/`, quizzes, and
 questions) use **YAML frontmatter** followed by a **Markdown body**. Course-level
 settings live in `course_settings.toml` and use **TOML**.
+
+> **Subfolder support:** `pages/`, `assignments/`, and `discussions/` can contain
+> arbitrarily nested subfolders for local organisation. Canvas uses a flat namespace,
+> so the tool flattens everything on upload. If two files within the same content
+> type share the same title (from frontmatter, or filename if no title is set), the
+> tool will print an error and abort — rename one of them or give them different
+> `title:` values. Module and quiz directories remain flat.
 
 Every example below lists **all available options** with an inline comment for each.
 To create a new file, copy the whole block and then delete, edit, or replace the

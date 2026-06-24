@@ -138,6 +138,43 @@ def parse_module_body(
     return items
 
 
+def check_title_collisions(
+    md_files: list[Path],
+    repo_root: Path,
+) -> list[str]:
+    """Detect content files that would collide in Canvas's flat namespace.
+
+    Canvas identifies pages by title (slug) and assignments/discussions by title,
+    so two files with the same title (from frontmatter, or filename stem as
+    fallback) would overwrite each other.  Returns a list of error strings,
+    one per collision group.
+    """
+    from collections import defaultdict
+
+    title_to_paths: dict[str, list[str]] = defaultdict(list)
+    for md_file in md_files:
+        try:
+            fm, _ = parse_frontmatter(md_file.read_text())
+        except Exception:
+            fm = {}
+        title = fm.get("title", md_file.stem)
+        folder = md_file.relative_to(repo_root).parts[0]
+        key = f"{folder}::{title}"
+        title_to_paths[key].append(
+            md_file.relative_to(repo_root).as_posix()
+        )
+
+    errors: list[str] = []
+    for key, paths in title_to_paths.items():
+        if len(paths) > 1:
+            folder, title = key.split("::", 1)
+            errors.append(
+                f"ERROR: title collision in {folder}/: {len(paths)} files "
+                f"share title \"{title}\": {', '.join(paths)}"
+            )
+    return errors
+
+
 def _canvas_is_newer(
     course,
     local_key: str,
@@ -428,29 +465,44 @@ def run_sync(
         and d.name not in skip
         and not matcher.is_ignored(d, repo_path)
     )
+    # Collect all content .md files (recursively, to support subfolders) and
+    # check for title collisions before uploading anything.
+    all_content_files: list[Path] = []
     for content_dir in content_dirs:
-        for md_file in sorted(content_dir.glob("*.md")):
+        for md_file in sorted(content_dir.rglob("*.md")):
             if matcher.is_ignored(md_file, repo_path):
                 if verbose:
                     print(f"Ignoring: {md_file.relative_to(repo_path).as_posix()}")
                 continue
-            _sync_content_file(
-                course,
-                md_file,
-                repo_path,
-                snippets_dir,
-                manifest,
-                manifest_path,
-                config.course_id,
-                force_uploads,
-                force_overwrite,
-                newer_on_canvas,
-                errors,
-                assignment_group_ids=assignment_group_ids,
-                rubric_ids=rubric_ids,
-                synced_keys=synced_content_keys,
-                verbose=verbose,
-            )
+            all_content_files.append(md_file)
+
+    collision_errors = check_title_collisions(all_content_files, repo_path)
+    if collision_errors:
+        for msg in collision_errors:
+            print(f"  {msg}")
+            errors.append(msg)
+        print("\nAborting: resolve title collisions before syncing.")
+        _print_errors_summary(errors)
+        return True
+
+    for md_file in all_content_files:
+        _sync_content_file(
+            course,
+            md_file,
+            repo_path,
+            snippets_dir,
+            manifest,
+            manifest_path,
+            config.course_id,
+            force_uploads,
+            force_overwrite,
+            newer_on_canvas,
+            errors,
+            assignment_group_ids=assignment_group_ids,
+            rubric_ids=rubric_ids,
+            synced_keys=synced_content_keys,
+            verbose=verbose,
+        )
 
     # 2.5. Quizzes (each quiz lives in its own sub-folder)
     quizzes_dir = repo_path / "quizzes"

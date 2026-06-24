@@ -214,12 +214,13 @@ def discover_published(repo: Path) -> dict[str, list[tuple[str, str]]]:
             continue
 
         items: list[tuple[str, str]] = []
-        for md_file in sorted(content_dir.glob("*.md")):
+        for md_file in sorted(content_dir.rglob("*.md")):
             if not _is_published(md_file):
                 continue
             fm, _ = parse_frontmatter(md_file.read_text())
             title = fm.get("title", md_file.stem)
-            items.append((title, f"{content_type}/{md_file.name}"))
+            rel = md_file.relative_to(repo).as_posix()
+            items.append((title, rel))
 
         if items:
             label = content_type.replace("_", " ").title()
@@ -238,12 +239,13 @@ def _discover_type(repo: Path, content_type: str) -> list[tuple[str, str]]:
     if not content_dir.exists():
         return []
     items: list[tuple[str, str]] = []
-    for md_file in sorted(content_dir.glob("*.md")):
+    for md_file in sorted(content_dir.rglob("*.md")):
         if not _is_published(md_file):
             continue
         fm, _ = parse_frontmatter(md_file.read_text())
         title = fm.get("title", md_file.stem)
-        items.append((title, f"{content_type}/{md_file.name}"))
+        rel = md_file.relative_to(repo).as_posix()
+        items.append((title, rel))
     return items
 
 
@@ -262,7 +264,7 @@ def _find_syllabus(repo: Path) -> tuple[str, str] | None:
     pages_dir = repo / "pages"
     if pages_dir.exists():
         candidates.extend(
-            f for f in sorted(pages_dir.glob("*.md"))
+            f for f in sorted(pages_dir.rglob("*.md"))
             if "syllabus" in f.stem.lower()
         )
 

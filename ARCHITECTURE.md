@@ -23,7 +23,8 @@ git clone (local)
      → skip any file whose mtime ≤ manifest last_synced (unless --force-uploads)
 4. for each content folder in alphabetical order (excludes assets/, course_settings/, modules/,
    question_banks/, quizzes/, snippets/, hidden dirs):
-     for each .md file in that folder, alphabetically:
+     check for title collisions across all .md files (including subfolders) → abort if any
+     for each .md file in that folder (recursively, including subfolders), alphabetically:
        a. skip if mtime ≤ manifest last_synced (unless --force-uploads); print "Skipping (up-to-date)"
        b. snippet preprocessing: replace any [text](snippets/...) links with snippet file contents
        c. convert Markdown → HTML via Pandoc
@@ -58,6 +59,16 @@ git clone (local)
 **Processing order:**
 
 Course settings and syllabus are applied first. Then `assets/`. Then regular content folders alphabetically. Then `quizzes/`. Then `question_banks/`. Finally `modules/`. All other content folders (`assignments/`, `discussions/`, `pages/`, etc.) are processed in alphabetical order, with files within each folder also sorted alphabetically. `course_settings/`, `question_banks/`, `quizzes/`, `snippets/`, and `assets/` are excluded from the regular content pass — each has its own dedicated phase.
+
+**Content subfolder support:**
+
+Content folders (`pages/`, `assignments/`, `discussions/`, and any other content directories) support arbitrary subdirectory nesting. Files are discovered recursively (`rglob`) and sorted alphabetically by their full relative path. Canvas itself uses a flat namespace (pages are identified by title/slug, assignments and discussions by title), so the subfolder structure is purely for local organisation — all files are flattened when uploaded to Canvas.
+
+Before any content is uploaded, the tool checks for **title collisions**: two or more `.md` files within the same content type that would resolve to the same Canvas title (from frontmatter `title`, or the filename stem as fallback). If a collision is detected, the sync aborts with an error listing the conflicting files. Titles are scoped per content type — `pages/intro.md` and `assignments/intro.md` sharing the title "Introduction" is fine, but `pages/week1/intro.md` and `pages/week2/intro.md` both titled "Introduction" is an error.
+
+The manifest tracks each file by its full repo-relative path (e.g. `pages/week1/notes.md`), so subfolder files get their own manifest entries and can be targeted with `-t` and `-s`.
+
+The `publish` subcommand discovers content in subfolders the same way, and stages files preserving their subfolder structure (e.g. `docs/pages/week1/notes.md`).
 
 Asset traversal is depth-first with files before subdirectories, both sorted alphabetically:
 

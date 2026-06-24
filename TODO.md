@@ -229,12 +229,7 @@ When implemented, the suggested approach:
 - Run this suite manually or in a separate CI job gated on `CANVAS_API_TOKEN` being present — not on every push
 
 ## How to move/rename files locally without creating orphaned Canvas items
-
 - Would be nice to be able to move things around in the local file system
   - Maybe if we store the canvas ID in the file?
 - Alternately: what about having "move" / rename commands in the tool to handle this?
   - It'll need to update the manifest file
-
-# Subfolders in the pages/ hive
-- Would be nice for organizational purposes
-

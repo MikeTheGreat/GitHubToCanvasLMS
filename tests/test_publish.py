@@ -511,3 +511,60 @@ def test_render_module_overview_omits_unpublished(tmp_path):
     html = publish.render_module_overview(mod, tmp_path)
     assert "Shown" in html
     assert "Hidden" not in html
+
+
+# ---------------------------------------------------------------------------
+# Subfolder support in publish discovery
+# ---------------------------------------------------------------------------
+
+
+def test_discover_published_finds_pages_in_subfolders(tmp_path):
+    """discover_published picks up .md files nested in subdirectories."""
+    (tmp_path / "pages" / "week1").mkdir(parents=True)
+    (tmp_path / "pages" / "week1" / "notes.md").write_text(
+        "---\ntitle: Week 1 Notes\npublished: true\n---\nContent\n"
+    )
+    (tmp_path / "pages" / "overview.md").write_text(
+        "---\ntitle: Overview\npublished: true\n---\nContent\n"
+    )
+    published = publish.discover_published(tmp_path)
+    titles = [t for t, _ in published.get("Pages", [])]
+    assert "Overview" in titles
+    assert "Week 1 Notes" in titles
+
+
+def test_discover_published_subfolder_paths_are_repo_relative(tmp_path):
+    """Paths returned for subfolder files include the subfolder."""
+    (tmp_path / "assignments" / "unit1").mkdir(parents=True)
+    (tmp_path / "assignments" / "unit1" / "hw.md").write_text(
+        "---\ntitle: HW\npublished: true\n---\nBody\n"
+    )
+    published = publish.discover_published(tmp_path)
+    paths = [p for _, p in published.get("Assignments", [])]
+    assert "assignments/unit1/hw.md" in paths
+
+
+def test_discover_type_finds_subfolders(tmp_path):
+    """_discover_type recursively finds published content in subfolders."""
+    (tmp_path / "discussions" / "week1").mkdir(parents=True)
+    (tmp_path / "discussions" / "week1" / "forum.md").write_text(
+        "---\ntitle: Week 1 Forum\npublished: true\n---\nDiscuss.\n"
+    )
+    items = publish._discover_type(tmp_path, "discussions")
+    titles = [t for t, _ in items]
+    assert "Week 1 Forum" in titles
+    paths = [p for _, p in items]
+    assert "discussions/week1/forum.md" in paths
+
+
+def test_find_syllabus_in_subfolder(tmp_path):
+    """_find_syllabus finds a syllabus page inside a pages/ subfolder."""
+    (tmp_path / "pages" / "admin").mkdir(parents=True)
+    (tmp_path / "pages" / "admin" / "syllabus.md").write_text(
+        "---\ntitle: Course Syllabus\npublished: true\n---\nContent\n"
+    )
+    result = publish._find_syllabus(tmp_path)
+    assert result is not None
+    title, path = result
+    assert title == "Course Syllabus"
+    assert path == "pages/admin/syllabus.md"
