@@ -233,7 +233,7 @@ def sync_syllabus(
             errors.append(msg)
         return
     snippets_dir = repo_path / "snippets"
-    body = preprocess_snippets(body, syllabus_md, snippets_dir)
+    body = preprocess_snippets(body, syllabus_md, snippets_dir, errors)
     html = markdown_to_html(body.strip()) if body.strip() else ""
     error_count_before = len(errors) if errors is not None else 0
     # Stub creator is not needed for the syllabus; pass a no-op
@@ -857,7 +857,11 @@ def _sync_content_file(
         if errors is not None:
             errors.append(msg)
         return
-    body = preprocess_snippets(body, md_file, snippets_dir)
+    error_count_before_snippets = len(errors) if errors is not None else 0
+    body = preprocess_snippets(body, md_file, snippets_dir, errors)
+    if errors is not None and len(errors) > error_count_before_snippets:
+        print(f"  Skipping upload due to errors: {local_key}")
+        return
     html = markdown_to_html(body)
 
     if re.search(r"<h1[\s>]", html, re.IGNORECASE):

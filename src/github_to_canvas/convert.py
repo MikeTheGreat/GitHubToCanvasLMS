@@ -15,7 +15,12 @@ _SNIPPET_LINK_RE = re.compile(r"\[([^\]]*)\]\(([^)]+)\)")
 _INLINE_SNIPPET_RE = re.compile(r"\$([^$\n]+\.md)\$")
 
 
-def preprocess_snippets(text: str, source_file: Path, snippets_dir: Path) -> str:
+def preprocess_snippets(
+    text: str,
+    source_file: Path,
+    snippets_dir: Path,
+    errors: list[str] | None = None,
+) -> str:
     """Replace snippet references with the snippet file's contents.
 
     Two forms are supported:
@@ -35,19 +40,35 @@ def preprocess_snippets(text: str, source_file: Path, snippets_dir: Path) -> str
     """
     resolved_snippets_dir = snippets_dir.resolve()
 
-    def _load_snippet(link_target: str) -> tuple[str, Path] | None:
+    try:
+        rel_source = source_file.relative_to(snippets_dir.parent)
+    except ValueError:
+        rel_source = source_file
+
+    def _report_error(msg: str) -> None:
+        print(f"  {msg}")
+        if errors is not None:
+            errors.append(msg)
+
+    def _load_snippet(link_target: str, snippet_ref: str, is_inline: bool) -> tuple[str, Path] | None:
         """Resolve link_target to a snippet file. Returns (content, path) or None."""
         target_path = (source_file.parent / link_target).resolve()
         if not target_path.is_relative_to(resolved_snippets_dir):
+            if is_inline or "snippets" in Path(link_target).parts:
+                _report_error(
+                    f"ERROR: {rel_source}: snippet path {snippet_ref} "
+                    f"resolves outside the snippets directory — check that the "
+                    f"relative path is correct for the file's current location"
+                )
             return None
         if not target_path.exists():
-            print(f"  ERROR: snippet not found: {target_path}")
+            _report_error(f"ERROR: snippet not found: {target_path}")
             return None
         return target_path.read_text(), target_path
 
     def _replace_inline(m: re.Match) -> str:
         """Expand a $path.md$ inline snippet ref (content is stripped)."""
-        result = _load_snippet(m.group(1))
+        result = _load_snippet(m.group(1), m.group(0), is_inline=True)
         if result is None:
             return m.group(0)
         content, _ = result
@@ -55,7 +76,7 @@ def preprocess_snippets(text: str, source_file: Path, snippets_dir: Path) -> str
 
     def _replace(m: re.Match) -> str:
         link_target = m.group(2)
-        result = _load_snippet(link_target)
+        result = _load_snippet(link_target, m.group(0), is_inline=False)
         if result is None:
             return m.group(0)
         content, target_path = result

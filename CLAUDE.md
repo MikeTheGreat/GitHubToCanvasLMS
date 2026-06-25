@@ -6,6 +6,10 @@ If you think the user is doing any of the following please stop an confirm with 
 * User asks you to do work on something that's in a different project / directory
 * User asks you about a feature that doesn't exist in this project
 
+## Errors caused by input files: diagnose before fixing
+
+When the user reports an error, first check whether the problem is in the user's input files (e.g., wrong relative paths in their course repo) rather than a bug in this tool's code. If the root cause is in the input files, stop and tell the user before making any code changes.
+
 ## Credit yourself as the author
 When the user asks you to create a git commit message please list your 
 contribution as "Authored-By" instead of "Co-Authored-By". Please list

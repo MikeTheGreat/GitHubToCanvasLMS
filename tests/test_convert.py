@@ -178,6 +178,41 @@ def test_inline_snippet_non_snippet_path_unchanged(tmp_path: Path) -> None:
     assert result == text
 
 
+def test_inline_snippet_subfolder_prints_error(tmp_path: Path, capsys: pytest.CaptureFixture) -> None:
+    """When a file in a subfolder has a snippet path that doesn't reach snippets/, print a clear error."""
+    snippets_dir = tmp_path / "snippets"
+    (snippets_dir / "inline").mkdir(parents=True)
+    (snippets_dir / "inline" / "COURSE_ID.md").write_text("99999")
+    # File is two levels deep — ../snippets/ lands in pages/snippets/ instead of repo-root snippets/
+    source = tmp_path / "pages" / "subfolder" / "notes.md"
+    source.parent.mkdir(parents=True)
+    text = "[Grades](https://example.com/courses/$../snippets/inline/COURSE_ID.md$/grades)"
+    errs: list[str] = []
+    result = preprocess_snippets(text, source, snippets_dir, errors=errs)
+    assert "$../snippets/inline/COURSE_ID.md$" in result  # unexpanded
+    captured = capsys.readouterr()
+    assert "ERROR" in captured.out
+    assert "$../snippets/inline/COURSE_ID.md$" in captured.out
+    assert "resolves outside" in captured.out
+    assert len(errs) >= 1
+    assert any("$../snippets/inline/COURSE_ID.md$" in e for e in errs)
+
+
+def test_block_link_to_assets_no_snippet_error(tmp_path: Path, capsys: pytest.CaptureFixture) -> None:
+    """A markdown link to assets/ should not produce a snippet error."""
+    snippets_dir = tmp_path / "snippets"
+    snippets_dir.mkdir()
+    source = tmp_path / "pages" / "subfolder" / "notes.md"
+    source.parent.mkdir(parents=True)
+    text = "![Alt text](../../assets/Images/photo.png)"
+    errs: list[str] = []
+    result = preprocess_snippets(text, source, snippets_dir, errors=errs)
+    assert result == text
+    captured = capsys.readouterr()
+    assert "snippet" not in captured.out.lower()
+    assert len(errs) == 0
+
+
 def test_non_snippet_external_link_unchanged(tmp_path: Path) -> None:
     """A regular external link with no snippet ref is left as-is."""
     snippets_dir = tmp_path / "snippets"
