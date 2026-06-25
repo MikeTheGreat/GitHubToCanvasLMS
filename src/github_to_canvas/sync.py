@@ -20,6 +20,96 @@ from .link_rewrite import extract_local_refs, infer_canvas_type, rewrite_links
 from .orphans import ResourceKey, extract_canvas_refs
 from .quiz import parse_question_file, parse_quiz_file
 
+_DATE_KEYS = ("unlock_at", "due_at", "lock_at")
+
+
+def load_due_dates(repo_path: Path) -> list[dict[str, Any]]:
+    """Load centralized due_dates from course_settings/course_settings.toml."""
+    settings_path = repo_path / "course_settings" / "course_settings.toml"
+    if not settings_path.exists():
+        return []
+    with settings_path.open("rb") as fh:
+        settings = tomllib.load(fh)
+    return settings.get("due_dates", [])
+
+
+def _check_due_dates_coverage(
+    due_dates: list[dict[str, Any]],
+    repo_path: Path,
+    matcher: IgnoreMatcher | None = None,
+) -> None:
+    """Scan all content files and print warnings for due_dates mismatches.
+
+    - A due_dates entry whose name doesn't match any content file.
+    - A content file (assignment/discussion/quiz) with no due_dates entry.
+    """
+    print("Checking due_dates coverage...")
+    all_content: list[tuple[str, str]] = []  # (title, canvas_type)
+
+    for folder, ctype in (("assignments", "assignment"), ("discussions", "discussion")):
+        content_dir = repo_path / folder
+        if not content_dir.exists():
+            continue
+        for md_file in sorted(content_dir.rglob("*.md")):
+            if matcher is not None and matcher.is_ignored(md_file, repo_path):
+                continue
+            try:
+                fm, _ = parse_frontmatter(md_file.read_text())
+            except Exception:
+                fm = {}
+            all_content.append((fm.get("title", md_file.stem), ctype))
+
+    quizzes_dir = repo_path / "quizzes"
+    if quizzes_dir.exists():
+        for quiz_folder in sorted(d for d in quizzes_dir.iterdir() if d.is_dir()):
+            if matcher is not None and matcher.is_ignored(quiz_folder, repo_path):
+                continue
+            quiz_md = quiz_folder / f"{quiz_folder.name}.md"
+            if quiz_md.exists():
+                try:
+                    fm, _ = parse_frontmatter(quiz_md.read_text())
+                except Exception:
+                    fm = {}
+                all_content.append((fm.get("title", quiz_folder.name), "quiz"))
+
+    # Check each due_dates entry against all content
+    for entry in due_dates:
+        name = entry.get("name", "")
+        entry_type = entry.get("type", "")
+        matched = any(
+            title == name and (not entry_type or ctype == entry_type)
+            for title, ctype in all_content
+        )
+        if not matched:
+            type_msg = f" (type={entry_type})" if entry_type else ""
+            print(f"  WARNING: due_dates entry {name!r}{type_msg} did not match any content file")
+
+    # Check each content file against due_dates
+    without_entry: list[tuple[str, str]] = []
+    for title, ctype in all_content:
+        if find_due_date_override(due_dates, title, ctype) is None:
+            without_entry.append((title, ctype))
+    if without_entry:
+        print(
+            "\nThe following content files have no entry in the centralized due_dates table:"
+        )
+        for title, canvas_type in without_entry:
+            print(f"  {canvas_type}: {title}")
+
+
+def find_due_date_override(
+    due_dates: list[dict[str, Any]], title: str, canvas_type: str
+) -> dict[str, Any] | None:
+    """Find the matching centralized due_date entry for a content item."""
+    for entry in due_dates:
+        if entry.get("name") != title:
+            continue
+        entry_type = entry.get("type")
+        if entry_type and entry_type != canvas_type:
+            continue
+        return entry
+    return None
+
 
 def parse_frontmatter(text: str) -> tuple[dict[str, Any], str]:
     """Return (frontmatter_dict, body_text). Body excludes the frontmatter block."""
@@ -418,6 +508,9 @@ def run_sync(
     # Fetch assignment group IDs once so assignments can reference groups by name
     assignment_group_ids = capi.get_assignment_group_ids(course)
 
+    # Load centralized due dates for override
+    due_dates = load_due_dates(repo_path)
+
     # 0.5. Syllabus
     sync_syllabus(
         course,
@@ -502,6 +595,7 @@ def run_sync(
             rubric_ids=rubric_ids,
             synced_keys=synced_content_keys,
             verbose=verbose,
+            due_dates=due_dates,
         )
 
     # 2.5. Quizzes (each quiz lives in its own sub-folder)
@@ -528,6 +622,7 @@ def run_sync(
                     errors,
                     synced_keys=synced_content_keys,
                     verbose=verbose,
+                    due_dates=due_dates,
                 )
 
     # 2.6. Question banks
@@ -614,6 +709,9 @@ def run_sync(
                 errors.append(f"module {md_file.name}: some items could not be added")
     if order_changed:
         manifest_lib.record(manifest, manifest_path, _order_key, 0, "module_order")
+
+    if due_dates:
+        _check_due_dates_coverage(due_dates, repo_path, matcher)
 
     _print_newer_on_canvas_summary(newer_on_canvas)
     _print_unpublishable_summary(unpublishable_items)
@@ -832,6 +930,7 @@ def _sync_content_file(
     rubric_ids: dict[str, int] | None = None,
     synced_keys: set[str] | None = None,
     verbose: bool = False,
+    due_dates: list[dict[str, Any]] | None = None,
 ) -> None:
     if newer_on_canvas is None:
         newer_on_canvas = []
@@ -964,6 +1063,12 @@ def _sync_content_file(
         ):
             if key in frontmatter:
                 extra[key] = frontmatter[key]
+        override = find_due_date_override(due_dates or [], title, "assignment")
+        if override is not None:
+            for dk in _DATE_KEYS:
+                val = override.get(dk, "")
+                if val:
+                    extra[dk] = val
         if "assignment_group_id" in extra and isinstance(
             extra["assignment_group_id"], str
         ):
@@ -1061,6 +1166,12 @@ def _sync_content_file(
             extra["require_initial_post"] = frontmatter["require_initial_post"]
         grading_keys = ("points_possible", "due_at", "lock_at", "unlock_at")
         grading_params = {k: frontmatter[k] for k in grading_keys if k in frontmatter}
+        override = find_due_date_override(due_dates or [], title, "discussion")
+        if override is not None:
+            for dk in _DATE_KEYS:
+                val = override.get(dk, "")
+                if val:
+                    grading_params[dk] = val
         if grading_params:
             extra["assignment"] = grading_params
         entry = capi.create_or_update_discussion(
@@ -1201,6 +1312,7 @@ def _sync_quiz(
     errors: list[str] | None = None,
     synced_keys: set[str] | None = None,
     verbose: bool = False,
+    due_dates: list[dict[str, Any]] | None = None,
 ) -> None:
     if newer_on_canvas is None:
         newer_on_canvas = []
@@ -1240,9 +1352,18 @@ def _sync_quiz(
         "shuffle_answers",
         "show_correct_answers",
         "points_possible",
+        "due_at",
+        "lock_at",
+        "unlock_at",
     ):
         if key in frontmatter:
             quiz_kwargs[key] = frontmatter[key]
+    override = find_due_date_override(due_dates or [], title, "quiz")
+    if override is not None:
+        for dk in _DATE_KEYS:
+            val = override.get(dk, "")
+            if val:
+                quiz_kwargs[dk] = val
 
     def _stub_creator(ref_local_path: str, ref_canvas_type: str) -> dict[str, Any]:
         title_stub = (
@@ -1471,6 +1592,7 @@ def run_targeted_sync(
     assignment_group_ids = capi.get_assignment_group_ids(course)
     rubric_ids = capi.get_rubric_ids(course)
     _targeted_position_map = _load_module_order(repo_path)
+    due_dates = load_due_dates(repo_path)
 
     visited: set[str] = set()
 
@@ -1531,6 +1653,7 @@ def run_targeted_sync(
                 newer_on_canvas,
                 errors,
                 verbose=verbose,
+                due_dates=due_dates,
             )
         else:
             _sync_content_file(
@@ -1548,6 +1671,7 @@ def run_targeted_sync(
                 assignment_group_ids=assignment_group_ids,
                 rubric_ids=rubric_ids,
                 verbose=verbose,
+                due_dates=due_dates,
             )
 
     def _warn_missing(target: str) -> None:
@@ -1595,6 +1719,9 @@ def run_targeted_sync(
             _warn_missing(target)
             continue
         _process(local_key)
+
+    if due_dates:
+        _check_due_dates_coverage(due_dates, repo_path)
 
     _print_newer_on_canvas_summary(newer_on_canvas)
     _print_unpublishable_summary(unpublishable_items)

@@ -365,6 +365,96 @@ def create_tool_aliases(course_url: str) -> None:
         raise e
 
 
+@main.command(name="list-titles")
+@click.argument(
+    "repo",
+    default=".",
+    type=click.Path(exists=True, file_okay=False, path_type=Path),
+)
+def list_titles(repo: Path) -> None:
+    """List all assignments, discussions, and quizzes with their due dates and file paths.
+
+    REPO is the course content repo (defaults to the current directory).
+    Items are sorted by due date (earliest first), then items without
+    a due date are listed alphabetically by title.
+    """
+    from .sync import load_due_dates, find_due_date_override, parse_frontmatter
+
+    repo = repo.resolve()
+    due_dates = load_due_dates(repo)
+
+    items: list[tuple[str | None, str, str]] = []  # (due_at, title, path)
+
+    # Assignments
+    assignments_dir = repo / "assignments"
+    if assignments_dir.exists():
+        for md_file in sorted(assignments_dir.rglob("*.md")):
+            fm, _ = parse_frontmatter(md_file.read_text())
+            title = fm.get("title", md_file.stem)
+            override = find_due_date_override(due_dates, title, "assignment")
+            due_at = (override or {}).get("due_at") or fm.get("due_at") or None
+            rel = md_file.relative_to(repo).as_posix()
+            items.append((due_at if due_at else None, title, rel))
+
+    # Discussions
+    discussions_dir = repo / "discussions"
+    if discussions_dir.exists():
+        for md_file in sorted(discussions_dir.rglob("*.md")):
+            fm, _ = parse_frontmatter(md_file.read_text())
+            title = fm.get("title", md_file.stem)
+            override = find_due_date_override(due_dates, title, "discussion")
+            due_at = (override or {}).get("due_at") or fm.get("due_at") or None
+            rel = md_file.relative_to(repo).as_posix()
+            items.append((due_at if due_at else None, title, rel))
+
+    # Quizzes
+    quizzes_dir = repo / "quizzes"
+    if quizzes_dir.exists():
+        for quiz_folder in sorted(d for d in quizzes_dir.iterdir() if d.is_dir()):
+            quiz_md = quiz_folder / f"{quiz_folder.name}.md"
+            if quiz_md.exists():
+                fm, _ = parse_frontmatter(quiz_md.read_text())
+                title = fm.get("title", quiz_folder.name)
+                override = find_due_date_override(due_dates, title, "quiz")
+                due_at = (override or {}).get("due_at") or fm.get("due_at") or None
+                rel = quiz_md.relative_to(repo).as_posix()
+                items.append((due_at if due_at else None, title, rel))
+
+    if not items:
+        click.echo("No assignments, discussions, or quizzes found.")
+        return
+
+    # Sort: items with due dates first (by date), then items without (alphabetical by title)
+    with_dates = [(d, t, p) for d, t, p in items if d]
+    without_dates = [(d, t, p) for d, t, p in items if not d]
+    with_dates.sort(key=lambda x: x[0])
+    without_dates.sort(key=lambda x: x[1].lower())
+
+    # Calculate column widths
+    all_sorted = with_dates + without_dates
+    max_title = max(len(t) for _, t, _ in all_sorted)
+    max_date = 16  # "YYYY-MM-DD HH:MM"
+
+    for due_at, title, path in all_sorted:
+        if due_at:
+            date_str = _format_concise_date(due_at)
+        else:
+            date_str = ""
+        click.echo(f"{title:<{max_title}}  {date_str:<{max_date}}  {path}")
+
+
+def _format_concise_date(iso_date: str) -> str:
+    """Format an ISO 8601 date string as 'YYYY-MM-DD HH:MM'."""
+    try:
+        # Strip trailing timezone info for display
+        clean = iso_date.replace("Z", "+00:00")
+        from datetime import datetime
+        dt = datetime.fromisoformat(clean)
+        return dt.strftime("%Y-%m-%d %H:%M")
+    except (ValueError, TypeError):
+        return iso_date[:16] if len(iso_date) >= 16 else iso_date
+
+
 @main.command(no_args_is_help=True)
 @click.argument(
     "repo",

@@ -46,6 +46,7 @@ Write your course content as Markdown files in a Git repository. Run this tool t
     - [Deleting a file in Canvas](#deleting-a-file-in-canvas)
   - [IMSCC import](#imscc-import)
     - [Verifying the import](#verifying-the-import)
+  - [Listing content titles (`list-titles`)](#listing-content-titles-list-titles)
   - [Resolving external-tool labels (`create-tool-aliases`)](#resolving-external-tool-labels-create-tool-aliases)
 
 ---
@@ -517,6 +518,25 @@ tab_configuration = [
     { id = "Discussions", hidden = true },
 ]
 
+# ── Centralized due dates ───────────────────────────────────────────────
+# Manage unlock/due/lock dates for assignments, discussions, and quizzes in
+# one place instead of editing each file's frontmatter individually.
+# Each entry is an inline table with the item's title and up to three dates.
+# An empty string means "leave alone" — any frontmatter value or existing
+# Canvas value is preserved. These override any dates in frontmatter.
+# The optional `type` field disambiguates if two items share a title
+# (valid values: assignment, discussion, quiz).
+#
+# Use `github-to-canvas list-titles <repo>` to see all available titles.
+#
+# IMPORTANT: like tab_configuration, this is a top-level key and must appear
+# BEFORE any [section] or [[section]] header.
+due_dates = [
+    { name = "Week 1 Problem Set", unlock_at = "2025-01-27T00:00:00-05:00", due_at = "2025-02-01T23:59:00-05:00", lock_at = "2025-02-08T23:59:00-05:00" },
+    { name = "Week 1 Discussion", type = "discussion", unlock_at = "", due_at = "2025-02-03T23:59:00-05:00", lock_at = "" },
+    { name = "Midterm Quiz", type = "quiz", unlock_at = "", due_at = "2025-03-01T23:59:00-05:00", lock_at = "" },
+]
+
 # ── Default post policy (when grades become visible to students) ──────────
 [default_post_policy]
 post_manually = true   # true = grades hidden until you post them; false = automatic
@@ -588,6 +608,28 @@ tab already in the course is skipped with a warning.
 > that tab untouched. The [`create-tool-aliases`](#resolving-external-tool-labels-create-tool-aliases)
 > subcommand can generate a complete `tab_configuration` block with labels
 > filled in from a Canvas course where you have already imported the IMSCC.
+
+#### Centralized due dates
+
+The `due_dates` array lets you manage `unlock_at`, `due_at`, and `lock_at` for
+all assignments, discussions, and quizzes in one place. Each entry names a
+content item by its `title` (from frontmatter); an optional `type` field
+(`assignment`, `discussion`, or `quiz`) disambiguates if two items share a
+title. Centralized dates override any dates set in frontmatter.
+
+An empty string (`""`) means "leave alone" — any value already in frontmatter or
+on Canvas is preserved. This lets you set `due_at` centrally while still
+managing `lock_at` by hand in Canvas.
+
+During `update`, the tool prints two kinds of warnings:
+
+- A `due_dates` entry whose `name` doesn't match any content file (typo or
+  stale entry).
+- An assignment, discussion, or quiz that has **no** corresponding `due_dates`
+  entry (so you know what's not yet tracked centrally).
+
+Use [`list-titles`](#listing-content-titles-list-titles) to see all available
+titles and their current due dates.
 
 ### Syllabus (`course_settings/syllabus.md`)
 
@@ -1351,6 +1393,32 @@ Results: 44 OK  |  1 MISSING  |  2 skipped (too short)  |  47 total checked
 ```
 
 Exit code 0 means all sampled fragments were found. Exit code 1 means at least one was missing.
+
+## Listing content titles (`list-titles`)
+
+The `list-titles` subcommand prints every assignment, discussion, and quiz in
+the repo along with its due date (if any) and file path. Items are sorted by
+due date (earliest first); items without a due date are listed last,
+alphabetically by title.
+
+```bash
+github-to-canvas list-titles path/to/course-repo
+```
+
+Example output:
+
+```text
+Week 1 Problem Set  2025-02-01 23:59  assignments/week1.md
+Introduce Yourself  2025-02-01 23:59  discussions/week1-intro.md
+Midterm Quiz        2025-03-01 23:59  quizzes/midterm/midterm.md
+A Quiz                                quizzes/a-quiz/a-quiz.md
+```
+
+This is useful when setting up the centralized `due_dates` table in
+`course_settings.toml` — you can see all available titles at a glance.
+Due dates shown reflect centralized overrides when present.
+
+---
 
 ## Resolving external-tool labels (`create-tool-aliases`)
 

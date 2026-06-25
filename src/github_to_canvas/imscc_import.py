@@ -782,6 +782,31 @@ def parse_assignment_settings(xml_path: Path) -> dict[str, Any]:
     return result
 
 
+_DATE_KEYS = ("unlock_at", "due_at", "lock_at")
+
+
+def _extract_date_fields(fm_fields: dict[str, Any]) -> dict[str, Any]:
+    """Pop date fields from fm_fields and return them separately."""
+    return {k: fm_fields.pop(k) for k in _DATE_KEYS if k in fm_fields}
+
+
+def _collect_due_date(
+    collector: list[dict[str, Any]] | None,
+    title: str,
+    content_type: str,
+    date_fields: dict[str, Any],
+) -> None:
+    """Append a due_dates entry to *collector* if any date field has a value."""
+    if collector is None:
+        return
+    if not any(date_fields.get(k) for k in _DATE_KEYS):
+        return
+    entry: dict[str, Any] = {"name": title, "type": content_type}
+    for k in _DATE_KEYS:
+        entry[k] = date_fields.get(k) or ""
+    collector.append(entry)
+
+
 def convert_assignment(
     entry: TempEntry,
     imscc_dir: Path,
@@ -789,10 +814,14 @@ def convert_assignment(
     output_dir: Path,
     course_id: int | str | None = None,
     base_url: str | None = None,
+    due_dates_collector: list[dict[str, Any]] | None = None,
 ) -> None:
     """Convert an assignment HTML + settings XML to assignments/{stem}.md."""
     settings_path = imscc_dir / entry.metadata["settings_path"]
     fm_fields = parse_assignment_settings(settings_path)
+
+    date_fields = _extract_date_fields(fm_fields)
+    _collect_due_date(due_dates_collector, fm_fields.get("title", ""), "assignment", date_fields)
 
     html_path = imscc_dir / entry.imscc_path
     raw_html = html_path.read_text(encoding="utf-8", errors="replace")
@@ -801,7 +830,11 @@ def convert_assignment(
     markdown = _html_to_markdown(body_html)
     markdown = _shift_headings_down(markdown, entry.local_path)
 
-    frontmatter = _build_frontmatter(fm_fields)
+    frontmatter = _build_frontmatter(
+        fm_fields,
+        commented_fields=date_fields if date_fields else None,
+        comment_note="Due dates are managed centrally in course_settings/course_settings.toml",
+    )
     out_path = output_dir / entry.local_path
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(frontmatter + "\n" + markdown + "\n", encoding="utf-8")
@@ -866,6 +899,7 @@ def convert_discussion(
     output_dir: Path,
     course_id: int | str | None = None,
     base_url: str | None = None,
+    due_dates_collector: list[dict[str, Any]] | None = None,
 ) -> None:
     """Convert a discussion topic + topicMeta to discussions/{slug}.md."""
     meta_path_str = entry.metadata.get("meta_path", "")
@@ -878,6 +912,9 @@ def convert_discussion(
     if fm_fields.pop("is_announcement", False):
         print(f"  WARNING: Skipping announcement: {entry.title!r}")
         return
+
+    date_fields = _extract_date_fields(fm_fields)
+    _collect_due_date(due_dates_collector, fm_fields.get("title", ""), "discussion", date_fields)
 
     # read and decode the HTML body from the imsdt XML
     topic_tree = ET.parse(imscc_dir / entry.imscc_path)
@@ -908,7 +945,11 @@ def convert_discussion(
                 lines.append(f"- [{filename}]({rel_prefix}assets/{href})")
             markdown = "\n".join(lines)
 
-    frontmatter = _build_frontmatter(fm_fields)
+    frontmatter = _build_frontmatter(
+        fm_fields,
+        commented_fields=date_fields if date_fields else None,
+        comment_note="Due dates are managed centrally in course_settings/course_settings.toml",
+    )
     out_path = output_dir / entry.local_path
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(frontmatter + "\n" + markdown + "\n", encoding="utf-8")
@@ -970,6 +1011,10 @@ def parse_quiz_meta(meta_path: Path) -> tuple[dict[str, Any], str]:
             result["shuffle_answers"] = shuffle_raw.lower() == "true"
         if show_correct_raw:
             result["show_correct_answers"] = show_correct_raw.lower() == "true"
+        for date_key in _DATE_KEYS:
+            val = _text(date_key)
+            if val:
+                result[date_key] = val
         return result, (desc_raw or "")
     except (OSError, ET.ParseError):
         return {}, ""
@@ -1282,6 +1327,7 @@ def convert_quiz(
     output_dir: Path,
     course_id: int | str | None = None,
     base_url: str | None = None,
+    due_dates_collector: list[dict[str, Any]] | None = None,
 ) -> None:
     """Convert assessment_meta.xml + QTI questions file to quizzes/{slug}/ folder."""
     meta_path_str = entry.metadata.get("meta_path", "")
@@ -1293,6 +1339,9 @@ def convert_quiz(
     fm_fields, description = parse_quiz_meta(meta_path) if meta_path else ({}, "")
     if not fm_fields:
         fm_fields = {"title": entry.title, "published": False, "quiz_type": "assignment"}
+
+    date_fields = _extract_date_fields(fm_fields)
+    _collect_due_date(due_dates_collector, fm_fields.get("title", ""), "quiz", date_fields)
 
     questions = parse_qti_questions(qti_path) if qti_path else []
     _dedup_question_slugs(questions)
@@ -1323,7 +1372,12 @@ def convert_quiz(
     quiz_md_path = quiz_dir / f"{slug}.md"
     desc_block = (description + "\n\n") if description else ""
     body = desc_block + "\n".join(q_links) + "\n"
-    quiz_md_path.write_text(_build_frontmatter(fm_fields) + "\n\n" + body, encoding="utf-8")
+    fm = _build_frontmatter(
+        fm_fields,
+        commented_fields=date_fields if date_fields else None,
+        comment_note="Due dates are managed centrally in course_settings/course_settings.toml",
+    )
+    quiz_md_path.write_text(fm + "\n\n" + body, encoding="utf-8")
     print(f"Converting quiz: {entry.local_path}")
 
 
@@ -2026,6 +2080,23 @@ def _resolve_tool_titles(
     return titles
 
 
+def format_due_dates_toml(due_dates: list[dict[str, Any]]) -> str:
+    """Format due_dates as an inline TOML array of inline tables."""
+    if not due_dates:
+        return ""
+    lines = ["due_dates = ["]
+    for entry in due_dates:
+        parts = [f'name = "{entry["name"]}"']
+        if entry.get("type"):
+            parts.append(f'type = "{entry["type"]}"')
+        for k in _DATE_KEYS:
+            val = entry.get(k, "")
+            parts.append(f'{k} = "{val}"')
+        lines.append(f"    {{ {', '.join(parts)} }},")
+    lines.append("]")
+    return "\n".join(lines) + "\n"
+
+
 def _write_course_settings_toml(
     course_settings: dict[str, Any],
     manifest_meta: dict[str, str],
@@ -2033,6 +2104,7 @@ def _write_course_settings_toml(
     assignment_groups: list[dict[str, Any]],
     late_policy: dict[str, Any],
     output_dir: Path,
+    due_dates: list[dict[str, Any]] | None = None,
 ) -> None:
     """Write course_settings/course_settings.toml with all course-level settings."""
     data: dict[str, Any] = {}
@@ -2059,20 +2131,28 @@ def _write_course_settings_toml(
     if "default_post_policy" in course_settings:
         data["default_post_policy"] = course_settings["default_post_policy"]
 
+    # Write flat/inline keys first (must come before any [[section]] headers)
+    content = tomli_w.dumps(data)
+
+    # due_dates uses hand-formatted inline tables — must appear before [[...]] headers
+    if due_dates:
+        content += "\n" + format_due_dates_toml(due_dates)
+
     # Array-of-tables sections last (tomli_w emits [[...]] for list-of-dicts)
+    aot: dict[str, Any] = {}
     if grading_standards:
-        data["grading_standards"] = grading_standards
+        aot["grading_standards"] = grading_standards
     if assignment_groups:
-        data["assignment_groups"] = assignment_groups
+        aot["assignment_groups"] = assignment_groups
     tab_configuration = course_settings.get("tab_configuration")
     if tab_configuration:
-        data["tab_configuration"] = tab_configuration
+        aot["tab_configuration"] = tab_configuration
+    if aot:
+        content += "\n" + tomli_w.dumps(aot)
 
     cs_dir = output_dir / "course_settings"
     cs_dir.mkdir(parents=True, exist_ok=True)
-    (cs_dir / "course_settings.toml").write_text(
-        tomli_w.dumps(data), encoding="utf-8"
-    )
+    (cs_dir / "course_settings.toml").write_text(content, encoding="utf-8")
     print("Writing: course_settings/course_settings.toml")
 
 
@@ -2149,6 +2229,7 @@ def create_course_settings(
     output_dir: Path,
     course_id: int | str | None = None,
     base_url: str | None = None,
+    due_dates: list[dict[str, Any]] | None = None,
 ) -> None:
     """Write course_settings/{course_settings.toml, syllabus.md, events.md, canvas.toml}."""
     cs_dir = output_dir / "course_settings"
@@ -2204,6 +2285,7 @@ def create_course_settings(
     _write_course_settings_toml(
         course_settings, manifest_meta, grading_standards, assignment_groups, late_policy,
         output_dir,
+        due_dates=due_dates,
     )
 
     if events:
@@ -2286,8 +2368,17 @@ def _replace_canvas_course_url_in_md_files(output_dir: Path, base_url: str) -> N
 # Frontmatter helper
 # ---------------------------------------------------------------------------
 
-def _build_frontmatter(fields: dict[str, Any]) -> str:
-    """Render a YAML frontmatter block, omitting None values."""
+def _build_frontmatter(
+    fields: dict[str, Any],
+    commented_fields: dict[str, Any] | None = None,
+    comment_note: str | None = None,
+) -> str:
+    """Render a YAML frontmatter block, omitting None values.
+
+    If *commented_fields* is provided, those key/value pairs are written as
+    ``# key: value`` lines at the end (before the closing ``---``), preceded
+    by *comment_note* if given.
+    """
     lines = ["---"]
     for key, value in fields.items():
         if value is None:
@@ -2304,6 +2395,17 @@ def _build_frontmatter(fields: dict[str, Any]) -> str:
                 lines.append(f'{key}: "{s}"')
             else:
                 lines.append(f"{key}: {s}")
+    if commented_fields:
+        if comment_note:
+            lines.append(f"# {comment_note}")
+        for key, value in commented_fields.items():
+            if value is None:
+                continue
+            s = str(value)
+            if any(c in s for c in ':#{}[]|>&*!,?') or s.startswith('"'):
+                lines.append(f'# {key}: "{s}"')
+            else:
+                lines.append(f"# {key}: {s}")
     lines.append("---")
     return "\n".join(lines)
 
@@ -2347,6 +2449,8 @@ def run_import(imscc_path: Path, output_dir: Path) -> None:
         # Phase 2: assets
         copy_assets(imscc_dir, output_dir)
 
+        due_dates: list[dict[str, Any]] = []
+
         # Phase 3: pages
         for entry in temp_manifest.values():
             if entry.category == "page":
@@ -2355,17 +2459,17 @@ def run_import(imscc_path: Path, output_dir: Path) -> None:
         # Phase 4: assignments
         for entry in temp_manifest.values():
             if entry.category == "assignment":
-                convert_assignment(entry, imscc_dir, temp_manifest, output_dir, course_id, base_url)
+                convert_assignment(entry, imscc_dir, temp_manifest, output_dir, course_id, base_url, due_dates_collector=due_dates)
 
         # Phase 5: discussions
         for entry in temp_manifest.values():
             if entry.category == "discussion":
-                convert_discussion(entry, imscc_dir, temp_manifest, output_dir, course_id, base_url)
+                convert_discussion(entry, imscc_dir, temp_manifest, output_dir, course_id, base_url, due_dates_collector=due_dates)
 
         # Phase 5b: quizzes
         for entry in temp_manifest.values():
             if entry.category == "quiz":
-                convert_quiz(entry, imscc_dir, temp_manifest, output_dir, course_id, base_url)
+                convert_quiz(entry, imscc_dir, temp_manifest, output_dir, course_id, base_url, due_dates_collector=due_dates)
 
         # Phase 5c: question banks
         for entry in temp_manifest.values():
@@ -2384,7 +2488,7 @@ def run_import(imscc_path: Path, output_dir: Path) -> None:
             print(f"Generating module order: course_settings/module_order.toml")
 
         # Phase 7: course settings
-        create_course_settings(imscc_dir, temp_manifest, output_dir, course_id, base_url)
+        create_course_settings(imscc_dir, temp_manifest, output_dir, course_id, base_url, due_dates=due_dates)
 
         # Phase 8: parameterize Canvas course URL via snippet
         if base_url:

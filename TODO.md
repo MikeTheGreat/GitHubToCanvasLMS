@@ -1,5 +1,13 @@
 # Possible Future Features
 
+## Show due dates in the published MkDocs site
+
+The `publish` subcommand generates a static MkDocs site but does not currently
+display due dates for assignments, discussions, or quizzes. If it did, it would
+need to read the centralized `due_dates` table from
+`course_settings/course_settings.toml` and apply the same override logic that
+`update` uses (centralized dates take precedence over per-file frontmatter).
+
 ## `read_only` flag not respected when Canvas restores a soft-deleted rubric
 
 When a rubric is deleted from Canvas and re-created by the sync tool, Canvas
@@ -234,6 +242,9 @@ When implemented, the suggested approach:
 - Alternately: what about having "move" / rename commands in the tool to handle this?
   - It'll need to update the manifest file
 
+
+# Would be nice to import Announcements
+- By default make them unpublished, so they could be posted later?
 
 # Bugs to Fix:
 - Text headers in modules are unpublished in Canvas

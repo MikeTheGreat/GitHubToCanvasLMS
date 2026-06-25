@@ -91,7 +91,8 @@ github-to-canvas/      ← this tool repo
     ├── test_quiz.py         # unit tests: quiz/question file parsing
     ├── test_sync.py         # integration tests: full pipeline with mocked canvasapi
     ├── test_imscc_import.py # integration tests: full import pipeline
-    └── test_imscc_convert.py # unit tests: IMSCC XML parsing, link rewriting, slugification
+    ├── test_imscc_convert.py # unit tests: IMSCC XML parsing, link rewriting, slugification
+    └── test_due_dates.py    # unit + integration tests: centralized due dates, list-titles CLI
 ```
 
 ## Tech Stack
