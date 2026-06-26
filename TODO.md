@@ -247,4 +247,3 @@ When implemented, the suggested approach:
 - By default make them unpublished, so they could be posted later?
 
 # Bugs to Fix:
-- Text headers in modules are unpublished in Canvas

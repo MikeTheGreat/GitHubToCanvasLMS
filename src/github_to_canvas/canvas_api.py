@@ -647,8 +647,8 @@ def clear_module_items(module) -> None:
         item.delete()
 
 
-def _unpublish_module_item(module, mi, title: str) -> str | None:
-    """Set published=false on a just-created module item.
+def _set_module_item_published(module, mi, title: str, published: bool) -> str | None:
+    """Set published state on a just-created module item.
 
     Canvas ignores the published flag during create_module_item, so we follow
     up with a PUT.  We use the module's requester directly (with JSON encoding)
@@ -672,10 +672,11 @@ def _unpublish_module_item(module, mi, title: str) -> str | None:
     r = _requests.put(
         full_url,
         headers={"Authorization": "Bearer {}".format(req.access_token)},
-        json={"module_item": {"published": False}},
+        json={"module_item": {"published": published}},
     )
     if r.status_code >= 400:
-        print(f"  WARNING: could not unpublish module item '{title}': HTTP {r.status_code}")
+        action = "publish" if published else "unpublish"
+        print(f"  WARNING: could not {action} module item '{title}': HTTP {r.status_code}")
     return None
 
 
@@ -694,6 +695,7 @@ def add_module_item(
             module_item={"type": "SubHeader", "title": item["title"],
                          "indent": indent}
         )
+        _set_module_item_published(module, mi, item["title"], True)
         return mi.id, None
 
     published = item.get("published", True)
@@ -709,7 +711,7 @@ def add_module_item(
                 "published": published,
             }
         )
-        warn = _unpublish_module_item(module, mi, item["title"]) if not published else None
+        warn = _set_module_item_published(module, mi, item["title"], False) if not published else None
         return mi.id, warn
 
     local_path = item["local_path"]
@@ -749,7 +751,7 @@ def add_module_item(
         )
         return None, None
     # Canvas ignores published=false on create; patch it afterwards.
-    warn = _unpublish_module_item(module, mi, item["title"]) if not published else None
+    warn = _set_module_item_published(module, mi, item["title"], False) if not published else None
     return mi.id, warn
 
 
