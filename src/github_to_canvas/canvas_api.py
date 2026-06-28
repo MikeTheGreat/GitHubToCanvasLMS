@@ -637,8 +637,12 @@ def _do_quiz(
 ) -> dict[str, Any]:
     params = {"title": title, "description": description, **kwargs}
     if canvas_id is not None:
-        quiz = course.get_quiz(canvas_id)
-        quiz = quiz.edit(quiz=params)
+        try:
+            quiz = course.get_quiz(canvas_id)
+            quiz = quiz.edit(quiz=params)
+        except ResourceDoesNotExist:
+            print(f"  Canvas quiz {canvas_id} was deleted; re-creating")
+            quiz = course.create_quiz(quiz=params)
     else:
         quiz = course.create_quiz(quiz=params)
     return {"canvas_type": "quiz", "canvas_id": quiz.id, "html_url": quiz.html_url}

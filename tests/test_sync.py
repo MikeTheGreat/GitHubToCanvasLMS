@@ -910,6 +910,34 @@ def test_quiz_sync_updates_quiz_on_second_sync(mock_course, mocker, tmp_path) ->
     quiz.edit.assert_called_once()
 
 
+def test_quiz_deleted_on_canvas_is_recreated(mock_course, mocker, tmp_path, capsys) -> None:
+    root = _quiz_course_root(tmp_path)
+    preloaded = {
+        "quizzes/a-quiz/a-quiz.md": {
+            "canvas_id": 12345, "canvas_type": "quiz",
+            "last_synced": "2025-01-01T00:00:00+00:00",
+            "canvas_question_ids": {},
+        },
+    }
+    mocker.patch("github_to_canvas.manifest.load", return_value=preloaded)
+    mocker.patch("github_to_canvas.manifest.flush")
+    new_quiz = _mock_quiz(99999)
+    mock_course.create_quiz.return_value = new_quiz
+    new_quiz.create_question.side_effect = [_mock_quiz_question(i) for i in [101, 102]]
+    def _get_quiz(qid):
+        if qid == 12345:
+            raise ResourceDoesNotExist("404 not found")
+        return new_quiz
+    mock_course.get_quiz.side_effect = _get_quiz
+
+    run_sync(_config(), root)
+
+    mock_course.get_quiz.assert_any_call(12345)
+    mock_course.create_quiz.assert_called_once()
+    out = capsys.readouterr().out
+    assert "Canvas quiz 12345 was deleted; re-creating" in out
+
+
 def test_quiz_questions_created_in_order(mock_course, mocker, tmp_path) -> None:
     mocker.patch("github_to_canvas.manifest.flush")
     root = _quiz_course_root(tmp_path)
