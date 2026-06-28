@@ -746,6 +746,7 @@ def run_sync(
                 position=position,
                 verbose=verbose,
                 unpublishable_items=unpublishable_items,
+                errors=errors,
             )
             if had_module_warnings:
                 errors.append(f"module {md_file.name}: some items could not be added")
@@ -993,7 +994,10 @@ def _sync_content_file(
     try:
         frontmatter, body = parse_frontmatter(md_file.read_text())
     except yaml.YAMLError as exc:
-        msg = f"WARNING: {local_key}: malformed frontmatter: {exc}"
+        hint = ""
+        if "mapping values are not allowed here" in str(exc):
+            hint = " (hint: values containing colons must be quoted, e.g. title: \"Unit 01: Intro\")"
+        msg = f"WARNING: {local_key}: malformed frontmatter{hint}: {exc}"
         print(f"  {msg}")
         if errors is not None:
             errors.append(msg)
@@ -1255,6 +1259,7 @@ def _sync_module(
     position: int | None = None,
     verbose: bool = False,
     unpublishable_items: list[tuple[str, str]] | None = None,
+    errors: list[str] | None = None,
 ) -> bool:
     if newer_on_canvas is None:
         newer_on_canvas = []
@@ -1275,7 +1280,10 @@ def _sync_module(
     try:
         frontmatter, body = parse_frontmatter(md_file.read_text())
     except yaml.YAMLError as exc:
-        msg = f"WARNING: {local_key}: malformed frontmatter: {exc}"
+        hint = ""
+        if "mapping values are not allowed here" in str(exc):
+            hint = " (hint: values containing colons must be quoted, e.g. title: \"Unit 01: Intro\")"
+        msg = f"WARNING: {local_key}: malformed frontmatter{hint}: {exc}"
         print(f"  {msg}")
         if errors is not None:
             errors.append(msg)
@@ -1686,6 +1694,7 @@ def run_targeted_sync(
                 position=_targeted_position_map.get(file_path.name),
                 verbose=verbose,
                 unpublishable_items=unpublishable_items,
+                errors=errors,
             )
             if had_module_warnings:
                 errors.append(f"module {file_path.name}: some items could not be added")
