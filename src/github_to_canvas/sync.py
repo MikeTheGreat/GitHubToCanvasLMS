@@ -153,6 +153,25 @@ def _resolve_date_overrides(
     return result
 
 
+def _date_rejection_message(
+    local_key: str, title: str, due_at: str | None, html_url: str | None
+) -> str:
+    date_str = due_at or "(unknown)"
+    parts = [
+        f"ERROR: {local_key}: Could not set due date to {date_str} for \"{title}\"",
+        " — it must fall between the Available From (unlock_at) and Available Until (lock_at)"
+        " dates already set in Canvas.",
+        " Content was synced without dates.",
+    ]
+    if html_url:
+        parts.append(f" Check/fix in Canvas: {html_url}")
+    parts.append(
+        " (due date comes from the due_dates table in course_settings.toml,"
+        " or from the file's frontmatter)"
+    )
+    return "".join(parts)
+
+
 def parse_frontmatter(text: str) -> tuple[dict[str, Any], str]:
     """Return (frontmatter_dict, body_text). Body excludes the frontmatter block."""
     if not text.startswith("---\n"):
@@ -638,6 +657,7 @@ def run_sync(
             synced_keys=synced_content_keys,
             verbose=verbose,
             due_dates=due_dates,
+            settings_synced=settings_synced,
         )
 
     # 2.5. Quizzes (each quiz lives in its own sub-folder)
@@ -665,6 +685,7 @@ def run_sync(
                     synced_keys=synced_content_keys,
                     verbose=verbose,
                     due_dates=due_dates,
+                    settings_synced=settings_synced,
                 )
 
     # 2.6. Question banks
@@ -957,6 +978,21 @@ def _walk_assets(
             )
 
 
+def _has_due_date_override(
+    md_file: Path, local_key: str, due_dates: list[dict[str, Any]]
+) -> bool:
+    """Check if a content file has a matching due_dates entry (without a full sync)."""
+    canvas_type = infer_canvas_type(local_key)
+    if canvas_type not in ("assignment", "discussion"):
+        return False
+    try:
+        fm, _ = parse_frontmatter(md_file.read_text())
+    except Exception:
+        return False
+    title = fm.get("title", md_file.stem)
+    return find_due_date_override(due_dates, title, canvas_type) is not None
+
+
 def _sync_content_file(
     course,
     md_file: Path,
@@ -974,15 +1010,21 @@ def _sync_content_file(
     synced_keys: set[str] | None = None,
     verbose: bool = False,
     due_dates: list[dict[str, Any]] | None = None,
+    settings_synced: bool = False,
 ) -> None:
     if newer_on_canvas is None:
         newer_on_canvas = []
     local_key = md_file.relative_to(repo_root).as_posix()
 
     if not manifest_lib.needs_sync(manifest, local_key, md_file, force_uploads):
-        if verbose:
-            print(f"Skipping (up-to-date): {local_key}")
-        return
+        if settings_synced and due_dates and _has_due_date_override(
+            md_file, local_key, due_dates
+        ):
+            pass
+        else:
+            if verbose:
+                print(f"Skipping (up-to-date): {local_key}")
+            return
 
     if not force_overwrite:
         local_mtime = datetime.fromtimestamp(md_file.stat().st_mtime, tz=timezone.utc)
@@ -1170,7 +1212,10 @@ def _sync_content_file(
             course, canvas_id, title, html, published=published, **extra
         )
         if entry.get("date_warning"):
-            msg = f"WARNING: {local_key}: Canvas rejected due dates — content was synced without dates"
+            msg = _date_rejection_message(
+                local_key, title, extra.get("due_at"), entry.get("html_url")
+            )
+            print(f"  {msg}")
             if errors is not None:
                 errors.append(msg)
         print(f"  Link: {entry['html_url']}")
@@ -1226,7 +1271,10 @@ def _sync_content_file(
             course, canvas_id, title, html, published=published, **extra
         )
         if entry.get("date_warning"):
-            msg = f"WARNING: {local_key}: Canvas rejected due dates — content was synced without dates"
+            msg = _date_rejection_message(
+                local_key, title, grading_params.get("due_at"), entry.get("html_url")
+            )
+            print(f"  {msg}")
             if errors is not None:
                 errors.append(msg)
         print(f"  Link: {entry['html_url']}")
@@ -1369,6 +1417,7 @@ def _sync_quiz(
     synced_keys: set[str] | None = None,
     verbose: bool = False,
     due_dates: list[dict[str, Any]] | None = None,
+    settings_synced: bool = False,
 ) -> None:
     if newer_on_canvas is None:
         newer_on_canvas = []
@@ -1376,9 +1425,22 @@ def _sync_quiz(
     questions_dir = quiz_folder / "questions"
 
     if not _quiz_needs_sync(quiz_md, questions_dir, local_key, manifest, force_uploads):
-        if verbose:
-            print(f"Skipping (up-to-date): {local_key}")
-        return
+        if settings_synced and due_dates:
+            try:
+                fm, _ = parse_frontmatter(quiz_md.read_text())
+            except Exception:
+                fm = {}
+            title = fm.get("title", quiz_folder.name)
+            if find_due_date_override(due_dates, title, "quiz") is not None:
+                pass
+            else:
+                if verbose:
+                    print(f"Skipping (up-to-date): {local_key}")
+                return
+        else:
+            if verbose:
+                print(f"Skipping (up-to-date): {local_key}")
+            return
 
     if not force_overwrite:
         all_files: list[Path] = [quiz_md]
@@ -1486,7 +1548,10 @@ def _sync_quiz(
         course, canvas_id, title, desc_html, published=published, **quiz_kwargs
     )
     if result.get("date_warning"):
-        msg = f"WARNING: {local_key}: Canvas rejected due dates — content was synced without dates"
+        msg = _date_rejection_message(
+            local_key, title, quiz_kwargs.get("due_at"), result.get("html_url")
+        )
+        print(f"  {msg}")
         if errors is not None:
             errors.append(msg)
     print(f"  Link: {result['html_url']}")

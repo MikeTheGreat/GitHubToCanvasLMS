@@ -20,7 +20,9 @@ from github_to_canvas.sync import (
     find_due_date_override,
     load_due_dates,
     parse_frontmatter,
+    run_sync,
 )
+from github_to_canvas.config import Config
 
 FIXTURES = Path(__file__).parent / "fixtures"
 IMSCC_FIXTURES = FIXTURES / "imscc"
@@ -520,8 +522,9 @@ def test_bad_request_retries_without_dates(course_root: Path) -> None:
 
     # Should have been called twice: first with dates (fails), then without (succeeds)
     assert call_count == 2
-    # Should have a warning about rejected dates
-    assert any("Canvas rejected due dates" in e for e in errors)
+    # Should have an actionable error about rejected dates
+    assert any("Could not set due date" in e for e in errors)
+    assert any("Week 1 Problem Set" in e for e in errors)
 
 
 def test_empty_string_warning_in_errors(course_root: Path) -> None:
@@ -554,6 +557,67 @@ def test_empty_string_warning_in_errors(course_root: Path) -> None:
     )
 
     assert any("empty value" in e and "KEEP" in e for e in errors)
+
+
+def test_settings_change_forces_content_resync_for_due_dates(
+    course_root: Path, mocker
+) -> None:
+    """When course_settings.toml changes and due_dates exist, content files
+    should be re-synced even if their .md files haven't changed."""
+    import os
+    from github_to_canvas import manifest as manifest_lib
+
+    _FUTURE = "2999-12-31T00:00:00+00:00"
+
+    cs_dir = course_root / "course_settings"
+    cs_dir.mkdir(exist_ok=True)
+    (cs_dir / "course_settings.toml").write_text(
+        'due_dates = [\n'
+        '    {name = "Week 1 Problem Set", due_at = "2099-12-31T23:59:00", '
+        'unlock_at = "NONE", lock_at = "NONE"},\n'
+        ']\n'
+    )
+
+    preloaded = {
+        "assignments/week1.md": {
+            "canvas_id": 98765,
+            "canvas_type": "assignment",
+            "last_synced": _FUTURE,
+        },
+    }
+    mocker.patch("github_to_canvas.manifest.load", return_value=preloaded)
+    mocker.patch("github_to_canvas.manifest.flush")
+
+    mock_canvas_cls = mocker.patch("github_to_canvas.canvas_api.Canvas")
+    course = MagicMock()
+    mock_canvas_cls.return_value.get_course.return_value = course
+
+    assignment = _mock_assignment(98765)
+    course.get_assignment.return_value = assignment
+
+    stub_page = _mock_page(99999, "syllabus-stub")
+    course.create_page.return_value = stub_page
+
+    course.create_discussion_topic.return_value = _mock_discussion(55555)
+    course.upload.return_value = (
+        True,
+        {"id": 77777, "url": "https://school.instructure.com/files/77777/download"},
+    )
+
+    module = _mock_module(66666)
+    course.create_module.return_value = module
+    module.create_module_item.side_effect = [_mock_item(i) for i in range(201, 210)]
+
+    os.utime(course_root / "assignments" / "week1.md", (0.0, 0.0))
+
+    config = Config(
+        base_url="https://school.instructure.com", course_id=999, api_token="tok"
+    )
+    run_sync(config, course_root)
+
+    assignment.edit.assert_called_once()
+    call_kwargs = assignment.edit.call_args[1]
+    assert call_kwargs["assignment"]["due_at"] == "2099-12-31T23:59:00"
 
 
 # ---------------------------------------------------------------------------
