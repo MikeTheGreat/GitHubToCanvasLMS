@@ -2389,9 +2389,8 @@ def _build_frontmatter(
             items = ", ".join(str(v) for v in value)
             lines.append(f"{key}: [{items}]")
         else:
-            # Quote strings that contain special YAML characters
             s = str(value)
-            if any(c in s for c in ':#{}[]|>&*!,?') or s.startswith('"'):
+            if key == "title" or any(c in s for c in ':#{}[]|>&*!,?') or s.startswith('"'):
                 lines.append(f'{key}: "{s}"')
             else:
                 lines.append(f"{key}: {s}")
@@ -2402,7 +2401,7 @@ def _build_frontmatter(
             if value is None:
                 continue
             s = str(value)
-            if any(c in s for c in ':#{}[]|>&*!,?') or s.startswith('"'):
+            if key == "title" or any(c in s for c in ':#{}[]|>&*!,?') or s.startswith('"'):
                 lines.append(f'# {key}: "{s}"')
             else:
                 lines.append(f"# {key}: {s}")

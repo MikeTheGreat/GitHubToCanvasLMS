@@ -288,7 +288,7 @@ def test_frontmatter_basic() -> None:
     result = _build_frontmatter({"title": "Hello", "published": True})
     assert result.startswith("---")
     assert result.endswith("---")
-    assert "title: Hello" in result
+    assert 'title: "Hello"' in result
     assert "published: true" in result
 
 

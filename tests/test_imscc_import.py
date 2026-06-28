@@ -89,7 +89,7 @@ def test_page_md_created(output_dir: Path) -> None:
 def test_page_has_title_frontmatter(output_dir: Path) -> None:
     run_import(FIXTURE_DIR, output_dir)
     text = (output_dir / "pages" / "my-page.md").read_text()
-    assert "title: My Page" in text
+    assert 'title: "My Page"' in text
 
 
 def test_page_headings_shifted_down(output_dir: Path) -> None:
@@ -187,7 +187,7 @@ def test_discussion_md_created(output_dir: Path) -> None:
 def test_discussion_has_title_frontmatter(output_dir: Path) -> None:
     run_import(FIXTURE_DIR, output_dir)
     text = (output_dir / "discussions" / "week-01-forum.md").read_text()
-    assert "title: Week 01 Forum" in text
+    assert 'title: "Week 01 Forum"' in text
 
 
 def test_discussion_has_points_frontmatter(output_dir: Path) -> None:
@@ -212,7 +212,7 @@ def test_module_md_created(output_dir: Path) -> None:
 def test_module_has_title_frontmatter(output_dir: Path) -> None:
     run_import(FIXTURE_DIR, output_dir)
     text = (output_dir / "modules" / "week-1.md").read_text()
-    assert "title: Week 1" in text
+    assert 'title: "Week 1"' in text
 
 
 def test_module_subheaders_as_headings(output_dir: Path) -> None:
@@ -321,7 +321,7 @@ def test_quiz_md_created(output_dir: Path) -> None:
 def test_quiz_md_has_title(output_dir: Path) -> None:
     run_import(FIXTURE_DIR, output_dir)
     text = (output_dir / "quizzes" / "a-quiz" / "a-quiz.md").read_text()
-    assert "title: A Quiz" in text
+    assert 'title: "A Quiz"' in text
 
 
 def test_quiz_md_has_quiz_type(output_dir: Path) -> None:
@@ -714,7 +714,7 @@ def test_quiz_canvas_format_md_has_correct_title(output_dir: Path) -> None:
     """Quiz with href='' should get its title from assessment_meta.xml via dependency."""
     run_import(FIXTURE_DIR, output_dir)
     text = (output_dir / "quizzes" / "quiz-two" / "quiz-two.md").read_text()
-    assert "title: Quiz Two" in text
+    assert 'title: "Quiz Two"' in text
 
 
 def test_quiz_canvas_format_md_has_points(output_dir: Path) -> None:

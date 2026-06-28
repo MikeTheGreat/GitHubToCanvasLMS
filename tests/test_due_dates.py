@@ -157,7 +157,7 @@ class TestBuildFrontmatterCommented:
         )
         assert "# Due dates are managed centrally" in result
         assert "# due_at:" in result
-        assert "title: HW1" in result
+        assert 'title: "HW1"' in result
         # lock_at is empty string — should still appear as commented
         assert "# lock_at:" in result
 
