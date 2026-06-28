@@ -530,7 +530,25 @@ def set_front_page(course, page_url: str) -> None:
     page.edit(wiki_page={"front_page": True})
 
 
+_DATE_KEYS = ("unlock_at", "due_at", "lock_at")
+
+
 def create_or_update_assignment(
+    course, canvas_id: int | None, title: str, body: str, **kwargs
+) -> dict[str, Any]:
+    try:
+        return _do_assignment(course, canvas_id, title, body, **kwargs)
+    except BadRequest as exc:
+        if "availability dates" not in str(exc) and "due_at" not in str(exc):
+            raise
+        stripped = {k: v for k, v in kwargs.items() if k not in _DATE_KEYS}
+        print(f"  WARNING: Canvas rejected due dates; retrying without date fields ({exc})")
+        result = _do_assignment(course, canvas_id, title, body, **stripped)
+        result["date_warning"] = str(exc)
+        return result
+
+
+def _do_assignment(
     course, canvas_id: int | None, title: str, body: str, **kwargs
 ) -> dict[str, Any]:
     if canvas_id is not None:
@@ -550,6 +568,25 @@ def create_or_update_assignment(
 
 
 def create_or_update_discussion(
+    course, canvas_id: int | None, title: str, body: str, **kwargs
+) -> dict[str, Any]:
+    try:
+        return _do_discussion(course, canvas_id, title, body, **kwargs)
+    except BadRequest as exc:
+        if "availability dates" not in str(exc) and "due_at" not in str(exc):
+            raise
+        stripped = dict(kwargs)
+        if "assignment" in stripped and isinstance(stripped["assignment"], dict):
+            stripped["assignment"] = {
+                k: v for k, v in stripped["assignment"].items() if k not in _DATE_KEYS
+            }
+        print(f"  WARNING: Canvas rejected due dates; retrying without date fields ({exc})")
+        result = _do_discussion(course, canvas_id, title, body, **stripped)
+        result["date_warning"] = str(exc)
+        return result
+
+
+def _do_discussion(
     course, canvas_id: int | None, title: str, body: str, **kwargs
 ) -> dict[str, Any]:
     if canvas_id is not None:
@@ -581,6 +618,21 @@ def create_stub(course, canvas_type: str, title: str) -> dict[str, Any]:
 
 
 def create_or_update_quiz(
+    course, canvas_id: int | None, title: str, description: str, **kwargs
+) -> dict[str, Any]:
+    try:
+        return _do_quiz(course, canvas_id, title, description, **kwargs)
+    except BadRequest as exc:
+        if "availability dates" not in str(exc) and "due_at" not in str(exc):
+            raise
+        stripped = {k: v for k, v in kwargs.items() if k not in _DATE_KEYS}
+        print(f"  WARNING: Canvas rejected due dates; retrying without date fields ({exc})")
+        result = _do_quiz(course, canvas_id, title, description, **stripped)
+        result["date_warning"] = str(exc)
+        return result
+
+
+def _do_quiz(
     course, canvas_id: int | None, title: str, description: str, **kwargs
 ) -> dict[str, Any]:
     params = {"title": title, "description": description, **kwargs}

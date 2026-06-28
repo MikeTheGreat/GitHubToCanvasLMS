@@ -170,6 +170,74 @@ class TestBuildFrontmatterCommented:
 
 
 # ---------------------------------------------------------------------------
+# Unit tests: _resolve_date_overrides sentinel values
+# ---------------------------------------------------------------------------
+
+
+class TestResolveDateOverrides:
+    def test_actual_date_values(self) -> None:
+        from github_to_canvas.sync import _resolve_date_overrides
+        override = {"due_at": "2025-06-01T23:59:00", "unlock_at": "2025-05-01", "lock_at": "2025-06-08"}
+        result = _resolve_date_overrides(override, canvas_id=123, local_key="x.md", errors=None)
+        assert result == {"due_at": "2025-06-01T23:59:00", "unlock_at": "2025-05-01", "lock_at": "2025-06-08"}
+
+    def test_none_sentinel_clears_date(self) -> None:
+        from github_to_canvas.sync import _resolve_date_overrides
+        override = {"due_at": "2025-06-01T23:59:00", "unlock_at": "NONE", "lock_at": "none"}
+        result = _resolve_date_overrides(override, canvas_id=123, local_key="x.md", errors=None)
+        assert result == {"due_at": "2025-06-01T23:59:00", "unlock_at": "", "lock_at": ""}
+
+    def test_keep_sentinel_omits_field(self) -> None:
+        from github_to_canvas.sync import _resolve_date_overrides
+        override = {"due_at": "2025-06-01T23:59:00", "unlock_at": "KEEP", "lock_at": "Keep"}
+        result = _resolve_date_overrides(override, canvas_id=123, local_key="x.md", errors=None)
+        assert result == {"due_at": "2025-06-01T23:59:00"}
+
+    def test_empty_string_acts_as_keep_with_warning(self) -> None:
+        from github_to_canvas.sync import _resolve_date_overrides
+        errors: list[str] = []
+        override = {"due_at": "2025-06-01T23:59:00", "unlock_at": "", "lock_at": ""}
+        result = _resolve_date_overrides(override, canvas_id=123, local_key="test.md", errors=errors)
+        assert result == {"due_at": "2025-06-01T23:59:00"}
+        assert len(errors) == 1
+        assert "unlock_at, lock_at" in errors[0]
+        assert "CREATE_NONE_THEN_KEEP" in errors[0]
+
+    def test_empty_string_consolidated_warning(self) -> None:
+        from github_to_canvas.sync import _resolve_date_overrides
+        errors: list[str] = []
+        override = {"due_at": "", "unlock_at": "", "lock_at": ""}
+        result = _resolve_date_overrides(override, canvas_id=123, local_key="test.md", errors=errors)
+        assert result == {}
+        assert len(errors) == 1
+        assert "unlock_at, due_at, lock_at" in errors[0]
+
+    def test_create_none_then_keep_on_create(self) -> None:
+        from github_to_canvas.sync import _resolve_date_overrides
+        override = {"due_at": "2025-06-01", "unlock_at": "CREATE_NONE_THEN_KEEP", "lock_at": "create_none_then_keep"}
+        result = _resolve_date_overrides(override, canvas_id=None, local_key="x.md", errors=None)
+        assert result == {"due_at": "2025-06-01", "unlock_at": "", "lock_at": ""}
+
+    def test_create_none_then_keep_on_update(self) -> None:
+        from github_to_canvas.sync import _resolve_date_overrides
+        override = {"due_at": "2025-06-01", "unlock_at": "CREATE_NONE_THEN_KEEP", "lock_at": "create_none_then_keep"}
+        result = _resolve_date_overrides(override, canvas_id=123, local_key="x.md", errors=None)
+        assert result == {"due_at": "2025-06-01"}
+
+    def test_case_insensitive_sentinels(self) -> None:
+        from github_to_canvas.sync import _resolve_date_overrides
+        override = {"due_at": "NoNe", "unlock_at": "kEeP", "lock_at": "Create_None_Then_Keep"}
+        result = _resolve_date_overrides(override, canvas_id=None, local_key="x.md", errors=None)
+        assert result == {"due_at": "", "lock_at": ""}
+
+    def test_no_warning_when_errors_is_none(self) -> None:
+        from github_to_canvas.sync import _resolve_date_overrides
+        override = {"due_at": "", "unlock_at": "", "lock_at": ""}
+        result = _resolve_date_overrides(override, canvas_id=123, local_key="x.md", errors=None)
+        assert result == {}
+
+
+# ---------------------------------------------------------------------------
 # Integration: sync with due_dates override
 # ---------------------------------------------------------------------------
 
@@ -297,6 +365,195 @@ def test_due_dates_override_discussion(course_root: Path) -> None:
     assert kwargs["assignment"]["lock_at"] == "2099-06-30T23:59:00"
     # Empty string in centralized means "leave alone" — frontmatter unlock_at is preserved
     assert kwargs["assignment"]["unlock_at"] == "2025-01-27T00:00:00-05:00"
+
+
+def test_none_sentinel_clears_dates_on_canvas(course_root: Path) -> None:
+    """NONE sentinel should send empty string to Canvas to clear the date."""
+    from github_to_canvas.sync import _sync_content_file
+    from github_to_canvas import manifest as manifest_lib
+
+    due_dates = [
+        {"name": "Week 1 Problem Set", "due_at": "2099-12-31T23:59:00", "unlock_at": "NONE", "lock_at": "NONE"},
+    ]
+
+    course = MagicMock()
+    assignment = _mock_assignment(98765)
+    course.create_assignment.return_value = assignment
+
+    stub_page = _mock_page(99999, "syllabus-stub")
+    course.create_page.return_value = stub_page
+
+    manifest_path = course_root / ".canvas-manifest.toml"
+    manifest = manifest_lib.load(manifest_path)
+    md_file = course_root / "assignments" / "week1.md"
+    snippets_dir = course_root / "snippets"
+    _sync_content_file(
+        course, md_file, course_root, snippets_dir,
+        manifest, manifest_path, 999,
+        force_uploads=True, force_overwrite=True,
+        due_dates=due_dates,
+    )
+
+    _, kwargs = course.create_assignment.call_args
+    assignment_params = kwargs.get("assignment", {})
+    assert assignment_params.get("due_at") == "2099-12-31T23:59:00"
+    assert assignment_params.get("unlock_at") == ""
+    assert assignment_params.get("lock_at") == ""
+
+
+def test_create_none_then_keep_on_create(course_root: Path) -> None:
+    """CREATE_NONE_THEN_KEEP should clear dates on first create (no canvas_id)."""
+    from github_to_canvas.sync import _sync_content_file
+    from github_to_canvas import manifest as manifest_lib
+
+    due_dates = [
+        {"name": "Week 1 Problem Set", "due_at": "2099-12-31T23:59:00",
+         "unlock_at": "CREATE_NONE_THEN_KEEP", "lock_at": "CREATE_NONE_THEN_KEEP"},
+    ]
+
+    course = MagicMock()
+    assignment = _mock_assignment(98765)
+    course.create_assignment.return_value = assignment
+
+    stub_page = _mock_page(99999, "syllabus-stub")
+    course.create_page.return_value = stub_page
+
+    manifest_path = course_root / ".canvas-manifest.toml"
+    manifest = manifest_lib.load(manifest_path)
+    md_file = course_root / "assignments" / "week1.md"
+    snippets_dir = course_root / "snippets"
+    _sync_content_file(
+        course, md_file, course_root, snippets_dir,
+        manifest, manifest_path, 999,
+        force_uploads=True, force_overwrite=True,
+        due_dates=due_dates,
+    )
+
+    _, kwargs = course.create_assignment.call_args
+    assignment_params = kwargs.get("assignment", {})
+    assert assignment_params.get("due_at") == "2099-12-31T23:59:00"
+    # On create, CREATE_NONE_THEN_KEEP sends empty string to clear
+    assert assignment_params.get("unlock_at") == ""
+    assert assignment_params.get("lock_at") == ""
+
+
+def test_create_none_then_keep_on_update(course_root: Path) -> None:
+    """CREATE_NONE_THEN_KEEP should act as KEEP on update (canvas_id exists)."""
+    from github_to_canvas.sync import _sync_content_file
+    from github_to_canvas import manifest as manifest_lib
+
+    due_dates = [
+        {"name": "Week 1 Problem Set", "due_at": "2099-12-31T23:59:00",
+         "unlock_at": "CREATE_NONE_THEN_KEEP", "lock_at": "CREATE_NONE_THEN_KEEP"},
+    ]
+
+    course = MagicMock()
+    assignment = _mock_assignment(98765)
+    assignment.edit.return_value = assignment
+    course.get_assignment.return_value = assignment
+
+    stub_page = _mock_page(99999, "syllabus-stub")
+    course.create_page.return_value = stub_page
+
+    manifest_path = course_root / ".canvas-manifest.toml"
+    manifest = manifest_lib.load(manifest_path)
+    # Pre-populate manifest so it's treated as an update
+    from github_to_canvas import manifest as mlib
+    mlib.record(manifest, manifest_path, "assignments/week1.md", 98765, "assignment")
+
+    md_file = course_root / "assignments" / "week1.md"
+    snippets_dir = course_root / "snippets"
+    _sync_content_file(
+        course, md_file, course_root, snippets_dir,
+        manifest, manifest_path, 999,
+        force_uploads=True, force_overwrite=True,
+        due_dates=due_dates,
+    )
+
+    _, kwargs = course.get_assignment.return_value.edit.call_args
+    assignment_params = kwargs.get("assignment", {})
+    assert assignment_params.get("due_at") == "2099-12-31T23:59:00"
+    # On update, CREATE_NONE_THEN_KEEP acts as KEEP — frontmatter dates preserved
+    assert assignment_params.get("unlock_at") == "2025-01-27T00:00:00-05:00"
+    assert assignment_params.get("lock_at") == "2025-02-08T23:59:00-05:00"
+
+
+def test_bad_request_retries_without_dates(course_root: Path) -> None:
+    """When Canvas rejects due dates, retry without them and add a warning."""
+    from canvasapi.exceptions import BadRequest
+    from github_to_canvas.sync import _sync_content_file
+    from github_to_canvas import manifest as manifest_lib
+
+    due_dates = [
+        {"name": "Week 1 Problem Set", "due_at": "2099-12-31T23:59:00", "unlock_at": "NONE", "lock_at": "NONE"},
+    ]
+
+    course = MagicMock()
+    assignment = _mock_assignment(98765)
+
+    call_count = 0
+    def side_effect(**kwargs):
+        nonlocal call_count
+        call_count += 1
+        params = kwargs.get("assignment", {})
+        if "due_at" in params:
+            raise BadRequest('{"errors":{"due_at":[{"message":"must be between availability dates"}]}}')
+        return assignment
+
+    course.create_assignment.side_effect = side_effect
+
+    stub_page = _mock_page(99999, "syllabus-stub")
+    course.create_page.return_value = stub_page
+
+    manifest_path = course_root / ".canvas-manifest.toml"
+    manifest = manifest_lib.load(manifest_path)
+    md_file = course_root / "assignments" / "week1.md"
+    snippets_dir = course_root / "snippets"
+    errors: list[str] = []
+    _sync_content_file(
+        course, md_file, course_root, snippets_dir,
+        manifest, manifest_path, 999,
+        force_uploads=True, force_overwrite=True,
+        due_dates=due_dates,
+        errors=errors,
+    )
+
+    # Should have been called twice: first with dates (fails), then without (succeeds)
+    assert call_count == 2
+    # Should have a warning about rejected dates
+    assert any("Canvas rejected due dates" in e for e in errors)
+
+
+def test_empty_string_warning_in_errors(course_root: Path) -> None:
+    """Empty string date values should produce a warning in the errors list."""
+    from github_to_canvas.sync import _sync_content_file
+    from github_to_canvas import manifest as manifest_lib
+
+    due_dates = [
+        {"name": "Week 1 Problem Set", "due_at": "2099-12-31T23:59:00", "unlock_at": "", "lock_at": ""},
+    ]
+
+    course = MagicMock()
+    assignment = _mock_assignment(98765)
+    course.create_assignment.return_value = assignment
+
+    stub_page = _mock_page(99999, "syllabus-stub")
+    course.create_page.return_value = stub_page
+
+    manifest_path = course_root / ".canvas-manifest.toml"
+    manifest = manifest_lib.load(manifest_path)
+    md_file = course_root / "assignments" / "week1.md"
+    snippets_dir = course_root / "snippets"
+    errors: list[str] = []
+    _sync_content_file(
+        course, md_file, course_root, snippets_dir,
+        manifest, manifest_path, 999,
+        force_uploads=True, force_overwrite=True,
+        due_dates=due_dates,
+        errors=errors,
+    )
+
+    assert any("empty value" in e and "KEEP" in e for e in errors)
 
 
 # ---------------------------------------------------------------------------

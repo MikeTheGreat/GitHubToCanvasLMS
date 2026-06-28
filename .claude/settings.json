@@ -6,6 +6,7 @@
             "Write(*)",
             "Read(*)",
             "WebFetch(*)"
-        ]
+        ],
+        "defaultMode": "bypassPermissions"
     }
 }

@@ -111,6 +111,48 @@ def find_due_date_override(
     return None
 
 
+_DATE_SENTINELS = {"none", "keep", "create_none_then_keep"}
+
+
+def _resolve_date_overrides(
+    override: dict[str, Any],
+    canvas_id: int | None,
+    local_key: str,
+    errors: list[str] | None,
+) -> dict[str, Any]:
+    """Process date sentinel values from a due_dates override entry.
+
+    Returns a dict of date keys to include in the Canvas API call.
+    """
+    result: dict[str, Any] = {}
+    empty_fields: list[str] = []
+    for dk in _DATE_KEYS:
+        val = override.get(dk, "")
+        if isinstance(val, str) and val.strip().lower() in _DATE_SENTINELS:
+            sentinel = val.strip().lower()
+            if sentinel == "none":
+                result[dk] = ""
+            elif sentinel == "keep":
+                pass
+            elif sentinel == "create_none_then_keep":
+                if canvas_id is None:
+                    result[dk] = ""
+        elif val:
+            result[dk] = val
+        else:
+            empty_fields.append(dk)
+    if empty_fields:
+        fields_str = ", ".join(empty_fields)
+        msg = (
+            f"WARNING: {local_key}: due_dates entry has empty value for {fields_str} "
+            f"— treating as KEEP (use 'KEEP', 'NONE', 'CREATE_NONE_THEN_KEEP', or a date value to suppress this warning)"
+        )
+        print(f"  {msg}")
+        if errors is not None:
+            errors.append(msg)
+    return result
+
+
 def parse_frontmatter(text: str) -> tuple[dict[str, Any], str]:
     """Return (frontmatter_dict, body_text). Body excludes the frontmatter block."""
     if not text.startswith("---\n"):
@@ -1065,10 +1107,9 @@ def _sync_content_file(
                 extra[key] = frontmatter[key]
         override = find_due_date_override(due_dates or [], title, "assignment")
         if override is not None:
-            for dk in _DATE_KEYS:
-                val = override.get(dk, "")
-                if val:
-                    extra[dk] = val
+            extra.update(
+                _resolve_date_overrides(override, canvas_id, local_key, errors)
+            )
         if "assignment_group_id" in extra and isinstance(
             extra["assignment_group_id"], str
         ):
@@ -1124,6 +1165,10 @@ def _sync_content_file(
         entry = capi.create_or_update_assignment(
             course, canvas_id, title, html, published=published, **extra
         )
+        if entry.get("date_warning"):
+            msg = f"WARNING: {local_key}: Canvas rejected due dates — content was synced without dates"
+            if errors is not None:
+                errors.append(msg)
         print(f"  Link: {entry['html_url']}")
         manifest_lib.record(
             manifest, manifest_path, local_key, entry["canvas_id"], "assignment"
@@ -1168,15 +1213,18 @@ def _sync_content_file(
         grading_params = {k: frontmatter[k] for k in grading_keys if k in frontmatter}
         override = find_due_date_override(due_dates or [], title, "discussion")
         if override is not None:
-            for dk in _DATE_KEYS:
-                val = override.get(dk, "")
-                if val:
-                    grading_params[dk] = val
+            grading_params.update(
+                _resolve_date_overrides(override, canvas_id, local_key, errors)
+            )
         if grading_params:
             extra["assignment"] = grading_params
         entry = capi.create_or_update_discussion(
             course, canvas_id, title, html, published=published, **extra
         )
+        if entry.get("date_warning"):
+            msg = f"WARNING: {local_key}: Canvas rejected due dates — content was synced without dates"
+            if errors is not None:
+                errors.append(msg)
         print(f"  Link: {entry['html_url']}")
         manifest_lib.record(
             manifest, manifest_path, local_key, entry["canvas_id"], "discussion"
@@ -1358,13 +1406,6 @@ def _sync_quiz(
     ):
         if key in frontmatter:
             quiz_kwargs[key] = frontmatter[key]
-    override = find_due_date_override(due_dates or [], title, "quiz")
-    if override is not None:
-        for dk in _DATE_KEYS:
-            val = override.get(dk, "")
-            if val:
-                quiz_kwargs[dk] = val
-
     def _stub_creator(ref_local_path: str, ref_canvas_type: str) -> dict[str, Any]:
         title_stub = (
             Path(ref_local_path).stem.replace("-", " ").replace("_", " ").title()
@@ -1426,10 +1467,20 @@ def _sync_quiz(
     existing = manifest.get(local_key)
     canvas_id = existing["canvas_id"] if existing else None
 
+    override = find_due_date_override(due_dates or [], title, "quiz")
+    if override is not None:
+        quiz_kwargs.update(
+            _resolve_date_overrides(override, canvas_id, local_key, errors)
+        )
+
     print(f"  Uploading: {local_key}")
     result = capi.create_or_update_quiz(
         course, canvas_id, title, desc_html, published=published, **quiz_kwargs
     )
+    if result.get("date_warning"):
+        msg = f"WARNING: {local_key}: Canvas rejected due dates — content was synced without dates"
+        if errors is not None:
+            errors.append(msg)
     print(f"  Link: {result['html_url']}")
     quiz_obj = course.get_quiz(result["canvas_id"])
     q_id_map = capi.sync_quiz_questions(course, quiz_obj, questions)

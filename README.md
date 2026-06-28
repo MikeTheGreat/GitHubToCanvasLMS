@@ -617,11 +617,27 @@ content item by its `title` (from frontmatter); an optional `type` field
 (`assignment`, `discussion`, or `quiz`) disambiguates if two items share a
 title. Centralized dates override any dates set in frontmatter.
 
-An empty string (`""`) means "leave alone" — any value already in frontmatter or
-on Canvas is preserved. This lets you set `due_at` centrally while still
-managing `lock_at` by hand in Canvas.
+Each date field (`unlock_at`, `due_at`, `lock_at`) accepts either a date string
+or one of these sentinel values (case-insensitive):
 
-During `update`, the tool prints two kinds of warnings:
+| Value | Behaviour |
+| --- | --- |
+| `"2025-02-01T23:59:00"` | Set this date on Canvas |
+| `"NONE"` | Actively **clear** this date on Canvas |
+| `"KEEP"` | Leave whatever Canvas currently has (don't send this field) |
+| `""` (empty string) | Same as `KEEP`, but prints a warning suggesting you use an explicit value |
+| `"CREATE_NONE_THEN_KEEP"` | Clear the date when creating a new item; on subsequent updates, act as `KEEP` |
+
+`CREATE_NONE_THEN_KEEP` is useful for `lock_at` — it clears any lock date
+imported from a previous term when the assignment is first created, but leaves
+it alone if you later set one by hand in Canvas.
+
+If Canvas rejects the due dates (e.g. `due_at` falls outside existing
+`unlock_at`/`lock_at` availability dates), the tool retries the upload without
+date fields and prints a warning. The content is still synced; only the dates
+are skipped.
+
+During `update`, the tool prints warnings for:
 
 - A `due_dates` entry whose `name` doesn't match any content file (typo or
   stale entry).
