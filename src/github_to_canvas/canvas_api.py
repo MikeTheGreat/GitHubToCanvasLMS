@@ -533,6 +533,29 @@ def set_front_page(course, page_url: str) -> None:
 _DATE_KEYS = ("unlock_at", "due_at", "lock_at")
 
 
+def update_dates(
+    course, canvas_type: str, canvas_id: int, date_fields: dict[str, Any]
+) -> dict[str, Any]:
+    """Update only the date fields on an existing Canvas item. Returns result dict."""
+    try:
+        if canvas_type == "assignment":
+            obj = course.get_assignment(canvas_id)
+            obj.edit(assignment=date_fields)
+        elif canvas_type == "discussion":
+            obj = course.get_discussion_topic(canvas_id)
+            obj.update(assignment=date_fields)
+        elif canvas_type == "quiz":
+            obj = course.get_quiz(canvas_id)
+            obj.edit(quiz=date_fields)
+        else:
+            return {"error": f"unsupported type: {canvas_type}"}
+        return {"html_url": obj.html_url}
+    except BadRequest as exc:
+        if "availability dates" not in str(exc) and "due_at" not in str(exc):
+            raise
+        return {"date_warning": str(exc), "html_url": getattr(obj, "html_url", None)}
+
+
 def create_or_update_assignment(
     course, canvas_id: int | None, title: str, body: str, **kwargs
 ) -> dict[str, Any]:

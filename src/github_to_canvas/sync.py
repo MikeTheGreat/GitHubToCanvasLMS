@@ -33,6 +33,87 @@ def load_due_dates(repo_path: Path) -> list[dict[str, Any]]:
     return settings.get("due_dates", [])
 
 
+def _apply_due_dates_only(
+    course,
+    due_dates: list[dict[str, Any]],
+    repo_path: Path,
+    manifest: manifest_lib.ManifestDict,
+    synced_keys: set[str],
+    errors: list[str],
+    matcher: IgnoreMatcher | None = None,
+) -> None:
+    """Apply due_dates overrides via dates-only API calls for items not already synced this run."""
+    print("Applying due_dates...")
+    for folder, ctype in (("assignments", "assignment"), ("discussions", "discussion")):
+        content_dir = repo_path / folder
+        if not content_dir.exists():
+            continue
+        for md_file in sorted(content_dir.rglob("*.md")):
+            if matcher is not None and matcher.is_ignored(md_file, repo_path):
+                continue
+            local_key = md_file.relative_to(repo_path).as_posix()
+            if local_key in synced_keys:
+                continue
+            existing = manifest.get(local_key)
+            if not existing or "canvas_id" not in existing:
+                continue
+            try:
+                fm, _ = parse_frontmatter(md_file.read_text())
+            except Exception:
+                continue
+            title = fm.get("title", md_file.stem)
+            override = find_due_date_override(due_dates, title, ctype)
+            if override is None:
+                continue
+            canvas_id = existing["canvas_id"]
+            date_fields = _resolve_date_overrides(override, canvas_id, local_key, errors)
+            if not date_fields:
+                continue
+            print(f"  Updating dates: {local_key}")
+            result = capi.update_dates(course, ctype, canvas_id, date_fields)
+            if result.get("date_warning"):
+                msg = _date_rejection_message(
+                    local_key, title, date_fields.get("due_at"), result.get("html_url")
+                )
+                print(f"  {msg}")
+                errors.append(msg)
+
+    quizzes_dir = repo_path / "quizzes"
+    if quizzes_dir.exists():
+        for quiz_folder in sorted(d for d in quizzes_dir.iterdir() if d.is_dir()):
+            if matcher is not None and matcher.is_ignored(quiz_folder, repo_path):
+                continue
+            quiz_md = quiz_folder / f"{quiz_folder.name}.md"
+            if not quiz_md.exists():
+                continue
+            local_key = quiz_md.relative_to(repo_path).as_posix()
+            if local_key in synced_keys:
+                continue
+            existing = manifest.get(local_key)
+            if not existing or "canvas_id" not in existing:
+                continue
+            try:
+                fm, _ = parse_frontmatter(quiz_md.read_text())
+            except Exception:
+                continue
+            title = fm.get("title", quiz_folder.name)
+            override = find_due_date_override(due_dates, title, "quiz")
+            if override is None:
+                continue
+            canvas_id = existing["canvas_id"]
+            date_fields = _resolve_date_overrides(override, canvas_id, local_key, errors)
+            if not date_fields:
+                continue
+            print(f"  Updating dates: {local_key}")
+            result = capi.update_dates(course, "quiz", canvas_id, date_fields)
+            if result.get("date_warning"):
+                msg = _date_rejection_message(
+                    local_key, title, date_fields.get("due_at"), result.get("html_url")
+                )
+                print(f"  {msg}")
+                errors.append(msg)
+
+
 def _check_due_dates_coverage(
     due_dates: list[dict[str, Any]],
     repo_path: Path,
@@ -657,7 +738,6 @@ def run_sync(
             synced_keys=synced_content_keys,
             verbose=verbose,
             due_dates=due_dates,
-            settings_synced=settings_synced,
         )
 
     # 2.5. Quizzes (each quiz lives in its own sub-folder)
@@ -685,7 +765,6 @@ def run_sync(
                     synced_keys=synced_content_keys,
                     verbose=verbose,
                     due_dates=due_dates,
-                    settings_synced=settings_synced,
                 )
 
     # 2.6. Question banks
@@ -773,6 +852,12 @@ def run_sync(
                 errors.append(f"module {md_file.name}: some items could not be added")
     if order_changed:
         manifest_lib.record(manifest, manifest_path, _order_key, 0, "module_order")
+
+    if due_dates and settings_synced:
+        _apply_due_dates_only(
+            course, due_dates, repo_path, manifest, synced_content_keys,
+            errors, matcher,
+        )
 
     if due_dates:
         _check_due_dates_coverage(due_dates, repo_path, matcher)
@@ -978,21 +1063,6 @@ def _walk_assets(
             )
 
 
-def _has_due_date_override(
-    md_file: Path, local_key: str, due_dates: list[dict[str, Any]]
-) -> bool:
-    """Check if a content file has a matching due_dates entry (without a full sync)."""
-    canvas_type = infer_canvas_type(local_key)
-    if canvas_type not in ("assignment", "discussion"):
-        return False
-    try:
-        fm, _ = parse_frontmatter(md_file.read_text())
-    except Exception:
-        return False
-    title = fm.get("title", md_file.stem)
-    return find_due_date_override(due_dates, title, canvas_type) is not None
-
-
 def _sync_content_file(
     course,
     md_file: Path,
@@ -1010,21 +1080,15 @@ def _sync_content_file(
     synced_keys: set[str] | None = None,
     verbose: bool = False,
     due_dates: list[dict[str, Any]] | None = None,
-    settings_synced: bool = False,
 ) -> None:
     if newer_on_canvas is None:
         newer_on_canvas = []
     local_key = md_file.relative_to(repo_root).as_posix()
 
     if not manifest_lib.needs_sync(manifest, local_key, md_file, force_uploads):
-        if settings_synced and due_dates and _has_due_date_override(
-            md_file, local_key, due_dates
-        ):
-            pass
-        else:
-            if verbose:
-                print(f"Skipping (up-to-date): {local_key}")
-            return
+        if verbose:
+            print(f"Skipping (up-to-date): {local_key}")
+        return
 
     if not force_overwrite:
         local_mtime = datetime.fromtimestamp(md_file.stat().st_mtime, tz=timezone.utc)
@@ -1417,7 +1481,6 @@ def _sync_quiz(
     synced_keys: set[str] | None = None,
     verbose: bool = False,
     due_dates: list[dict[str, Any]] | None = None,
-    settings_synced: bool = False,
 ) -> None:
     if newer_on_canvas is None:
         newer_on_canvas = []
@@ -1425,22 +1488,9 @@ def _sync_quiz(
     questions_dir = quiz_folder / "questions"
 
     if not _quiz_needs_sync(quiz_md, questions_dir, local_key, manifest, force_uploads):
-        if settings_synced and due_dates:
-            try:
-                fm, _ = parse_frontmatter(quiz_md.read_text())
-            except Exception:
-                fm = {}
-            title = fm.get("title", quiz_folder.name)
-            if find_due_date_override(due_dates, title, "quiz") is not None:
-                pass
-            else:
-                if verbose:
-                    print(f"Skipping (up-to-date): {local_key}")
-                return
-        else:
-            if verbose:
-                print(f"Skipping (up-to-date): {local_key}")
-            return
+        if verbose:
+            print(f"Skipping (up-to-date): {local_key}")
+        return
 
     if not force_overwrite:
         all_files: list[Path] = [quiz_md]

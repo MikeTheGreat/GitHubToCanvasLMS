@@ -559,11 +559,11 @@ def test_empty_string_warning_in_errors(course_root: Path) -> None:
     assert any("empty value" in e and "KEEP" in e for e in errors)
 
 
-def test_settings_change_forces_content_resync_for_due_dates(
+def test_settings_change_applies_dates_only(
     course_root: Path, mocker
 ) -> None:
-    """When course_settings.toml changes and due_dates exist, content files
-    should be re-synced even if their .md files haven't changed."""
+    """When course_settings.toml changes and due_dates exist, dates should be
+    applied via a dates-only API call without re-uploading content."""
     import os
     from github_to_canvas import manifest as manifest_lib
 
@@ -615,9 +615,14 @@ def test_settings_change_forces_content_resync_for_due_dates(
     )
     run_sync(config, course_root)
 
+    # Content should NOT have been re-uploaded (file is up-to-date)
+    course.create_assignment.assert_not_called()
+    # Dates should have been applied via a dates-only edit call
     assignment.edit.assert_called_once()
     call_kwargs = assignment.edit.call_args[1]
     assert call_kwargs["assignment"]["due_at"] == "2099-12-31T23:59:00"
+    assert call_kwargs["assignment"]["unlock_at"] == ""
+    assert call_kwargs["assignment"]["lock_at"] == ""
 
 
 # ---------------------------------------------------------------------------
