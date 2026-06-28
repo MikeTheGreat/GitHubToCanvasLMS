@@ -533,8 +533,8 @@ tab_configuration = [
 # BEFORE any [section] or [[section]] header.
 due_dates = [
     { name = "Week 1 Problem Set", unlock_at = "2025-01-27T00:00:00-05:00", due_at = "2025-02-01T23:59:00-05:00", lock_at = "2025-02-08T23:59:00-05:00" },
-    { name = "Week 1 Discussion", type = "discussion", unlock_at = "", due_at = "2025-02-03T23:59:00-05:00", lock_at = "" },
-    { name = "Midterm Quiz", type = "quiz", unlock_at = "", due_at = "2025-03-01T23:59:00-05:00", lock_at = "" },
+    { name = "Week 1 Discussion", type = "discussion", unlock_at = "NONE", due_at = "2025-02-03T23:59:00-05:00", lock_at = "CREATE_NONE_THEN_KEEP" },
+    { name = "Midterm Quiz", type = "quiz", unlock_at = "NONE", due_at = "2025-03-01T23:59:00-05:00", lock_at = "CREATE_NONE_THEN_KEEP" },
 ]
 
 # ── Default post policy (when grades become visible to students) ──────────
@@ -805,6 +805,8 @@ published: true          # true = visible to students; false = draft (the defaul
 Welcome to the course. See [Week 1 Assignment](../assignments/week1.md).
 ```
 
+Pages are updated in place on Canvas when re-synced.
+
 **Images in Markdown:**  Pandoc turns a standalone image paragraph into a `<figure>` with a visible caption. Use the trailing-backslash trick to suppress the caption, or leave the alt text empty for decorative images:
 
 | Goal | Markdown |
@@ -818,6 +820,8 @@ Canvas will translate the H1 headers into styled normal paragraphs so it looks r
 will not work correctly with screen readers!!
 
 ### Assignment (`assignments/`)
+
+Assignments are updated in place on Canvas when re-synced.
 
 ```markdown
 ---
@@ -915,6 +919,8 @@ peer reviews** are all settable from the frontmatter above. A few caveats:
 
 ### Discussion (`discussions/`)
 
+Discussions are updated in place on Canvas when re-synced.
+
 A discussion is **ungraded** unless you add the grading fields (`points_possible`,
 `due_at`, `lock_at`, `unlock_at`). Including any of them attaches a Canvas
 assignment and makes the discussion graded; omit them all for an ungraded
@@ -940,6 +946,8 @@ Post your initial response by Wednesday, then reply to two classmates.
 ### Module (`modules/`)
 
 Module files don't have a body that becomes HTML. The body lists content items and text headers (SubHeaders). Links to local `.md` files become Canvas content items; absolute URLs become ExternalUrl items.
+
+**Sync behavior:** When a module is synced, the module itself is updated in place on Canvas, but all of its items (content links, SubHeaders, ExternalUrls) are deleted and re-created from the module file.
 
 ```markdown
 ---
@@ -1025,11 +1033,13 @@ order = [
 ]
 ```
 
-When this file is modified, the tool re-syncs all listed modules on the next run to apply their new positions. This file is also generated automatically by the `import` subcommand, preserving the module order from the original Canvas export.
+When this file is modified, the tool repositions the listed modules on Canvas without re-syncing their content. If a listed module isn't found locally or hasn't been synced to Canvas yet, a warning is printed. This file is also generated automatically by the `import` subcommand, preserving the module order from the original Canvas export.
 
 ### Quiz (`quizzes/`)
 
 Each quiz lives in its own sub-folder. The folder name becomes the quiz slug.
+
+**Sync behavior:** When a quiz is synced, the quiz itself is updated in place on Canvas, but all of its questions are deleted and re-created from the question files.
 
 ```text
 quizzes/

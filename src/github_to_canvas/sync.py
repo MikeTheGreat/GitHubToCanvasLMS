@@ -831,7 +831,6 @@ def run_sync(
             position = position_map.get(md_file.name)
             force_this = (
                 force_uploads
-                or (order_changed and md_file.name in position_map)
                 or md_file in modules_with_updated_refs
             )
             had_module_warnings = _sync_module(
@@ -851,6 +850,7 @@ def run_sync(
             if had_module_warnings:
                 errors.append(f"module {md_file.name}: some items could not be added")
     if order_changed:
+        _reorder_modules(course, position_map, repo_path, manifest, errors)
         manifest_lib.record(manifest, manifest_path, _order_key, 0, "module_order")
 
     if due_dates and settings_synced:
@@ -1357,6 +1357,35 @@ def _load_module_order(repo_path: Path) -> dict[str, int]:
     with order_path.open("rb") as fh:
         data = tomllib.load(fh)
     return {name: i for i, name in enumerate(data.get("order", []), start=1)}
+
+
+def _reorder_modules(
+    course,
+    position_map: dict[str, int],
+    repo_path: Path,
+    manifest: dict,
+    errors: list[str] | None,
+) -> None:
+    """Set module positions on Canvas without re-syncing content."""
+    modules_dir = repo_path / "modules"
+    for filename, position in position_map.items():
+        local_key = f"modules/{filename}"
+        local_path = modules_dir / filename
+        if not local_path.exists():
+            msg = f"module_order.toml lists '{filename}' but it was not found locally"
+            print(f"  WARNING: {msg}")
+            if errors is not None:
+                errors.append(msg)
+            continue
+        entry = manifest.get(local_key)
+        if entry is None or "canvas_id" not in entry:
+            msg = f"module_order.toml lists '{filename}' but it has not been synced to Canvas yet"
+            print(f"  WARNING: {msg}")
+            if errors is not None:
+                errors.append(msg)
+            continue
+        print(f"Reordering module: {local_key} → position {position}")
+        capi.reposition_module(course, entry["canvas_id"], position)
 
 
 def _sync_module(

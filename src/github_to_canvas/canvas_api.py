@@ -712,6 +712,12 @@ def create_or_update_module(course, canvas_id: int | None, title: str, **kwargs)
     return course.create_module(module={"name": title, **kwargs})
 
 
+def reposition_module(course, canvas_id: int, position: int):
+    """Set only the position of an existing module without re-syncing its content."""
+    module = course.get_module(canvas_id)
+    module.edit(module={"position": position})
+
+
 _CANVAS_ITEM_TYPE = {
     "page": "Page",
     "assignment": "Assignment",

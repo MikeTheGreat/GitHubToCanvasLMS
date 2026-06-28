@@ -242,8 +242,11 @@ When implemented, the suggested approach:
 - Alternately: what about having "move" / rename commands in the tool to handle this?
   - It'll need to update the manifest file
 
+## In course_settings.toml, within due_dates, KEEP and CREATE_NONE_THEN_KEEP do the same thing
+Maybe remove KEEP?
 
-# Would be nice to import Announcements
+## Would be nice to import Announcements
 - By default make them unpublished, so they could be posted later?
 
 # Bugs to Fix:
+- Changing module_order.toml doesn't re-arrange the modules in Canvas

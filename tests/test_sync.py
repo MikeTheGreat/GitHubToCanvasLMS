@@ -2317,10 +2317,10 @@ def test_module_without_order_file_has_no_position(
     assert "position" not in call_kwargs
 
 
-def test_module_order_change_triggers_resync(
+def test_module_order_change_repositions_without_resync(
     mock_course, mocker, tmp_path
 ) -> None:
-    """Modules listed in module_order.toml are re-synced when that file changes."""
+    """When module_order.toml changes, modules are repositioned but not fully re-synced."""
     root = tmp_path / "course"
     _make_minimal_module_repo(root, ["week-1.md"])
     order_path = root / "course_settings" / "module_order.toml"
@@ -2344,10 +2344,69 @@ def test_module_order_change_triggers_resync(
 
     run_sync(_config(), root)
 
-    # Module was re-synced (updated, not created) with position=1
+    # Module was NOT fully re-synced (no create, no clear_module_items)
     mock_course.create_module.assert_not_called()
+    # Lightweight reposition call only sets position
     edit_kwargs = module.edit.call_args[1]["module"]
-    assert edit_kwargs["position"] == 1
+    assert edit_kwargs == {"position": 1}
+
+
+def test_module_order_error_when_file_not_found_locally(
+    mock_course, mocker, tmp_path, capsys
+) -> None:
+    """Error is printed when module_order.toml lists a module that doesn't exist locally."""
+    root = tmp_path / "course"
+    _make_minimal_module_repo(root, ["week-1.md"])
+    order_path = root / "course_settings" / "module_order.toml"
+    order_path.parent.mkdir()
+    order_path.write_text('order = ["week-1.md", "missing.md"]\n')
+
+    mod1 = _mock_module(101)
+    mock_course.create_module.return_value = mod1
+
+    mocker.patch("github_to_canvas.manifest.flush")
+    reposition_module = _mock_module(101)
+    mock_course.get_module.return_value = reposition_module
+
+    run_sync(_config(), root)
+
+    out = capsys.readouterr().out
+    assert "module_order.toml lists 'missing.md' but it was not found locally" in out
+
+
+def test_module_order_error_when_not_synced_to_canvas(
+    mock_course, mocker, tmp_path, capsys
+) -> None:
+    """Error is printed when module_order.toml lists a module not yet synced to Canvas."""
+    root = tmp_path / "course"
+    _make_minimal_module_repo(root, ["week-1.md", "week-2.md"])
+    order_path = root / "course_settings" / "module_order.toml"
+    order_path.parent.mkdir()
+    order_path.write_text('order = ["week-1.md", "week-2.md"]\n')
+    _make_old(root / "modules" / "week-1.md")
+    _make_old(root / "modules" / "week-2.md")
+
+    # week-2.md is ignored so it won't be synced in the main loop
+    (root / ".canvasignore").write_text("modules/week-2.md\n")
+
+    # Only week-1.md is in manifest; week-2.md has never been synced
+    preloaded = {
+        "modules/week-1.md": {
+            "canvas_id": 101, "canvas_type": "module",
+            "canvas_item_ids": {},
+            "last_synced": _FUTURE_SYNCED,
+        },
+    }
+    mocker.patch("github_to_canvas.manifest.load", return_value=preloaded)
+    mocker.patch("github_to_canvas.manifest.flush")
+
+    reposition_module = _mock_module(101)
+    mock_course.get_module.return_value = reposition_module
+
+    run_sync(_config(), root)
+
+    out = capsys.readouterr().out
+    assert "module_order.toml lists 'week-2.md' but it has not been synced to Canvas yet" in out
 
 
 def test_module_order_up_to_date_skips_resync(
