@@ -236,11 +236,23 @@ When implemented, the suggested approach:
 - Use `canvasapi` directly in the test assertions to fetch each uploaded item and verify its content, metadata, and published state
 - Run this suite manually or in a separate CI job gated on `CANVAS_API_TOKEN` being present — not on every push
 
-## How to move/rename files locally without creating orphaned Canvas items
-- Would be nice to be able to move things around in the local file system
-  - Maybe if we store the canvas ID in the file?
-- Alternately: what about having "move" / rename commands in the tool to handle this?
-  - It'll need to update the manifest file
+## Filesystem watcher for automatic move/rename tracking
+
+A background daemon (using Python's `watchdog` library) that monitors the course
+repo for file moves/renames and automatically runs the same logic as the `mv`
+subcommand — updating the manifest, rewriting cross-references, and updating
+`module_order.toml`.
+
+The `mv` subcommand's core logic (in `mv.py`) is designed to be called
+programmatically, so the watcher would be a thin event-detection layer on top.
+
+Caveats to address:
+- Dropbox sync generates spurious file events (creates/deletes/moves) that must
+  be distinguished from user-initiated operations
+- Some editors implement rename as create-new + delete-old rather than atomic
+  rename, so the watcher would need heuristic correlation
+- Must be running at the time of the move — missed events are silent failures
+- Cross-filesystem moves decompose into copy+delete with no way to correlate
 
 ## In course_settings.toml, within due_dates, KEEP and CREATE_NONE_THEN_KEEP do the same thing
 Maybe remove KEEP?

@@ -459,6 +459,49 @@ Running: mkdocs build --site-dir /abs/site -f /tmp/g2c-publish-xxxx/mkdocs.yml
 Built static site: /abs/site
 ```
 
+## `mv` Subcommand
+
+Moves or renames a file or directory within the course repo, updating all
+internal references so nothing breaks on the next sync.
+
+```text
+github-to-canvas mv [--noop/-n] [--verbose/-v] SRC DEST
+```
+
+**What it updates:**
+
+1. **Physical move** — uses `git mv` when inside a git repo (falls back to
+   filesystem move otherwise). Handles case-only renames (e.g. `Unit-01` →
+   `unit-01`) via a temporary intermediate name.
+2. **`.canvas-manifest.toml`** — renames top-level keys for moved files and
+   updates `canvas_item_ids` sub-tables inside module entries.
+3. **All `.md` files in the repo** — rewrites relative Markdown links
+   (`[text](path)`, `![alt](path)`) and inline snippet references
+   (`$path.md$`) that point to moved files. Also adjusts outbound links inside
+   a moved file when its directory depth changes.
+4. **`course_settings/module_order.toml`** — updates filenames in the `order`
+   array when a module file is renamed.
+
+**Special cases:**
+
+- **Quiz folder renames** — when renaming `quizzes/old-name/` to
+  `quizzes/new-name/`, the inner `.md` file that must match the folder name
+  is also renamed (`old-name.md` → `new-name.md`).
+- **Question bank folder renames** — same as quizzes but for the inner `.toml`
+  file.
+
+**Validation (errors before any work is done):**
+
+- Source must exist, destination must not (except for case-only renames).
+- Both paths must be within the course repo.
+- No cross-content-type moves (e.g. `pages/` → `assignments/`).
+
+**Auto-detects the repo root** by walking up from the source path looking for
+`course_settings/course_settings.toml`.
+
+This subcommand is purely local — it never contacts Canvas. Run `update` after
+moving files to push the changes.
+
 ## Configuration
 
 ### Tool config file (`course_settings/canvas.toml`)

@@ -1,4 +1,5 @@
 import os
+import subprocess
 import sys
 import tomllib
 from pathlib import Path
@@ -15,6 +16,7 @@ load_dotenv(find_dotenv(usecwd=True), override=True, verbose=True)
 from .canvas_api import get_course, read_tab_configuration
 from .config import load as load_config
 from .imscc_import import run_import
+from .mv import run_mv
 from .orphans import find_orphans, print_report
 from .publish import run_publish
 from .sync import run_prune, run_sync, run_targeted_sync
@@ -33,7 +35,24 @@ def _ensure_pandoc() -> None:
         die("Pandoc not found. Run `github-to-canvas setup` to install it.")
 
 
-@click.group(context_settings={"help_option_names": ["-h", "--help"]})
+class _FullHelpGroup(click.Group):
+    """Show full summary sentences in the command listing instead of truncating."""
+
+    def format_commands(self, ctx, formatter):
+        commands = []
+        for subcommand in self.list_commands(ctx):
+            cmd = self.get_command(ctx, subcommand)
+            if cmd is None or cmd.hidden:
+                continue
+            help_text = cmd.get_short_help_str(limit=300)
+            commands.append((subcommand, help_text))
+
+        if commands:
+            with formatter.section("Commands"):
+                formatter.write_dl(commands)
+
+
+@click.group(cls=_FullHelpGroup, context_settings={"help_option_names": ["-h", "--help"]})
 def main() -> None:
     """Manage Canvas LMS course content from a Markdown GitHub repo."""
 
@@ -110,6 +129,45 @@ def install_completion(shell: str | None) -> None:
             '  autoload -Uz compinit && compinit'
         )
     click.echo("Restart your shell (or open a new tab) to activate.")
+
+
+@main.command(name="mv", no_args_is_help=True)
+@click.argument("src", type=click.Path(path_type=Path))
+@click.argument("dest", type=click.Path(path_type=Path))
+@click.option(
+    "--noop",
+    "-n",
+    is_flag=True,
+    default=False,
+    help="Show what would change without making any modifications.",
+)
+@click.option(
+    "--verbose",
+    "-v",
+    is_flag=True,
+    default=False,
+    help="Print each individual change (moved file, updated link, etc.).",
+)
+def mv_cmd(src: Path, dest: Path, noop: bool, verbose: bool) -> None:
+    """Move or rename a file/directory, updating the manifest and all references.
+
+    SRC is the file or directory to move. DEST is the new path.
+    Both must be within the same course repo and the same content-type
+    directory (e.g. both under pages/, or both under assets/).
+
+    Updates .canvas-manifest.toml, all Markdown cross-references,
+    snippet references, and module_order.toml as needed.
+
+    Uses git mv when inside a git repository.
+    """
+    try:
+        run_mv(src, dest, noop=noop, verbose=verbose)
+    except ValueError as e:
+        die(str(e))
+    except subprocess.CalledProcessError as e:
+        die(f"git mv failed: {e}")
+    except Exception as e:
+        die(str(e))
 
 
 @main.command(name="import", no_args_is_help=True)

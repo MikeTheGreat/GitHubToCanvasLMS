@@ -4,7 +4,12 @@ Sync a Markdown course repository to [Canvas LMS](https://www.instructure.com/ca
 
 Write your course content as Markdown files in a Git repository. Run this tool to convert them to HTML and publish them to Canvas — pages, assignments, discussion topics, and modules.
 
----
+
+## Important Gotch'yas:
+- If you change a Module Markdown file then all the links in that module will be invalidated.  
+- If you want to move or rename a file please use the `mv` subcommand - it'l adjust links, the manifest cache, etc, for you.
+
+
 
 ## Contents
 
@@ -29,6 +34,7 @@ Write your course content as Markdown files in a Git repository. Run this tool t
     - [`-s` — single target (no traversal)](#-s--single-target-no-traversal)
     - [Combining `-t` and `-s`](#combining--t-and--s)
   - [Removing content (`prune`)](#removing-content-prune)
+  - [Moving and renaming files (`mv`)](#moving-and-renaming-files-mv)
   - [Content file format](#content-file-format)
     - [`course_settings.toml`](#course_settingstoml)
     - [Syllabus (`course_settings/syllabus.md`)](#syllabus-course_settingssyllabusmd)
@@ -407,6 +413,59 @@ needed). Use it to clear entries the other modes leave behind — items you alre
 removed from Canvas manually, unsupported types, or in-use protected resources. It
 ignores the in-use protection and type rules above because it never changes
 anything on Canvas; it only forgets the local bookkeeping.
+
+---
+
+## Moving and renaming files (`mv`)
+
+Use `mv` to move or rename files and directories within your course repo.
+It handles all the bookkeeping so nothing breaks on the next `update`:
+
+```text
+Usage: github-to-canvas mv [OPTIONS] SRC DEST
+
+  Move or rename a file/directory, updating the manifest and all references.
+
+Options:
+  -n, --noop     Show what would change without making any modifications.
+  -v, --verbose  Print each individual change (moved file, updated link, etc.).
+  --help         Show this message and exit.
+```
+
+`mv` updates:
+
+- The file/directory on disk (via `git mv` when inside a git repo)
+- `.canvas-manifest.toml` — manifest keys and `canvas_item_ids` in module entries
+- All Markdown files — relative links and snippet references
+- `module_order.toml` — if a module file is renamed
+
+**Examples:**
+
+```bash
+# Rename a page
+github-to-canvas mv pages/old-name.md pages/new-name.md
+
+# Rename an asset directory (updates all references across the repo)
+github-to-canvas mv assets/Lecture-Related/Unit-01 assets/lecture-related/unit-01
+
+# Rename a quiz folder (also renames the inner .md to match)
+github-to-canvas mv quizzes/old-quiz quizzes/new-quiz
+
+# Preview what would change without doing anything
+github-to-canvas mv --noop pages/old.md pages/new.md
+```
+
+**Restrictions:**
+
+- Both source and destination must be within the same course repo
+- Cannot move across content-type directories (e.g. `pages/` to `assignments/`)
+- The destination's parent directory must already exist — this prevents accidental
+  renames of intermediate path components due to typos. To rename multiple levels,
+  rename them one at a time.
+- The repo root is auto-detected by looking for `course_settings/course_settings.toml`
+
+This command is purely local — it never contacts Canvas. Run `update` afterward
+to push the changes.
 
 ---
 
