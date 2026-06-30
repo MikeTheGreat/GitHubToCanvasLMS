@@ -1154,6 +1154,10 @@ def _sync_content_file(
 
     if not force_overwrite:
         local_mtime = datetime.fromtimestamp(md_file.stat().st_mtime, tz=timezone.utc)
+        for snippet_path in _file_referenced_snippets(md_file, snippets_dir):
+            snippet_mtime = datetime.fromtimestamp(snippet_path.stat().st_mtime, tz=timezone.utc)
+            if snippet_mtime > local_mtime:
+                local_mtime = snippet_mtime
         if _canvas_is_newer(course, local_key, local_mtime, manifest, newer_on_canvas):
             return
 
@@ -1502,6 +1506,10 @@ def _sync_module(
 
     if not force_overwrite:
         local_mtime = datetime.fromtimestamp(md_file.stat().st_mtime, tz=timezone.utc)
+        for snippet_path in _file_referenced_snippets(md_file, snippets_dir):
+            snippet_mtime = datetime.fromtimestamp(snippet_path.stat().st_mtime, tz=timezone.utc)
+            if snippet_mtime > local_mtime:
+                local_mtime = snippet_mtime
         if _canvas_is_newer(course, local_key, local_mtime, manifest, newer_on_canvas):
             return False
 
@@ -1629,6 +1637,11 @@ def _sync_quiz(
             datetime.fromtimestamp(f.stat().st_mtime, tz=timezone.utc)
             for f in all_files
         )
+        for f in all_files:
+            for snippet_path in _file_referenced_snippets(f, snippets_dir):
+                snippet_mtime = datetime.fromtimestamp(snippet_path.stat().st_mtime, tz=timezone.utc)
+                if snippet_mtime > local_max_mtime:
+                    local_max_mtime = snippet_mtime
         if _canvas_is_newer(
             course, local_key, local_max_mtime, manifest, newer_on_canvas
         ):
