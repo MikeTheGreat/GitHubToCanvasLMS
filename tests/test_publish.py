@@ -359,7 +359,7 @@ def test_render_module_overview_redirects_quiz_links(tmp_path):
         "---\ntitle: Q\npublished: true\n---\nQuiz\n"
     )
     (tmp_path / "pages").mkdir()
-    (tmp_path / "pages" / "p.md").write_text("---\ntitle: P\n---\nPage\n")
+    (tmp_path / "pages" / "p.md").write_text("---\ntitle: P\npublished: true\n---\nPage\n")
     mod.write_text(
         "---\ntitle: Test\npublished: true\n---\n"
         "- [My Quiz](../quizzes/q/q.md)\n"
@@ -516,7 +516,7 @@ def test_collect_reachable_skips_unpublished_items(tmp_path):
         '- [Hidden](../pages/hid.md) <!-- published="false" -->\n'
     )
     (tmp_path / "pages").mkdir()
-    (tmp_path / "pages" / "vis.md").write_text("---\ntitle: V\n---\nV\n")
+    (tmp_path / "pages" / "vis.md").write_text("---\ntitle: V\npublished: true\n---\nV\n")
     (tmp_path / "pages" / "hid.md").write_text("---\ntitle: H\n---\nH\n")
     reachable = publish.collect_reachable(tmp_path, {"modules/m.md"})
     assert "pages/vis.md" in reachable
@@ -532,7 +532,7 @@ def test_collect_reachable_skips_unpublished_asset(tmp_path):
         '- [Solutions](../assets/solutions.docx) <!-- published="false" -->\n'
     )
     (tmp_path / "pages").mkdir()
-    (tmp_path / "pages" / "vis.md").write_text("---\ntitle: V\n---\nV\n")
+    (tmp_path / "pages" / "vis.md").write_text("---\ntitle: V\npublished: true\n---\nV\n")
     (tmp_path / "assets").mkdir()
     (tmp_path / "assets" / "solutions.docx").write_bytes(b"fake")
     reachable = publish.collect_reachable(tmp_path, {"modules/m.md"})

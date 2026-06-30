@@ -151,3 +151,45 @@ def test_needs_sync_file_older_than_last_synced(tmp_path: Path) -> None:
 def test_needs_sync_force_overrides_up_to_date(tmp_path: Path) -> None:
     f = _make_file(tmp_path, 0.0)
     assert needs_sync({"pages/a.md": _FUTURE_ENTRY}, "pages/a.md", f, force=True) is True
+
+
+# ---------------------------------------------------------------------------
+# needs_sync — extra_mtime_paths
+# ---------------------------------------------------------------------------
+
+
+def test_needs_sync_extra_mtime_paths_newer_triggers_sync(tmp_path: Path) -> None:
+    f = _make_file(tmp_path, 0.0)  # epoch — older than _OLD_ENTRY's 2020 last_synced, by itself
+    snippet = tmp_path / "snippet.md"
+    snippet.write_text("")
+    os.utime(snippet, (1_700_000_000.0, 1_700_000_000.0))  # Nov 2023 — newer than 2020
+    assert needs_sync(
+        {"pages/a.md": _OLD_ENTRY}, "pages/a.md", f,
+        extra_mtime_paths=lambda: [snippet],
+    ) is True
+
+
+def test_needs_sync_extra_mtime_paths_older_does_not_trigger_sync(tmp_path: Path) -> None:
+    f = _make_file(tmp_path, 0.0)  # epoch — older than _OLD_ENTRY's 2020 last_synced
+    snippet = tmp_path / "snippet.md"
+    snippet.write_text("")
+    os.utime(snippet, (0.0, 0.0))  # also epoch — older than 2020
+    assert needs_sync(
+        {"pages/a.md": _OLD_ENTRY}, "pages/a.md", f,
+        extra_mtime_paths=lambda: [snippet],
+    ) is False
+
+
+def test_needs_sync_extra_mtime_paths_not_called_when_already_stale(tmp_path: Path) -> None:
+    """The callable is lazy: if the file's own mtime already settles it, it's never invoked."""
+    f = _make_file(tmp_path, 1_700_000_000.0)  # newer than _OLD_ENTRY's last_synced
+
+    def _boom() -> list[Path]:
+        raise AssertionError("extra_mtime_paths should not be called")
+
+    assert needs_sync({"pages/a.md": _OLD_ENTRY}, "pages/a.md", f, extra_mtime_paths=_boom) is True
+
+
+def test_needs_sync_default_extra_mtime_paths_unchanged_behavior(tmp_path: Path) -> None:
+    f = _make_file(tmp_path, 0.0)
+    assert needs_sync({"pages/a.md": _FUTURE_ENTRY}, "pages/a.md", f) is False

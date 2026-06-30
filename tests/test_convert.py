@@ -7,6 +7,7 @@ import pytest
 
 from github_to_canvas.convert import (
     expand_frontmatter_snippets,
+    find_referenced_snippets,
     markdown_to_html,
     preprocess_snippets,
 )
@@ -226,6 +227,100 @@ def test_non_snippet_external_link_unchanged(tmp_path: Path) -> None:
     text = "[Go](https://example.com/courses/99999/modules)"
     result = preprocess_snippets(text, source, snippets_dir)
     assert result == text
+
+
+# ---------------------------------------------------------------------------
+# find_referenced_snippets
+# ---------------------------------------------------------------------------
+
+def test_find_referenced_snippets_block_link(tmp_path: Path) -> None:
+    snippets_dir = tmp_path / "snippets"
+    snippets_dir.mkdir()
+    snippet = snippets_dir / "office-hours.md"
+    snippet.write_text("Office hours...")
+    source = tmp_path / "pages" / "notes.md"
+    source.parent.mkdir()
+    text = "[My Office Hours](../snippets/office-hours.md)\n"
+    assert find_referenced_snippets(text, source, snippets_dir) == {snippet}
+
+
+def test_find_referenced_snippets_inline(tmp_path: Path) -> None:
+    snippets_inline = tmp_path / "snippets" / "inline"
+    snippets_inline.mkdir(parents=True)
+    snippet = snippets_inline / "CANVAS_COURSE_REFERENCE.md"
+    snippet.write_text("https://school.instructure.com/courses/999\n")
+    source = tmp_path / "pages" / "notes.md"
+    source.parent.mkdir()
+    text = "Go to [Grades]($../snippets/inline/CANVAS_COURSE_REFERENCE.md$/grades).\n"
+    assert find_referenced_snippets(text, source, tmp_path / "snippets") == {snippet}
+
+
+def test_find_referenced_snippets_paste_into_frontmatter(tmp_path: Path) -> None:
+    """PASTE_SNIPPET_INTO_FRONTMATTER references are found too — same [text](path) syntax."""
+    snippets_dir = tmp_path / "snippets"
+    snippets_dir.mkdir()
+    snippet = snippets_dir / "defaults.md"
+    snippet.write_text("points_possible: 50\n")
+    source = tmp_path / "assignments" / "worksheet1.md"
+    source.parent.mkdir()
+    text = "[PASTE_SNIPPET_INTO_FRONTMATTER](../snippets/defaults.md)\n\nBody text.\n"
+    assert find_referenced_snippets(text, source, snippets_dir) == {snippet}
+
+
+def test_find_referenced_snippets_multiple(tmp_path: Path) -> None:
+    snippets_dir = tmp_path / "snippets"
+    snippets_dir.mkdir()
+    a = snippets_dir / "a.md"
+    b = snippets_dir / "b.md"
+    a.write_text("A")
+    b.write_text("B")
+    source = tmp_path / "pages" / "notes.md"
+    source.parent.mkdir()
+    text = "[A](../snippets/a.md) and [B](../snippets/b.md)\n"
+    assert find_referenced_snippets(text, source, snippets_dir) == {a, b}
+
+
+def test_find_referenced_snippets_ignores_non_snippet_links(tmp_path: Path) -> None:
+    snippets_dir = tmp_path / "snippets"
+    snippets_dir.mkdir()
+    source = tmp_path / "pages" / "notes.md"
+    source.parent.mkdir()
+    text = "See [Assignment](../assignments/week1.md) or [Canvas](https://canvas.example.com).\n"
+    assert find_referenced_snippets(text, source, snippets_dir) == set()
+
+
+def test_find_referenced_snippets_ignores_missing_file(tmp_path: Path) -> None:
+    snippets_dir = tmp_path / "snippets"
+    snippets_dir.mkdir()
+    source = tmp_path / "pages" / "notes.md"
+    source.parent.mkdir()
+    text = "[Gone](../snippets/gone.md)\n"
+    assert find_referenced_snippets(text, source, snippets_dir) == set()
+
+
+def test_find_referenced_snippets_ignores_path_outside_snippets_dir(tmp_path: Path) -> None:
+    snippets_dir = tmp_path / "snippets"
+    snippets_dir.mkdir()
+    (tmp_path / "pages").mkdir()
+    sibling = tmp_path / "pages" / "other.md"
+    sibling.write_text("text")
+    source = tmp_path / "pages" / "notes.md"
+    text = "[Other](other.md)\n"
+    assert find_referenced_snippets(text, source, snippets_dir) == set()
+
+
+def test_find_referenced_snippets_no_errors_printed(
+    tmp_path: Path, capsys: pytest.CaptureFixture
+) -> None:
+    """Unlike preprocess_snippets, this is a passive probe — no error output."""
+    snippets_dir = tmp_path / "snippets"
+    snippets_dir.mkdir()
+    source = tmp_path / "pages" / "notes.md"
+    source.parent.mkdir()
+    text = "[Gone](../snippets/gone.md)\n"
+    find_referenced_snippets(text, source, snippets_dir)
+    captured = capsys.readouterr()
+    assert captured.out == ""
 
 
 # ---------------------------------------------------------------------------

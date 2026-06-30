@@ -14,7 +14,12 @@ import yaml
 from . import canvas_api as capi
 from . import manifest as manifest_lib
 from .config import Config
-from .convert import expand_frontmatter_snippets, markdown_to_html, preprocess_snippets
+from .convert import (
+    expand_frontmatter_snippets,
+    find_referenced_snippets,
+    markdown_to_html,
+    preprocess_snippets,
+)
 from .ignore import IgnoreMatcher, load_ignore_matcher
 from .link_rewrite import extract_local_refs, infer_canvas_type, rewrite_links
 from .orphans import ResourceKey, extract_canvas_refs
@@ -264,6 +269,29 @@ def parse_frontmatter(text: str) -> tuple[dict[str, Any], str]:
     return yaml.safe_load(text[4:end]) or {}, text[end + 5 :]
 
 
+def _file_referenced_snippets(path: Path, snippets_dir: Path) -> set[Path]:
+    """Snippets referenced by a file's body, for staleness checks only.
+
+    Swallows malformed frontmatter rather than raising — if the file does
+    turn out to need a real sync, its own processing path reports the error.
+    """
+    try:
+        _, body = parse_frontmatter(path.read_text())
+    except yaml.YAMLError:
+        return set()
+    return find_referenced_snippets(body, path, snippets_dir)
+
+
+def _question_files_referenced_snippets(questions_dir: Path, snippets_dir: Path) -> set[Path]:
+    """Union of snippets referenced by every question file in questions_dir."""
+    if not questions_dir.exists():
+        return set()
+    found: set[Path] = set()
+    for q_path in questions_dir.glob("*.md"):
+        found |= _file_referenced_snippets(q_path, snippets_dir)
+    return found
+
+
 _MODULE_LINK_RE = re.compile(r"^(\s*)-\s+\[([^\]]+)\]\(([^)]+)\)")
 _MODULE_LINK_TITLE_RE = re.compile(r'''^(.*?)\s+["'].*["']\s*$''')
 _MODULE_HEADER_RE = re.compile(r"^#{1,6}\s+(.+)")
@@ -326,6 +354,7 @@ def parse_module_body(
                 indent = MAX_CANVAS_INDENT
             attrs_m = _ITEM_ATTRS_RE.search(line)
             attrs = _parse_item_attrs(attrs_m.group(1)) if attrs_m else {}
+            published_explicit = "published" in attrs
             published = attrs.get("published", "true").lower() != "false"
 
             # Detect absolute URLs → ExternalUrl item
@@ -346,8 +375,17 @@ def parse_module_body(
                 resolved = (module_file.parent / href).resolve()
                 local_path = resolved.relative_to(course_root.resolve()).as_posix()
                 items.append(
-                    {"type": "content", "title": title, "local_path": local_path,
-                     "indent": indent, "published": published}
+                    {
+                        "type": "content", "title": title, "local_path": local_path,
+                        "indent": indent,
+                        # None (not explicit) is resolved in _sync_module from the
+                        # referenced content file's own `published` frontmatter —
+                        # Canvas republishes an item's content when a module item
+                        # pointing at it is (re-)created with published=true, so
+                        # defaulting to True here would silently re-publish content
+                        # whose own frontmatter says published: false.
+                        "published": published if published_explicit else None,
+                    }
                 )
             continue
         header_m = _MODULE_HEADER_RE.match(line)
@@ -368,6 +406,24 @@ def parse_module_body(
             items.append({"type": "SubHeader",
                          "title": plain_m.group(2).strip(), "indent": indent})
     return items
+
+
+def _content_default_published(repo_root: Path, local_path: str) -> bool:
+    """Published default for a module item with no explicit override.
+
+    Mirrors content files' own `published` frontmatter so that re-syncing a
+    module doesn't republish content the user explicitly unpublished.  Assets
+    (non-.md targets, e.g. File items) have no such frontmatter, so they keep
+    the historical default of True.
+    """
+    ref_path = repo_root / local_path
+    if ref_path.suffix != ".md" or not ref_path.exists():
+        return True
+    try:
+        ref_frontmatter, _ = parse_frontmatter(ref_path.read_text())
+    except yaml.YAMLError:
+        return True
+    return bool(ref_frontmatter.get("published", False))
 
 
 def check_title_collisions(
@@ -1085,7 +1141,10 @@ def _sync_content_file(
         newer_on_canvas = []
     local_key = md_file.relative_to(repo_root).as_posix()
 
-    if not manifest_lib.needs_sync(manifest, local_key, md_file, force_uploads):
+    if not manifest_lib.needs_sync(
+        manifest, local_key, md_file, force_uploads,
+        extra_mtime_paths=lambda: _file_referenced_snippets(md_file, snippets_dir),
+    ):
         if verbose:
             print(f"Skipping (up-to-date): {local_key}")
         return
@@ -1320,6 +1379,24 @@ def _sync_content_file(
                     print(f"  {msg}")
                     if errors is not None:
                         errors.append(msg)
+        elif entry.get("rubric_settings") is not None:
+            rubric_settings = entry["rubric_settings"]
+            rubric_id = (
+                rubric_settings["id"]
+                if isinstance(rubric_settings, dict)
+                else rubric_settings.id
+            )
+            try:
+                removed = capi.remove_rubric_from_assignment(
+                    course, entry["canvas_id"], rubric_id
+                )
+                if removed:
+                    print(f"  Removed rubric association: {local_key}")
+            except Exception as exc:
+                msg = f"WARNING: {local_key}: rubric removal failed: {exc}"
+                print(f"  {msg}")
+                if errors is not None:
+                    errors.append(msg)
         if synced_keys is not None:
             synced_keys.add(local_key)
     elif canvas_type == "discussion":
@@ -1410,8 +1487,12 @@ def _sync_module(
     if newer_on_canvas is None:
         newer_on_canvas = []
     local_key = md_file.relative_to(repo_root).as_posix()
+    snippets_dir = repo_root / "snippets"
 
-    if not manifest_lib.needs_sync(manifest, local_key, md_file, force_uploads):
+    if not manifest_lib.needs_sync(
+        manifest, local_key, md_file, force_uploads,
+        extra_mtime_paths=lambda: _file_referenced_snippets(md_file, snippets_dir),
+    ):
         if verbose:
             print(f"Skipping (up-to-date): {local_key}")
         return False
@@ -1434,10 +1515,12 @@ def _sync_module(
         if errors is not None:
             errors.append(msg)
         return False
-    snippets_dir = repo_root / "snippets"
     frontmatter, body = expand_frontmatter_snippets(frontmatter, body, md_file, snippets_dir, errors)
     body = preprocess_snippets(body, md_file, snippets_dir)
     items = parse_module_body(body, md_file, repo_root)
+    for item in items:
+        if item.get("type") == "content" and item.get("published") is None:
+            item["published"] = _content_default_published(repo_root, item["local_path"])
 
     existing = manifest.get(local_key)
     title = frontmatter.get("title", md_file.stem)
@@ -1483,8 +1566,10 @@ def _quiz_needs_sync(
     local_key: str,
     manifest: manifest_lib.ManifestDict,
     force_uploads: bool,
+    snippets_dir: Path,
 ) -> bool:
-    """Return True if the quiz .md or any question file is newer than last_synced."""
+    """Return True if the quiz .md, any question file, or any snippet they
+    reference is newer than last_synced."""
     if force_uploads:
         return True
     entry = manifest.get(local_key)
@@ -1498,6 +1583,11 @@ def _quiz_needs_sync(
         mtime = datetime.fromtimestamp(f.stat().st_mtime, tz=timezone.utc)
         if mtime > last_synced:
             return True
+    for f in all_files:
+        for snippet_path in _file_referenced_snippets(f, snippets_dir):
+            snippet_mtime = datetime.fromtimestamp(snippet_path.stat().st_mtime, tz=timezone.utc)
+            if snippet_mtime > last_synced:
+                return True
     return False
 
 
@@ -1521,8 +1611,9 @@ def _sync_quiz(
         newer_on_canvas = []
     local_key = quiz_md.relative_to(repo_root).as_posix()
     questions_dir = quiz_folder / "questions"
+    snippets_dir = repo_root / "snippets"
 
-    if not _quiz_needs_sync(quiz_md, questions_dir, local_key, manifest, force_uploads):
+    if not _quiz_needs_sync(quiz_md, questions_dir, local_key, manifest, force_uploads, snippets_dir):
         if verbose:
             print(f"Skipping (up-to-date): {local_key}")
         return
@@ -1542,7 +1633,6 @@ def _sync_quiz(
 
     print(f"Processing quiz: {local_key}")
 
-    snippets_dir = repo_root / "snippets"
     frontmatter, desc_html, question_paths = parse_quiz_file(quiz_md, snippets_dir)
     title = frontmatter.get("title", quiz_folder.name)
     published = frontmatter.get("published", False)
@@ -1677,8 +1767,11 @@ def _sync_question_banks(
         if not toml_path.exists():
             continue
         local_key = toml_path.relative_to(repo_root).as_posix()
+        snippets_dir = repo_root / "snippets"
+        questions_dir = bank_folder / "questions"
         if not force_uploads and not manifest_lib.needs_sync(
-            manifest, local_key, toml_path, False
+            manifest, local_key, toml_path, False,
+            extra_mtime_paths=lambda qd=questions_dir, sd=snippets_dir: _question_files_referenced_snippets(qd, sd),
         ):
             if verbose:
                 print(f"Skipping (up-to-date): {local_key}")
@@ -1686,8 +1779,6 @@ def _sync_question_banks(
         with toml_path.open("rb") as fh:
             bank_meta = tomllib.load(fh)
         bank_title = bank_meta.get("bank_title", bank_folder.name)
-        snippets_dir = repo_root / "snippets"
-        questions_dir = bank_folder / "questions"
         questions: list[dict[str, Any]] = []
         if questions_dir.exists():
             for q_path in sorted(questions_dir.glob("*.md")):

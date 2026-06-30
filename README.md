@@ -1332,9 +1332,9 @@ section, and the `## Feedback` / `## Sample Solution` sections all work the same
 
 ### Snippets
 
-Any Markdown link whose target resolves inside `snippets/` is replaced with the snippet's content before conversion. Snippets are expanded in all Markdown file types — pages, assignments, discussions, and modules. Useful for office hours, shared policies, etc.
+Any Markdown link whose target resolves inside `snippets/` is replaced with the snippet's content before conversion. Snippets are expanded in all Markdown file types — pages, assignments, discussions, modules, quizzes, question files, and question banks. Useful for office hours, shared policies, etc.
 
-> **Caveat:** Editing a snippet file does **not** automatically re-sync the files that include it. The sync engine only checks each content file's own modification time, so changing a snippet alone won't trigger an update. Use `--force-uploads` (or `touch` the including files) to propagate snippet changes.
+> **Editing a snippet propagates automatically on the next full `update`/`publish` run.** The tool tracks which snippets each file references and treats that file as stale if any referenced snippet changed since it was last synced — you don't need `--force-uploads` or to `touch` anything. The one exception: a narrow `-s`/`-t` run stays strictly scoped to the files you named. If you run `-s assignments/week1.md` and a snippet shared with `assignments/week2.md` changed, only `week1.md` re-syncs — `week2.md` picks up the change on the next full `update`/`publish`.
 
 ```markdown
 <!-- in pages/syllabus.md -->

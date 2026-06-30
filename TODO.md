@@ -175,19 +175,14 @@ re-syncing has no effect — the existing Canvas rubric is left untouched. To ch
 a rubric you must currently delete it in Canvas first (or rename it). Consider an
 update-in-place path matched by manifest id rather than title.
 
-## Snippet dependency tracking for staleness
+## Question bank staleness doesn't check individual question file mtimes
 
-Applies to both body snippets (`[text](path)`/`$path$`) and frontmatter snippets
-(`PASTE_SNIPPET_INTO_FRONTMATTER`). Editing a snippet file does not trigger re-sync of content files that include it. The
-sync engine checks each content file's own mtime against `last_synced` in the manifest;
-since changing a snippet only updates the snippet file's mtime, the including files are
-not considered stale. The user must currently use `--force-uploads` or manually `touch`
-the including files.
-
-A fix would track which snippets each content file includes (at sync time) and mark
-those files as stale when any referenced snippet's mtime is newer than the content
-file's `last_synced`. This is similar to how `_quiz_needs_sync` already checks question
-file mtimes in addition to the quiz-level file.
+`_sync_question_banks` only compares the bank's `.toml` file's own mtime against
+`last_synced` — editing a question file's content (without touching the `.toml`)
+does not mark the bank as stale, unlike quizzes (`_quiz_needs_sync` already folds
+question file mtimes into its comparison). Snippet changes referenced by question
+files *are* caught (see ARCHITECTURE.md's "Snippet dependency staleness"); this gap
+is specifically about edits to the question file's own content.
 
 ## Quiz BFS traversal (`-t` with quizzes)
 

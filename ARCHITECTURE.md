@@ -959,7 +959,7 @@ Markdown editors render the include as a normal clickable link, making it easy t
 - Snippets are never uploaded to Canvas and have no manifest entries
 - **Nested includes are not supported.** If a snippet contains a link to another snippet, the tool prints an error message and leaves the inner link as a plain hyperlink (it is not expanded). This also prevents circular includes.
 - Links inside a snippet that point to content files (pages, assignments, etc.) are treated normally by the post-Pandoc link-rewriting step — they will be rewritten to Canvas URLs just like any other link
-- **Editing a snippet does not automatically re-sync files that include it.** The sync engine's staleness check compares each content file's own mtime against the manifest's `last_synced` timestamp. Changing a snippet updates only the snippet file's mtime — the including files are untouched, so they are not considered stale. To propagate a snippet change, use `--force-uploads` or manually `touch` the including files so their mtimes advance past `last_synced`.
+- **Editing a snippet automatically re-syncs files that include it, on the next full `update`/`publish` run.** See [Snippet dependency staleness](#snippet-dependency-staleness) below for how.
 
 ### Frontmatter snippets (`PASTE_SNIPPET_INTO_FRONTMATTER`)
 
@@ -992,6 +992,21 @@ The link text must be the literal string `PASTE_SNIPPET_INTO_FRONTMATTER` — th
 
 **Call sites:** wired in everywhere frontmatter is parsed for actual content sync — `_sync_content_file()` (pages/assignments/discussions) and the module sync path in `sync.py`, plus `parse_quiz_file()` and `parse_question_file()` in `quiz.py` (so quiz-level settings like `time_limit`, or per-question settings like `question_type`/`points_possible`, can be shared across a question bank too). It always runs *before* `preprocess_snippets()`, since the latter only needs to see the real Markdown body.
 
-**Differences from centralized `due_dates`:** `due_dates` (in `course_settings/course_settings.toml`) is for fields that are mostly *unique per item* but worth reviewing in one place, matched by title. `PASTE_SNIPPET_INTO_FRONTMATTER` is for fields that should be *identical* across many files — edit the snippet once, and every file that references it picks up the change on its next sync (subject to the same staleness caveat as body snippets above: touching only the snippet file does not mark including files as stale).
+**Differences from centralized `due_dates`:** `due_dates` (in `course_settings/course_settings.toml`) is for fields that are mostly *unique per item* but worth reviewing in one place, matched by title. `PASTE_SNIPPET_INTO_FRONTMATTER` is for fields that should be *identical* across many files — edit the snippet once, and every file that references it picks up the change on its next full `update`/`publish` run (see below).
+
+### Snippet dependency staleness
+
+Editing a snippet file (body or frontmatter form) automatically marks every file that references it as stale, without `--force-uploads` or `touch`. No new manifest bookkeeping is involved — `last_synced` is never rewritten, and snippets still have no manifest entries of their own.
+
+**Mechanism:**
+
+- `find_referenced_snippets(text, source_file, snippets_dir)` (`convert.py`) is a passive discovery pass: it reuses `_INLINE_SNIPPET_RE` and `_SNIPPET_LINK_RE` (the same regexes `preprocess_snippets` uses) to resolve every `$path.md$` / `[text](path)` candidate in `text` to an absolute path, keeping the ones that land inside `snippets_dir` and exist. Since `PASTE_SNIPPET_INTO_FRONTMATTER` is just `[text](path)` syntax, it's caught automatically — no separate handling needed. Unlike `preprocess_snippets`/`expand_frontmatter_snippets`, it never reports errors; it's just a staleness probe.
+- `manifest.needs_sync()` gained an optional `extra_mtime_paths: Callable[[], Iterable[Path]] | None` parameter. It's a zero-arg *callable*, not a plain list, so the (file-reading) work of resolving referenced snippets is only done when the file's own mtime didn't already settle the staleness question — most files that need syncing for the usual reason never pay the extra cost.
+- `sync.py`'s `_file_referenced_snippets(path, snippets_dir)` reads a file, parses its frontmatter (swallowing `yaml.YAMLError` — if the file does need a real sync, its normal processing path reports the error properly), and delegates to `find_referenced_snippets()` on the body.
+- Every staleness check that gates a real sync passes this in: `_sync_content_file()` and `_sync_module()` call `manifest_lib.needs_sync(..., extra_mtime_paths=lambda: _file_referenced_snippets(...))`; `_quiz_needs_sync()` folds snippets referenced by the quiz file *and* every question file into its existing mtime comparison; `_sync_question_banks()` does the same via `_question_files_referenced_snippets()`, unioning snippet references across all question files in a bank.
+
+**Scope:** covers pages, assignments, discussions, modules, quiz-level files, question files, and question banks. **Targeted syncs (`-s`/`-t`) are intentionally excluded** — they only ever call the per-file sync functions for files already in their explicit/BFS-derived target set, so this logic never causes a narrow `-s` run to reach outside the files you named. If a snippet shared by two files changes and you `-s` one of them, only that one re-syncs; the other picks up the change on the next full `update`/`publish`.
+
+**Out of scope:** snippet deletion or rename gets no special handling — a file referencing a now-missing snippet still surfaces the existing "snippet not found" error the next time it's actually processed. `_sync_question_banks()` also still doesn't compare individual question file mtimes against the bank's own `last_synced` for non-snippet edits (a pre-existing gap, unrelated to snippets — see TODO.md).
 
 **Not supported:** nested includes (a frontmatter snippet referencing another snippet) — snippet files are parsed as flat YAML, so there is no recursive expansion to support in the first place.

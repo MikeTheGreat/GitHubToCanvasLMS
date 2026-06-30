@@ -20,7 +20,21 @@ import yaml
 
 from .convert import preprocess_snippets
 from .quiz import parse_question_file
-from .sync import parse_frontmatter, parse_module_body
+from .sync import _content_default_published, parse_frontmatter, parse_module_body
+
+
+def _item_published(item: dict, repo: Path) -> bool:
+    """Resolve a module item's effective published state.
+
+    `parse_module_body` leaves "published" as None for content items with no
+    explicit per-item override, deferring to the referenced file's own
+    frontmatter (see `_content_default_published`) so the static site's
+    visibility matches what `update`/`publish` would actually leave on Canvas.
+    """
+    published = item.get("published", True)
+    if published is None:
+        return _content_default_published(repo, item["local_path"])
+    return bool(published)
 
 
 # ---------------------------------------------------------------------------
@@ -355,7 +369,7 @@ def collect_reachable(repo: Path, seed_paths: set[str]) -> set[str]:
 
         if repo_rel.startswith("modules/"):
             for item in parse_module_body(body, src, repo):
-                if not item.get("published", True):
+                if not _item_published(item, repo):
                     continue
                 if item["type"] == "content" and item["local_path"] not in visited:
                     queue.append(item["local_path"])
@@ -497,7 +511,7 @@ def render_module_overview(module_md: Path, repo: Path) -> str:
     out: list[str] = [f"# {title}", ""]
     in_list = False
     for item in items:
-        if not item.get("published", True):
+        if not _item_published(item, repo):
             continue
         indent = item.get("indent", 0)
         if item["type"] == "SubHeader":

@@ -104,6 +104,31 @@ def preprocess_snippets(
     return _SNIPPET_LINK_RE.sub(_replace, text)
 
 
+def find_referenced_snippets(text: str, source_file: Path, snippets_dir: Path) -> set[Path]:
+    """Return the set of existing snippet files referenced anywhere in text.
+
+    For staleness checks only: resolves every ``$path.md$`` / ``[text](path)``
+    candidate (this also catches ``PASTE_SNIPPET_INTO_FRONTMATTER`` references,
+    which use the same ``[text](path)`` syntax) and keeps the ones that land
+    inside ``snippets_dir`` and exist. Unlike ``preprocess_snippets`` /
+    ``expand_frontmatter_snippets``, this never reports errors — it's a
+    passive probe, not part of the expansion pipeline.
+    """
+    resolved_snippets_dir = snippets_dir.resolve()
+    found: set[Path] = set()
+
+    def _maybe_add(link_target: str) -> None:
+        target_path = (source_file.parent / link_target).resolve()
+        if target_path.is_relative_to(resolved_snippets_dir) and target_path.exists():
+            found.add(target_path)
+
+    for m in _INLINE_SNIPPET_RE.finditer(text):
+        _maybe_add(m.group(1))
+    for m in _SNIPPET_LINK_RE.finditer(text):
+        _maybe_add(m.group(2))
+    return found
+
+
 def expand_frontmatter_snippets(
     frontmatter: dict[str, Any],
     body: str,

@@ -48,10 +48,11 @@ def _mock_page(page_id: int, url: str) -> MagicMock:
     return p
 
 
-def _mock_assignment(canvas_id: int) -> MagicMock:
+def _mock_assignment(canvas_id: int, rubric_settings=None) -> MagicMock:
     a = MagicMock()
     a.id = canvas_id
     a.html_url = f"https://school.instructure.com/courses/1/assignments/{canvas_id}"
+    a.rubric_settings = rubric_settings
     a.edit.return_value = a
     return a
 
@@ -514,6 +515,9 @@ def test_module_not_resynced_when_referenced_content_unchanged(
     _make_old(course_root / "discussions" / "week1-intro.md")
     _make_old(course_root / "pages" / "syllabus.md")
     _make_old(course_root / "modules" / "week-1.md")
+    # week1.md and syllabus.md both reference this snippet — age it too, or the new
+    # snippet-staleness check will (correctly) treat them as changed.
+    _make_old(course_root / "snippets" / "office-hours.md")
 
     preloaded = {
         "assets/images/fig.png": {
@@ -559,6 +563,9 @@ def test_up_to_date_content_file_is_skipped(mock_course, course_root, mocker, ca
     """A content file whose mtime predates last_synced is not re-uploaded."""
     _make_old(course_root / "assets" / "images" / "fig.png")
     _make_old(course_root / "assignments" / "week1.md")
+    # week1.md references this snippet — age it too, or the new snippet-staleness
+    # check will (correctly) treat week1.md as changed.
+    _make_old(course_root / "snippets" / "office-hours.md")
     preloaded = {
         "assets/images/fig.png": {
             "canvas_id": 77777, "canvas_type": "file",
@@ -772,6 +779,9 @@ def test_single_target_frontmatter_snippet_merged(mock_course, course_root, mock
 def test_single_target_respects_timestamp(mock_course, course_root, mocker, capsys) -> None:
     """--single-target skips a file that is up-to-date per manifest timestamp."""
     _make_old(course_root / "assignments" / "week1.md")
+    # week1.md references this snippet — age it too, or the new snippet-staleness
+    # check will (correctly) treat week1.md as changed.
+    _make_old(course_root / "snippets" / "office-hours.md")
     preloaded = {
         "assignments/week1.md": {
             "canvas_id": 98765, "canvas_type": "assignment",
@@ -1030,6 +1040,53 @@ def test_quiz_resynced_when_question_file_updated(mock_course, mocker, tmp_path)
     run_sync(_config(), root)
 
     # Question file mtime > last_synced → whole quiz re-synced via update
+    mock_course.get_quiz.assert_called_with(12345)
+    quiz.edit.assert_called_once()
+
+
+def test_quiz_resynced_when_referenced_snippet_updated(mock_course, mocker, tmp_path) -> None:
+    """Editing a snippet referenced by the quiz description triggers a re-sync,
+    even though none of the quiz's own files changed."""
+    root = _quiz_course_root(tmp_path)
+    snippets_dir = root / "snippets"
+    snippets_dir.mkdir()
+    snippet = snippets_dir / "hint.md"
+    snippet.write_text("Original hint.")
+    quiz_dir = root / "quizzes" / "a-quiz"
+    (quiz_dir / "a-quiz.md").write_text(
+        "---\ntitle: A Quiz\nquiz_type: assignment\npublished: true\n---\n\n"
+        "[Hint](../../snippets/hint.md)\n\n"
+        "1. [What is 2+2?](questions/what-is-2-plus-2.md)\n"
+        "2. [Explain something](questions/explain-something.md)\n"
+    )
+    # Age every quiz file (and the snippet) so the only remaining "newer" file
+    # will be the snippet, re-written below.
+    for f in [quiz_dir / "a-quiz.md",
+              quiz_dir / "questions" / "what-is-2-plus-2.md",
+              quiz_dir / "questions" / "explain-something.md",
+              snippet]:
+        _make_old(f)
+    preloaded = {
+        "quizzes/a-quiz/a-quiz.md": {
+            "canvas_id": 12345, "canvas_type": "quiz",
+            "last_synced": "2025-01-01T00:00:00+00:00",
+            "canvas_question_ids": {},
+        },
+    }
+    mocker.patch("github_to_canvas.manifest.load", return_value=preloaded)
+    mocker.patch("github_to_canvas.manifest.flush")
+    quiz = _mock_quiz(12345)
+    mock_course.get_quiz.return_value = quiz
+    quiz.create_question.side_effect = [_mock_quiz_question(i) for i in [101, 102]]
+
+    # Sanity check: with everything aged, nothing should sync.
+    run_sync(_config(), root)
+    mock_course.get_quiz.assert_not_called()
+
+    # Now only the snippet changes (current mtime, after last_synced).
+    snippet.write_text("Updated hint.")
+    run_sync(_config(), root)
+
     mock_course.get_quiz.assert_called_with(12345)
     quiz.edit.assert_called_once()
 
@@ -3102,6 +3159,82 @@ def test_rubric_use_for_grading_false(mock_course, course_root, mocker) -> None:
     assert call_kwargs["rubric_association"]["use_for_grading"] is False
 
 
+def test_rubric_removal_when_rubric_key_absent(mock_course, course_root, mocker) -> None:
+    """When an assignment has a stale rubric on Canvas but no `rubric:` key in
+    frontmatter, update should call remove_rubric_from_assignment, not
+    create_rubric_association."""
+    mocker.patch("github_to_canvas.manifest.flush")
+    remove_mock = mocker.patch("github_to_canvas.canvas_api.remove_rubric_from_assignment", return_value=True)
+    _setup_first_sync_mocks(mock_course)
+
+    # Override the assignment mock to have rubric_settings set (simulating a
+    # previously-associated rubric still present on Canvas).
+    existing_assignment = _mock_assignment(98765, rubric_settings={"id": 42, "title": "Old Rubric", "points_possible": 5.0})
+    mock_course.create_assignment.return_value = existing_assignment
+
+    (course_root / "assignments" / "week1.md").write_text(
+        '---\ntitle: "Week 1"\npublished: true\npoints_possible: 10\n---\n\n## Work\n'
+    )
+
+    run_sync(_config(), course_root)
+
+    remove_mock.assert_called_once_with(mock_course, 98765, 42)
+    mock_course.create_rubric_association.assert_not_called()
+
+
+def test_rubric_no_removal_when_no_canvas_rubric(mock_course, course_root, mocker) -> None:
+    """When an assignment has no rubric key and Canvas also has no rubric_settings,
+    remove_rubric_from_assignment should not be called."""
+    mocker.patch("github_to_canvas.manifest.flush")
+    remove_mock = mocker.patch("github_to_canvas.canvas_api.remove_rubric_from_assignment", return_value=False)
+    _setup_first_sync_mocks(mock_course)  # assignment mock has rubric_settings=None by default
+
+    (course_root / "assignments" / "week1.md").write_text(
+        '---\ntitle: "Week 1"\npublished: true\n---\n\n## Work\n'
+    )
+
+    run_sync(_config(), course_root)
+
+    remove_mock.assert_not_called()
+    mock_course.create_rubric_association.assert_not_called()
+
+
+def test_remove_rubric_from_assignment_empty(mocker) -> None:
+    """remove_rubric_from_assignment returns False when the rubric has no
+    Assignment-type association for this assignment."""
+    from github_to_canvas.canvas_api import remove_rubric_from_assignment
+
+    course = MagicMock()
+    course.id = 1
+    rubric = MagicMock()
+    rubric.associations = []
+    course.get_rubric.return_value = rubric
+
+    removed = remove_rubric_from_assignment(course, assignment_id=42, rubric_id=7)
+    assert removed is False
+    course.get_rubric.assert_called_once_with(7, include=["associations"])
+
+
+def test_remove_rubric_from_assignment_deletes(mocker) -> None:
+    """remove_rubric_from_assignment deletes the matching association and returns True."""
+    from github_to_canvas.canvas_api import remove_rubric_from_assignment
+
+    course = MagicMock()
+    course.id = 1
+    rubric = MagicMock()
+    rubric.associations = [
+        {"id": 999, "association_type": "Assignment", "association_id": 42},
+    ]
+    course.get_rubric.return_value = rubric
+
+    ra_mock = MagicMock()
+    mocker.patch("github_to_canvas.canvas_api.RubricAssociation", return_value=ra_mock)
+
+    removed = remove_rubric_from_assignment(course, assignment_id=42, rubric_id=7)
+    assert removed is True
+    ra_mock.delete.assert_called_once()
+
+
 # ---------------------------------------------------------------------------
 # Front page conditional sync
 # ---------------------------------------------------------------------------
@@ -3220,14 +3353,39 @@ def test_front_page_set_when_settings_resynced(mock_course, mocker, tmp_path) ->
 # ---------------------------------------------------------------------------
 
 
-def test_parse_module_body_items_default_published_true(tmp_path: Path) -> None:
-    """Module items without a published comment default to published=True."""
+def test_parse_module_body_items_default_published_none(tmp_path: Path) -> None:
+    """Content items without a published comment defer to the referenced file's
+    own frontmatter (resolved later by _sync_module / publish.py), rather than
+    defaulting to True — re-creating a module item with published=true
+    republishes its underlying content on Canvas, so blindly defaulting to
+    True here would silently re-publish content marked unpublished."""
     course_root = tmp_path / "course"
     (course_root / "modules").mkdir(parents=True)
     module_file = course_root / "modules" / "m.md"
     body = "- [Page](../pages/intro.md)\n"
     items = parse_module_body(body, module_file, course_root)
-    assert items[0]["published"] is True
+    assert items[0]["published"] is None
+
+
+def test_content_default_published_mirrors_referenced_frontmatter(tmp_path: Path) -> None:
+    """_content_default_published resolves a deferred (None) module item published
+    state from the referenced content file's own frontmatter, defaulting to False
+    when absent (matching the real sync default for pages/assignments/discussions),
+    and to True for non-.md targets (e.g. File items) that have no frontmatter."""
+    from github_to_canvas.sync import _content_default_published
+
+    repo_root = tmp_path
+    (repo_root / "pages").mkdir()
+    (repo_root / "pages" / "published.md").write_text(
+        "---\ntitle: P\npublished: true\n---\nbody\n"
+    )
+    (repo_root / "pages" / "unspecified.md").write_text("---\ntitle: P\n---\nbody\n")
+    (repo_root / "assets").mkdir()
+    (repo_root / "assets" / "file.docx").write_bytes(b"fake")
+
+    assert _content_default_published(repo_root, "pages/published.md") is True
+    assert _content_default_published(repo_root, "pages/unspecified.md") is False
+    assert _content_default_published(repo_root, "assets/file.docx") is True
 
 
 def test_parse_module_body_content_published_false(tmp_path: Path) -> None:
@@ -3385,4 +3543,163 @@ def test_sync_aborts_on_title_collision(
     had_errors = run_sync(config, root, force_uploads=True)
 
     assert had_errors is True
+    mock_course.create_page.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Scenario 17: Snippet dependency staleness
+# ---------------------------------------------------------------------------
+
+
+def test_assignment_resynced_when_referenced_snippet_updated(
+    mock_course, course_root, mocker
+) -> None:
+    """An assignment whose own mtime is unchanged still re-syncs if a snippet it
+    references (assignments/week1.md → snippets/office-hours.md) was edited."""
+    _make_old(course_root / "assignments" / "week1.md")
+    _make_old(course_root / "snippets" / "office-hours.md")
+    _make_old(course_root / "assets" / "images" / "fig.png")
+    preloaded = {
+        "assets/images/fig.png": {
+            "canvas_id": 77777, "canvas_type": "file",
+            "canvas_url": "https://school.instructure.com/files/77777/download",
+            "last_synced": "2025-01-01T00:00:00+00:00",
+        },
+        "assignments/week1.md": {
+            "canvas_id": 98765, "canvas_type": "assignment",
+            "last_synced": "2025-01-01T00:00:00+00:00",
+        },
+    }
+    mocker.patch("github_to_canvas.manifest.load", return_value=preloaded)
+    mocker.patch("github_to_canvas.manifest.flush")
+    mock_course.get_assignment.return_value = _mock_assignment(98765)
+
+    # Sanity check: with everything aged, nothing should sync.
+    run_sync(_config(), course_root)
+    mock_course.get_assignment.assert_not_called()
+
+    # Now only the shared snippet changes.
+    (course_root / "snippets" / "office-hours.md").write_text("Updated hours.")
+    run_sync(_config(), course_root)
+
+    mock_course.get_assignment.assert_called_with(98765)
+
+
+def test_module_resynced_when_referenced_snippet_updated(
+    mock_course, mocker, tmp_path
+) -> None:
+    """A module whose own mtime is unchanged still re-syncs if a snippet it
+    references in its body was edited. Uses an isolated repo (just snippets/
+    and modules/) so no other fixture content is in play."""
+    root = tmp_path / "course"
+    (root / "snippets").mkdir(parents=True)
+    (root / "modules").mkdir()
+    snippet = root / "snippets" / "module-note.md"
+    snippet.write_text("Original note.")
+    module_file = root / "modules" / "snippet-module.md"
+    module_file.write_text(
+        "---\ntitle: Snippet Module\npublished: true\n---\n\n"
+        "[Note](../snippets/module-note.md)\n"
+    )
+    _make_old(module_file)
+    _make_old(snippet)
+    preloaded = {
+        "modules/snippet-module.md": {
+            "canvas_id": 66666, "canvas_type": "module",
+            "canvas_item_ids": {},
+            "last_synced": "2025-01-01T00:00:00+00:00",
+        },
+    }
+    mocker.patch("github_to_canvas.manifest.load", return_value=preloaded)
+    mocker.patch("github_to_canvas.manifest.flush")
+    mock_course.get_assignment_groups.return_value = []
+    module = _mock_module(66666)
+    mock_course.get_module.return_value = module
+
+    run_sync(_config(), root)
+    mock_course.get_module.assert_not_called()
+
+    snippet.write_text("Updated note.")
+    run_sync(_config(), root)
+
+    mock_course.get_module.assert_called_with(66666)
+
+
+def test_question_bank_resynced_when_referenced_snippet_updated(
+    mock_course, mocker, tmp_path
+) -> None:
+    """A question bank whose own .toml and question files are unchanged still
+    re-syncs if a snippet referenced by one of its question files was edited."""
+    root = tmp_path / "course"
+    bank_dir = root / "question_banks" / "qb"
+    q_dir = bank_dir / "questions"
+    q_dir.mkdir(parents=True)
+    (bank_dir / "qb.toml").write_text('bank_title = "QB"\n')
+    snippets_dir = root / "snippets"
+    snippets_dir.mkdir()
+    snippet = snippets_dir / "hint.md"
+    snippet.write_text("Original hint.")
+    (q_dir / "q1.md").write_text(
+        "---\ntitle: Q1\nquestion_type: essay_question\npoints_possible: 1\n---\n\n"
+        "[Hint](../../../snippets/hint.md)\n\nExplain.\n"
+    )
+    for f in [bank_dir / "qb.toml", q_dir / "q1.md", snippet]:
+        _make_old(f)
+    preloaded = {
+        "question_banks/qb/qb.toml": {
+            "canvas_id": 555, "canvas_type": "question_bank",
+            "last_synced": "2025-01-01T00:00:00+00:00",
+        },
+    }
+    mocker.patch("github_to_canvas.manifest.load", return_value=preloaded)
+    mocker.patch("github_to_canvas.manifest.flush")
+    sync_bank_mock = mocker.patch(
+        "github_to_canvas.canvas_api.sync_question_bank", return_value=555
+    )
+    mock_course.get_assignment_groups.return_value = []
+    mock_course.get_tabs.return_value = []
+
+    run_sync(_config(), root)
+    sync_bank_mock.assert_not_called()
+
+    snippet.write_text("Updated hint.")
+    run_sync(_config(), root)
+
+    sync_bank_mock.assert_called_once()
+
+
+def test_single_target_does_not_pull_in_other_files_via_snippet_change(
+    mock_course, course_root, mocker
+) -> None:
+    """A snippet shared by two files: -s on one of them must not also re-sync
+    the other, even though it's also stale because of the same snippet edit."""
+    preloaded = {
+        "assignments/week1.md": {
+            "canvas_id": 98765, "canvas_type": "assignment",
+            "last_synced": "2025-01-01T00:00:00+00:00",
+        },
+        "pages/syllabus.md": {
+            "canvas_id": 11111, "canvas_type": "page", "canvas_url": "syllabus",
+            "last_synced": "2025-01-01T00:00:00+00:00",
+        },
+    }
+    mocker.patch("github_to_canvas.manifest.load", return_value=preloaded)
+    mocker.patch("github_to_canvas.manifest.flush")
+    mock_course.get_assignment.return_value = _mock_assignment(98765)
+
+    _make_old(course_root / "assignments" / "week1.md")
+    # office-hours.md is referenced by both week1.md and syllabus.md.
+    (course_root / "snippets" / "office-hours.md").write_text("Updated hours.")
+
+    run_targeted_sync(
+        _config(), course_root,
+        recursive_targets=[],
+        single_targets=[str(course_root / "assignments" / "week1.md")],
+    )
+
+    # week1.md is the named target — it re-syncs because of the snippet change.
+    mock_course.get_assignment.assert_called_with(98765)
+    # syllabus.md was never named — even though it also references the changed
+    # snippet, a narrow -s run must never reach outside its target set.
+    mock_course.get_page.assert_not_called()
     mock_course.create_page.assert_not_called()

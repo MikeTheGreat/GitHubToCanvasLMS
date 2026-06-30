@@ -8,6 +8,8 @@ from typing import Any
 
 from canvasapi import Canvas
 from canvasapi.exceptions import BadRequest, ResourceDoesNotExist
+from canvasapi.paginated_list import PaginatedList
+from canvasapi.rubric import RubricAssociation
 from canvasapi.util import combine_kwargs
 
 from .config import Config
@@ -587,7 +589,14 @@ def _do_assignment(
         assignment = course.create_assignment(
             assignment={"name": title, "description": body, **kwargs}
         )
-    return {"canvas_type": "assignment", "canvas_id": assignment.id, "html_url": assignment.html_url}
+    return {
+        "canvas_type": "assignment",
+        "canvas_id": assignment.id,
+        "html_url": assignment.html_url,
+        # Passed back so callers can detect and remove a stale rubric association
+        # without an extra GET — the edit/create response already includes it.
+        "rubric_settings": getattr(assignment, "rubric_settings", None),
+    }
 
 
 def create_or_update_discussion(
@@ -940,6 +949,32 @@ def associate_rubric_with_assignment(
             "use_for_grading": use_for_grading,
         },
     )
+
+
+def remove_rubric_from_assignment(course, assignment_id: int, rubric_id: int) -> bool:
+    """Delete the rubric association between a rubric and an assignment.
+
+    Canvas has no list-associations endpoint; instead we fetch the rubric with
+    include[]=associations, find the association for this assignment, and delete it.
+    Returns True if an association was deleted.
+    """
+    rubric = course.get_rubric(rubric_id, include=["associations"])
+    raw_associations = getattr(rubric, "associations", None) or []
+    deleted = False
+    for assoc in raw_associations:
+        if isinstance(assoc, dict):
+            atype = assoc.get("association_type")
+            aid = assoc.get("association_id")
+            assoc_id = assoc.get("id")
+        else:
+            atype = getattr(assoc, "association_type", None)
+            aid = getattr(assoc, "association_id", None)
+            assoc_id = getattr(assoc, "id", None)
+        if atype == "Assignment" and aid == assignment_id and assoc_id is not None:
+            ra = RubricAssociation(course._requester, {"id": assoc_id, "course_id": course.id})
+            ra.delete()
+            deleted = True
+    return deleted
 
 
 # ---------------------------------------------------------------------------

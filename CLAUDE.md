@@ -32,6 +32,8 @@ The three most important subcommands are **update**, **import**, and **publish**
 - ARCHTECTURE.md is for notes, mostly for yourself, about the internals of the tool work
 - TODO.md is a list of possible future features.  After changing the code "updating the docs" should include checking to see if anything in TODO.md should be removed or updated.
 
+## User often uses a shell alias of 'gg' which expands to github-to-canvas
+
 
 # GitHubToCanvasLMS
 
