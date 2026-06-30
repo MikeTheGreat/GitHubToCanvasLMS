@@ -470,9 +470,11 @@ github-to-canvas mv [--noop/-n] [--verbose/-v] SRC DEST
 
 **What it updates:**
 
-1. **Physical move** — uses `git mv` when inside a git repo (falls back to
-   filesystem move otherwise). Handles case-only renames (e.g. `Unit-01` →
-   `unit-01`) via a temporary intermediate name.
+1. **Physical move** — uses `git mv` when inside a git repo and the source has
+   git-tracked content (falls back to a plain filesystem move otherwise, e.g.
+   for files/directories that haven't been `git add`ed yet). Handles
+   case-only renames (e.g. `Unit-01` → `unit-01`) via a temporary
+   intermediate name.
 2. **`.canvas-manifest.toml`** — renames top-level keys for moved files and
    updates `canvas_item_ids` sub-tables inside module entries.
 3. **All `.md` files in the repo** — rewrites relative Markdown links
@@ -481,6 +483,8 @@ github-to-canvas mv [--noop/-n] [--verbose/-v] SRC DEST
    a moved file when its directory depth changes.
 4. **`course_settings/module_order.toml`** — updates filenames in the `order`
    array when a module file is renamed.
+5. **`course_settings/course_settings.toml`** — updates the `dashboard_image`
+   and `front_page` fields when the file they point to is moved.
 
 **Special cases:**
 

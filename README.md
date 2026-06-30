@@ -14,6 +14,7 @@ Write your course content as Markdown files in a Git repository. Run this tool t
 ## Contents
 
 - [github-to-canvas](#github-to-canvas)
+  - [Important Gotch'yas:](#important-gotchyas)
   - [Contents](#contents)
   - [How it works](#how-it-works)
   - [Installation](#installation)
@@ -37,6 +38,7 @@ Write your course content as Markdown files in a Git repository. Run this tool t
   - [Moving and renaming files (`mv`)](#moving-and-renaming-files-mv)
   - [Content file format](#content-file-format)
     - [`course_settings.toml`](#course_settingstoml)
+      - [Centralized due dates](#centralized-due-dates)
     - [Syllabus (`course_settings/syllabus.md`)](#syllabus-course_settingssyllabusmd)
     - [Rubrics (`course_settings/rubrics.toml`)](#rubrics-course_settingsrubricstoml)
     - [Other `course_settings/` files (import-only)](#other-course_settings-files-import-only)
@@ -54,6 +56,7 @@ Write your course content as Markdown files in a Git repository. Run this tool t
     - [Verifying the import](#verifying-the-import)
   - [Listing content titles (`list-titles`)](#listing-content-titles-list-titles)
   - [Resolving external-tool labels (`create-tool-aliases`)](#resolving-external-tool-labels-create-tool-aliases)
+    - [Workflow](#workflow)
 
 ---
 
@@ -434,10 +437,13 @@ Options:
 
 `mv` updates:
 
-- The file/directory on disk (via `git mv` when inside a git repo)
+- The file/directory on disk (via `git mv` when inside a git repo and the
+  source is git-tracked; falls back to a plain filesystem move otherwise,
+  e.g. for files not yet `git add`ed)
 - `.canvas-manifest.toml` — manifest keys and `canvas_item_ids` in module entries
 - All Markdown files — relative links and snippet references
 - `module_order.toml` — if a module file is renamed
+- `course_settings.toml` — `dashboard_image` and `front_page`, if the file they point to is renamed
 
 **Examples:**
 

@@ -11,6 +11,7 @@ import tomli_w
 
 from github_to_canvas.mv import (
     build_path_map,
+    compute_course_settings_updates,
     compute_file_updates,
     compute_manifest_updates,
     compute_module_order_updates,
@@ -318,6 +319,66 @@ class TestComputeModuleOrderUpdates:
         assert compute_module_order_updates(repo, {"modules/a.md": "modules/b.md"}) is None
 
 
+class TestComputeCourseSettingsUpdates:
+    def test_updates_renamed_dashboard_image(self, tmp_path: Path) -> None:
+        repo = _make_repo(tmp_path)
+        settings_path = repo / "course_settings" / "course_settings.toml"
+        with settings_path.open("wb") as f:
+            tomli_w.dump({"title": "X", "dashboard_image": "assets/course_settings/old-logo.png"}, f)
+
+        path_map = {"assets/course_settings/old-logo.png": "assets/course_settings/new-logo.png"}
+        assert compute_course_settings_updates(repo, path_map) == {
+            "dashboard_image": "assets/course_settings/new-logo.png"
+        }
+
+    def test_updates_renamed_front_page(self, tmp_path: Path) -> None:
+        repo = _make_repo(tmp_path)
+        settings_path = repo / "course_settings" / "course_settings.toml"
+        with settings_path.open("wb") as f:
+            tomli_w.dump({"title": "X", "front_page": "pages/old-home.md"}, f)
+
+        path_map = {"pages/old-home.md": "pages/home.md"}
+        assert compute_course_settings_updates(repo, path_map) == {"front_page": "pages/home.md"}
+
+    def test_updates_both_fields_at_once(self, tmp_path: Path) -> None:
+        repo = _make_repo(tmp_path)
+        settings_path = repo / "course_settings" / "course_settings.toml"
+        with settings_path.open("wb") as f:
+            tomli_w.dump(
+                {
+                    "front_page": "pages/Old Home.md",
+                    "dashboard_image": "assets/course_settings/Old Logo.png",
+                },
+                f,
+            )
+
+        path_map = {
+            "pages/Old Home.md": "pages/old-home.md",
+            "assets/course_settings/Old Logo.png": "assets/course_settings/old-logo.png",
+        }
+        assert compute_course_settings_updates(repo, path_map) == {
+            "front_page": "pages/old-home.md",
+            "dashboard_image": "assets/course_settings/old-logo.png",
+        }
+
+    def test_returns_none_when_no_change(self, tmp_path: Path) -> None:
+        repo = _make_repo(tmp_path)
+        settings_path = repo / "course_settings" / "course_settings.toml"
+        with settings_path.open("wb") as f:
+            tomli_w.dump({"dashboard_image": "assets/course_settings/logo.png"}, f)
+
+        path_map = {"pages/foo.md": "pages/bar.md"}
+        assert compute_course_settings_updates(repo, path_map) is None
+
+    def test_returns_none_when_no_path_fields_set(self, tmp_path: Path) -> None:
+        repo = _make_repo(tmp_path)
+        settings_path = repo / "course_settings" / "course_settings.toml"
+        with settings_path.open("wb") as f:
+            tomli_w.dump({"title": "X"}, f)
+
+        assert compute_course_settings_updates(repo, {"a": "b"}) is None
+
+
 # ---------------------------------------------------------------------------
 # compute_file_updates
 # ---------------------------------------------------------------------------
@@ -587,3 +648,82 @@ class TestRunMv:
             manifest = tomllib.load(f)
         assert "assets/my-image.png" in manifest
         assert "assets/My Image.png" not in manifest
+
+    def test_moving_dashboard_image_updates_course_settings(self, tmp_path: Path) -> None:
+        repo = _make_repo(tmp_path, {
+            "assets/course_settings/IT-CS_115_dashboard_logo.png": "img-data",
+        })
+        settings_path = repo / "course_settings" / "course_settings.toml"
+        with settings_path.open("wb") as f:
+            tomli_w.dump(
+                {"dashboard_image": "assets/course_settings/IT-CS_115_dashboard_logo.png"}, f
+            )
+
+        run_mv(
+            repo / "assets/course_settings/IT-CS_115_dashboard_logo.png",
+            repo / "assets/course_settings/it-cs_115_dashboard_logo.png",
+        )
+
+        with settings_path.open("rb") as f:
+            settings = tomllib.load(f)
+        assert settings["dashboard_image"] == "assets/course_settings/it-cs_115_dashboard_logo.png"
+
+    def test_moving_front_page_updates_course_settings(self, tmp_path: Path) -> None:
+        repo = _make_repo(tmp_path, {
+            "pages/Old Home.md": "# Home",
+        })
+        settings_path = repo / "course_settings" / "course_settings.toml"
+        with settings_path.open("wb") as f:
+            tomli_w.dump({"title": "Test", "front_page": "pages/Old Home.md"}, f)
+
+        run_mv(repo / "pages/Old Home.md", repo / "pages/old-home.md")
+
+        with settings_path.open("rb") as f:
+            settings = tomllib.load(f)
+        assert settings["front_page"] == "pages/old-home.md"
+        assert settings["title"] == "Test"
+
+
+def _git_init(repo: Path) -> None:
+    subprocess.run(["git", "init", "-q"], cwd=str(repo), check=True)
+    subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=str(repo), check=True)
+    subprocess.run(["git", "config", "user.name", "Test"], cwd=str(repo), check=True)
+
+
+class TestRunMvInGitRepo:
+    """git mv refuses to touch untracked content, so run_mv must fall back
+    to a plain filesystem move instead of failing when files aren't yet
+    added to the repo (or aren't yet in the manifest)."""
+
+    def test_moves_untracked_file_in_git_repo(self, tmp_path: Path) -> None:
+        repo = _make_repo(tmp_path, {"pages/old-page.md": "# Old Page"})
+        _git_init(repo)
+
+        run_mv(repo / "pages/old-page.md", repo / "pages/new-page.md")
+
+        assert not (repo / "pages/old-page.md").exists()
+        assert (repo / "pages/new-page.md").exists()
+
+    def test_moves_untracked_directory_in_git_repo(self, tmp_path: Path) -> None:
+        repo = _make_repo(tmp_path, {"assets/Unit 03/worksheet.docx": "data"})
+        _git_init(repo)
+
+        run_mv(repo / "assets/Unit 03", repo / "assets/unit-03")
+
+        assert not (repo / "assets/Unit 03").exists()
+        assert (repo / "assets/unit-03/worksheet.docx").exists()
+
+    def test_moves_tracked_file_via_git_mv(self, tmp_path: Path) -> None:
+        repo = _make_repo(tmp_path, {"pages/old-page.md": "# Old Page"})
+        _git_init(repo)
+        subprocess.run(["git", "add", "pages/old-page.md"], cwd=str(repo), check=True)
+        subprocess.run(["git", "commit", "-q", "-m", "init"], cwd=str(repo), check=True)
+
+        run_mv(repo / "pages/old-page.md", repo / "pages/new-page.md")
+
+        assert not (repo / "pages/old-page.md").exists()
+        assert (repo / "pages/new-page.md").exists()
+        status = subprocess.run(
+            ["git", "status", "--porcelain"], cwd=str(repo), capture_output=True, text=True, check=True
+        ).stdout
+        assert "R  pages/old-page.md -> pages/new-page.md" in status

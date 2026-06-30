@@ -55,6 +55,25 @@ def _is_git_repo(path: Path) -> bool:
         return False
 
 
+def _has_tracked_content(repo_root: Path, path: Path) -> bool:
+    """True if path (file or directory) contains any git-tracked file.
+
+    `git mv` errors out instead of moving the file when nothing under
+    path is tracked yet, so callers must fall back to a plain filesystem
+    move in that case.
+    """
+    try:
+        result = subprocess.run(
+            ["git", "ls-files", "--error-unmatch", "--", str(path)],
+            cwd=str(repo_root),
+            capture_output=True,
+            timeout=5,
+        )
+        return result.returncode == 0
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return False
+
+
 def _is_case_only_rename(src: Path, dest: Path) -> bool:
     """True if src and dest differ only in case (same path on case-insensitive FS)."""
     if str(src).lower() != str(dest).lower():
@@ -353,6 +372,34 @@ def compute_module_order_updates(
     return order if changed else None
 
 
+_COURSE_SETTINGS_PATH_FIELDS = ("dashboard_image", "front_page")
+
+
+def compute_course_settings_updates(
+    repo_root: Path,
+    path_map: dict[str, str],
+) -> dict[str, str] | None:
+    """If course_settings.toml's dashboard_image/front_page was moved, return
+    {field: new_repo_relative_path} for the changed fields. None if no changes."""
+    settings_path = repo_root / "course_settings" / "course_settings.toml"
+    if not settings_path.exists():
+        return None
+
+    with settings_path.open("rb") as f:
+        data = tomllib.load(f)
+
+    updates: dict[str, str] = {}
+    for field in _COURSE_SETTINGS_PATH_FIELDS:
+        old_value = data.get(field)
+        if not old_value:
+            continue
+        new_value = path_map.get(old_value)
+        if new_value is not None and new_value != old_value:
+            updates[field] = new_value
+
+    return updates or None
+
+
 def compute_file_updates(
     repo_root: Path,
     path_map: dict[str, str],
@@ -467,6 +514,7 @@ def _describe_changes(
     manifest_updates: dict[str, str] | None,
     file_updates: dict[str, tuple[str, str]],
     module_order_updates: list[str] | None,
+    course_settings_updates: dict[str, str] | None,
     noop: bool,
     verbose: bool,
 ) -> None:
@@ -507,6 +555,9 @@ def _describe_changes(
         parts.append(f"updated {link_total} link(s) across {link_file_count} file(s)")
     if module_order_updates is not None:
         parts.append("updated module_order.toml")
+    if course_settings_updates:
+        fields = ", ".join(sorted(course_settings_updates))
+        parts.append(f"updated {fields} in course_settings.toml")
 
     print(", ".join(parts) + ".")
 
@@ -546,6 +597,7 @@ def run_mv(src: Path, dest: Path, noop: bool = False, verbose: bool = False) -> 
     file_updates = compute_file_updates(repo_root, path_map)
 
     module_order_updates = compute_module_order_updates(repo_root, path_map)
+    course_settings_updates = compute_course_settings_updates(repo_root, path_map)
 
     inner_renames_paths: list[tuple[Path, Path]] = []
     if src.is_dir():
@@ -553,13 +605,13 @@ def run_mv(src: Path, dest: Path, noop: bool = False, verbose: bool = False) -> 
 
     _describe_changes(
         path_map, manifest_changed, None, file_updates,
-        module_order_updates, noop, verbose,
+        module_order_updates, course_settings_updates, noop, verbose,
     )
 
     if noop:
         return
 
-    use_git = _is_git_repo(repo_root)
+    use_git = _is_git_repo(repo_root) and _has_tracked_content(repo_root, src)
     _do_move(src, dest, repo_root, use_git, inner_renames_paths)
 
     for file_new_path, (_, new_content) in file_updates.items():
@@ -575,4 +627,12 @@ def run_mv(src: Path, dest: Path, noop: bool = False, verbose: bool = False) -> 
             data = tomllib.load(f)
         data["order"] = module_order_updates
         with order_path.open("wb") as f:
+            tomli_w.dump(data, f)
+
+    if course_settings_updates:
+        settings_path = repo_root / "course_settings" / "course_settings.toml"
+        with settings_path.open("rb") as f:
+            data = tomllib.load(f)
+        data.update(course_settings_updates)
+        with settings_path.open("wb") as f:
             tomli_w.dump(data, f)
