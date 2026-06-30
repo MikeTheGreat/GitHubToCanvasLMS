@@ -5,7 +5,11 @@ from pathlib import Path
 
 import pytest
 
-from github_to_canvas.convert import markdown_to_html, preprocess_snippets
+from github_to_canvas.convert import (
+    expand_frontmatter_snippets,
+    markdown_to_html,
+    preprocess_snippets,
+)
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -222,6 +226,151 @@ def test_non_snippet_external_link_unchanged(tmp_path: Path) -> None:
     text = "[Go](https://example.com/courses/99999/modules)"
     result = preprocess_snippets(text, source, snippets_dir)
     assert result == text
+
+
+# ---------------------------------------------------------------------------
+# expand_frontmatter_snippets
+# ---------------------------------------------------------------------------
+
+def test_frontmatter_snippet_merged(tmp_path: Path) -> None:
+    snippets_dir = tmp_path / "snippets"
+    snippets_dir.mkdir()
+    (snippets_dir / "defaults.md").write_text("points_possible: 50\nrubric: Worksheet Rubric\n")
+    source = tmp_path / "assignments" / "worksheet1.md"
+    source.parent.mkdir()
+    body = "[PASTE_SNIPPET_INTO_FRONTMATTER](../snippets/defaults.md)\n\nBody text.\n"
+    fm, body_out = expand_frontmatter_snippets({"title": "Worksheet 1"}, body, source, snippets_dir)
+    assert fm == {"title": "Worksheet 1", "points_possible": 50, "rubric": "Worksheet Rubric"}
+    assert "PASTE_SNIPPET_INTO_FRONTMATTER" not in body_out
+    assert body_out.strip() == "Body text."
+
+
+def test_frontmatter_snippet_own_frontmatter_wins(tmp_path: Path) -> None:
+    snippets_dir = tmp_path / "snippets"
+    snippets_dir.mkdir()
+    (snippets_dir / "defaults.md").write_text("points_possible: 50\n")
+    source = tmp_path / "assignments" / "worksheet1.md"
+    source.parent.mkdir()
+    body = "[PASTE_SNIPPET_INTO_FRONTMATTER](../snippets/defaults.md)\n\nBody text.\n"
+    fm, _ = expand_frontmatter_snippets({"points_possible": 99}, body, source, snippets_dir)
+    assert fm["points_possible"] == 99
+
+
+def test_frontmatter_snippet_multiple_later_overrides_earlier(tmp_path: Path) -> None:
+    snippets_dir = tmp_path / "snippets"
+    snippets_dir.mkdir()
+    (snippets_dir / "a.md").write_text("points_possible: 10\nsubmission_types: [online_upload]\n")
+    (snippets_dir / "b.md").write_text("points_possible: 20\n")
+    source = tmp_path / "assignments" / "worksheet1.md"
+    source.parent.mkdir()
+    body = (
+        "[PASTE_SNIPPET_INTO_FRONTMATTER](../snippets/a.md)\n"
+        "[PASTE_SNIPPET_INTO_FRONTMATTER](../snippets/b.md)\n"
+        "\n"
+        "Body text.\n"
+    )
+    fm, body_out = expand_frontmatter_snippets({}, body, source, snippets_dir)
+    assert fm == {"points_possible": 20, "submission_types": ["online_upload"]}
+    assert body_out.strip() == "Body text."
+
+
+def test_frontmatter_snippet_allows_blank_lines_around_and_between(tmp_path: Path) -> None:
+    snippets_dir = tmp_path / "snippets"
+    snippets_dir.mkdir()
+    (snippets_dir / "a.md").write_text("points_possible: 10\n")
+    (snippets_dir / "b.md").write_text("rubric: Worksheet Rubric\n")
+    source = tmp_path / "assignments" / "worksheet1.md"
+    source.parent.mkdir()
+    body = (
+        "\n   \n"
+        "[PASTE_SNIPPET_INTO_FRONTMATTER](../snippets/a.md)\n"
+        "\n"
+        "[PASTE_SNIPPET_INTO_FRONTMATTER](../snippets/b.md)\n"
+        "\n\n"
+        "Body text.\n"
+    )
+    fm, body_out = expand_frontmatter_snippets({}, body, source, snippets_dir)
+    assert fm == {"points_possible": 10, "rubric": "Worksheet Rubric"}
+    assert body_out.strip() == "Body text."
+
+
+def test_no_frontmatter_snippet_marker_leaves_body_untouched(tmp_path: Path) -> None:
+    snippets_dir = tmp_path / "snippets"
+    snippets_dir.mkdir()
+    source = tmp_path / "assignments" / "worksheet1.md"
+    source.parent.mkdir()
+    body = "\nNormal body content.\n"
+    fm, body_out = expand_frontmatter_snippets({"title": "X"}, body, source, snippets_dir)
+    assert fm == {"title": "X"}
+    assert body_out == body
+
+
+def test_frontmatter_snippet_missing_file_prints_error(
+    tmp_path: Path, capsys: pytest.CaptureFixture
+) -> None:
+    snippets_dir = tmp_path / "snippets"
+    snippets_dir.mkdir()
+    source = tmp_path / "assignments" / "worksheet1.md"
+    source.parent.mkdir()
+    body = "[PASTE_SNIPPET_INTO_FRONTMATTER](../snippets/gone.md)\n\nBody text.\n"
+    errs: list[str] = []
+    fm, body_out = expand_frontmatter_snippets({}, body, source, snippets_dir, errors=errs)
+    assert fm == {}
+    captured = capsys.readouterr()
+    assert "ERROR" in captured.out
+    assert "gone.md" in captured.out
+    assert len(errs) == 1
+    assert body_out.strip() == "Body text."
+
+
+def test_frontmatter_snippet_path_outside_snippets_dir_prints_error(
+    tmp_path: Path, capsys: pytest.CaptureFixture
+) -> None:
+    snippets_dir = tmp_path / "snippets"
+    snippets_dir.mkdir()
+    (tmp_path / "assignments").mkdir()
+    (tmp_path / "assignments" / "evil.md").write_text("published: true\n")
+    source = tmp_path / "assignments" / "worksheet1.md"
+    body = "[PASTE_SNIPPET_INTO_FRONTMATTER](evil.md)\n\nBody text.\n"
+    errs: list[str] = []
+    fm, _ = expand_frontmatter_snippets({}, body, source, snippets_dir, errors=errs)
+    assert fm == {}
+    captured = capsys.readouterr()
+    assert "outside the snippets directory" in captured.out
+    assert len(errs) == 1
+
+
+def test_frontmatter_snippet_non_mapping_prints_error(
+    tmp_path: Path, capsys: pytest.CaptureFixture
+) -> None:
+    snippets_dir = tmp_path / "snippets"
+    snippets_dir.mkdir()
+    (snippets_dir / "list.md").write_text("- one\n- two\n")
+    source = tmp_path / "assignments" / "worksheet1.md"
+    source.parent.mkdir()
+    body = "[PASTE_SNIPPET_INTO_FRONTMATTER](../snippets/list.md)\n\nBody text.\n"
+    errs: list[str] = []
+    fm, _ = expand_frontmatter_snippets({}, body, source, snippets_dir, errors=errs)
+    assert fm == {}
+    captured = capsys.readouterr()
+    assert "must contain a YAML mapping" in captured.out
+    assert len(errs) == 1
+
+
+def test_frontmatter_snippet_not_first_line_ignored(tmp_path: Path) -> None:
+    """The marker only triggers if it's the first non-blank content in the body."""
+    snippets_dir = tmp_path / "snippets"
+    snippets_dir.mkdir()
+    (snippets_dir / "defaults.md").write_text("points_possible: 50\n")
+    source = tmp_path / "assignments" / "worksheet1.md"
+    source.parent.mkdir()
+    body = (
+        "Some body text.\n\n"
+        "[PASTE_SNIPPET_INTO_FRONTMATTER](../snippets/defaults.md)\n"
+    )
+    fm, body_out = expand_frontmatter_snippets({}, body, source, snippets_dir)
+    assert fm == {}
+    assert body_out == body
 
 
 # ---------------------------------------------------------------------------

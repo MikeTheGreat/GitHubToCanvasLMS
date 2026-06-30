@@ -50,6 +50,7 @@ Write your course content as Markdown files in a Git repository. Run this tool t
     - [Question banks (`question_banks/`)](#question-banks-question_banks)
     - [Snippets](#snippets)
       - [Inline snippets and the `CANVAS_COURSE_REFERENCE` snippet](#inline-snippets-and-the-canvas_course_reference-snippet)
+      - [Shared frontmatter via `PASTE_SNIPPET_INTO_FRONTMATTER`](#shared-frontmatter-via-paste_snippet_into_frontmatter)
   - [Manifest file](#manifest-file)
     - [Deleting a file in Canvas](#deleting-a-file-in-canvas)
   - [IMSCC import](#imscc-import)
@@ -1378,6 +1379,39 @@ The snippet file name is written in ALL CAPS to make it visually distinct from r
 > **Note on `$` in links** — Inside a Markdown link URL, `$` has no special meaning and is valid in HTML `href` attributes (RFC 3986 sub-delimiter). The preprocessing step runs before Pandoc, so there is no conflict with Pandoc's `$…$` math syntax. The link will appear broken in a Markdown editor preview, but the Markdown structure itself is unaffected.
 
 **The `import` subcommand creates this snippet automatically.** When you import a `.imscc` file, the tool reads the institution hostname and course ID from the export metadata and writes `snippets/inline/CANVAS_COURSE_REFERENCE.md` with the full base URL. Every Markdown link whose URL starts with that base URL is rewritten to use the `$path$` snippet reference, with the link text added as a hover title.
+
+#### Shared frontmatter via `PASTE_SNIPPET_INTO_FRONTMATTER`
+
+The two snippet forms above only reuse **body** content. To reuse **frontmatter** values — e.g. every "worksheet" assignment sharing the same `points_possible` and `rubric` — lead the body with one or more links of the form:
+
+```markdown
+---
+title: "Worksheet 1"
+canvas_type: assignment
+published: true
+---
+[PASTE_SNIPPET_INTO_FRONTMATTER](../snippets/worksheet-defaults.md)
+[PASTE_SNIPPET_INTO_FRONTMATTER](../snippets/another-snippet.md)
+
+Do the worksheet...
+```
+
+```yaml
+<!-- snippets/worksheet-defaults.md -->
+points_possible: 50
+rubric: "Worksheet Rubric"
+submission_types: [online_upload]
+```
+
+Each referenced file must be a plain YAML mapping (not Markdown prose) — its keys are merged into the file's own frontmatter before the rest of processing. Rules:
+
+- The link text must be exactly `PASTE_SNIPPET_INTO_FRONTMATTER` (case-sensitive) — this is what makes the reference visually distinct and lets you Ctrl+click it in VS Code to jump straight to the shared defaults file.
+- These lines must be the **first thing in the body** — only blank/whitespace-only lines may precede or separate them. The scan stops at the first line that isn't blank and isn't a `PASTE_SNIPPET_INTO_FRONTMATTER` link; everything from there on is treated as ordinary body content.
+- Multiple references are merged in order, later snippets overriding earlier ones for any keys they share.
+- The file's own frontmatter always wins over snippet values, so a single file can still override one or two fields from a shared default.
+- Nested includes (a frontmatter snippet referencing another snippet) are not supported.
+
+This is a different tool than the centralized `due_dates` table in `course_settings.toml` (see [Centralized due dates](#course_settingstoml)): `due_dates` is for fields that should mostly be *unique per item* but reviewed in one place; `PASTE_SNIPPET_INTO_FRONTMATTER` is for fields that should be *identical* across many files, edited once and reflected everywhere that includes the snippet (after a re-sync — see the staleness caveat above).
 
 ---
 

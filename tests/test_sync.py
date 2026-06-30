@@ -742,6 +742,33 @@ def test_single_target_syncs_only_specified_file(mock_course, course_root, mocke
     mock_course.create_module.assert_not_called()
 
 
+def test_single_target_frontmatter_snippet_merged(mock_course, course_root, mocker) -> None:
+    """A PASTE_SNIPPET_INTO_FRONTMATTER reference merges shared defaults into frontmatter."""
+    mocker.patch("github_to_canvas.manifest.flush")
+    mock_course.create_assignment.return_value = _mock_assignment(98765)
+
+    (course_root / "snippets" / "worksheet-defaults.md").write_text(
+        "points_possible: 12\nsubmission_types: [online_upload]\n"
+    )
+    worksheet = course_root / "assignments" / "worksheet1.md"
+    worksheet.write_text(
+        '---\ntitle: "Worksheet 1"\npublished: true\n---\n'
+        "[PASTE_SNIPPET_INTO_FRONTMATTER](../snippets/worksheet-defaults.md)\n"
+        "\nDo the worksheet.\n"
+    )
+
+    run_targeted_sync(
+        _config(), course_root,
+        recursive_targets=[],
+        single_targets=[str(worksheet)],
+    )
+
+    call_kwargs = mock_course.create_assignment.call_args[1]["assignment"]
+    assert call_kwargs["name"] == "Worksheet 1"
+    assert call_kwargs["points_possible"] == 12
+    assert call_kwargs["submission_types"] == ["online_upload"]
+
+
 def test_single_target_respects_timestamp(mock_course, course_root, mocker, capsys) -> None:
     """--single-target skips a file that is up-to-date per manifest timestamp."""
     _make_old(course_root / "assignments" / "week1.md")

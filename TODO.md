@@ -177,7 +177,8 @@ update-in-place path matched by manifest id rather than title.
 
 ## Snippet dependency tracking for staleness
 
-Editing a snippet file does not trigger re-sync of content files that include it. The
+Applies to both body snippets (`[text](path)`/`$path$`) and frontmatter snippets
+(`PASTE_SNIPPET_INTO_FRONTMATTER`). Editing a snippet file does not trigger re-sync of content files that include it. The
 sync engine checks each content file's own mtime against `last_synced` in the manifest;
 since changing a snippet only updates the snippet file's mtime, the including files are
 not considered stale. The user must currently use `--force-uploads` or manually `touch`

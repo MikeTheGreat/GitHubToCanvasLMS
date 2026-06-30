@@ -409,6 +409,46 @@ def test_parse_question_file_expands_inline_snippets(tmp_path):
     assert "https://school.instructure.com/courses/999/grades" in q["question_text"]
 
 
+def test_parse_quiz_file_merges_frontmatter_snippet(tmp_path):
+    """PASTE_SNIPPET_INTO_FRONTMATTER merges shared defaults into quiz frontmatter."""
+    snippets_dir = tmp_path / "snippets"
+    snippets_dir.mkdir()
+    (snippets_dir / "quiz-defaults.md").write_text("time_limit: 30\nallowed_attempts: 1\n")
+    quiz_dir = tmp_path / "quizzes" / "q1"
+    quiz_dir.mkdir(parents=True)
+    quiz_md = quiz_dir / "q1.md"
+    quiz_md.write_text(
+        "---\ntitle: Quiz\n---\n"
+        "[PASTE_SNIPPET_INTO_FRONTMATTER](../../snippets/quiz-defaults.md)\n\n"
+        "Description text.\n"
+    )
+    fm, desc_html, _ = parse_quiz_file(quiz_md, snippets_dir)
+    assert fm == {"title": "Quiz", "time_limit": 30, "allowed_attempts": 1}
+    assert "PASTE_SNIPPET_INTO_FRONTMATTER" not in desc_html
+    assert "Description text." in desc_html
+
+
+def test_parse_question_file_merges_frontmatter_snippet(tmp_path):
+    """PASTE_SNIPPET_INTO_FRONTMATTER merges shared defaults into question frontmatter."""
+    snippets_dir = tmp_path / "snippets"
+    snippets_dir.mkdir()
+    (snippets_dir / "question-defaults.md").write_text(
+        "question_type: essay_question\npoints_possible: 2\n"
+    )
+    q_dir = tmp_path / "quizzes" / "q1" / "questions"
+    q_dir.mkdir(parents=True)
+    q_md = q_dir / "q.md"
+    q_md.write_text(
+        "---\ntitle: Q\n---\n"
+        "[PASTE_SNIPPET_INTO_FRONTMATTER](../../../snippets/question-defaults.md)\n\n"
+        "Explain.\n"
+    )
+    q = parse_question_file(q_md, snippets_dir)
+    assert q["question_type"] == "essay_question"
+    assert q["points_possible"] == 2
+    assert "Explain." in q["question_text"]
+
+
 def test_parse_quiz_file_works_without_snippets_dir():
     """parse_quiz_file still works when snippets_dir is not provided (backward compat)."""
     fm, desc_html, q_paths = parse_quiz_file(QUIZ_MD)

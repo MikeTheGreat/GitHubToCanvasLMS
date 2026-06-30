@@ -960,3 +960,38 @@ Markdown editors render the include as a normal clickable link, making it easy t
 - **Nested includes are not supported.** If a snippet contains a link to another snippet, the tool prints an error message and leaves the inner link as a plain hyperlink (it is not expanded). This also prevents circular includes.
 - Links inside a snippet that point to content files (pages, assignments, etc.) are treated normally by the post-Pandoc link-rewriting step — they will be rewritten to Canvas URLs just like any other link
 - **Editing a snippet does not automatically re-sync files that include it.** The sync engine's staleness check compares each content file's own mtime against the manifest's `last_synced` timestamp. Changing a snippet updates only the snippet file's mtime — the including files are untouched, so they are not considered stale. To propagate a snippet change, use `--force-uploads` or manually `touch` the including files so their mtimes advance past `last_synced`.
+
+### Frontmatter snippets (`PASTE_SNIPPET_INTO_FRONTMATTER`)
+
+The body-content snippet mechanism above can't reach into a file's YAML frontmatter — `parse_frontmatter()` splits the frontmatter block off and parses it before `preprocess_snippets()` ever sees the body, so a `[text](path)` link living inside the YAML block would just be plain text. `expand_frontmatter_snippets()` (`convert.py`) closes that gap with a separate, special-cased mechanism for **merging shared frontmatter values** (e.g. `points_possible`, `rubric` shared by every "worksheet" assignment) rather than reusing body text.
+
+**Syntax:**
+
+```markdown
+---
+title: "Worksheet 1"
+canvas_type: assignment
+---
+[PASTE_SNIPPET_INTO_FRONTMATTER](../snippets/worksheet-defaults.md)
+[PASTE_SNIPPET_INTO_FRONTMATTER](../snippets/another-snippet.md)
+
+Do the worksheet...
+```
+
+The link text must be the literal string `PASTE_SNIPPET_INTO_FRONTMATTER` — this is what makes the reference visually distinct from a normal link, and (unlike a bare YAML key) it's clickable in VS Code, since VS Code's Markdown link provider only recognizes `[text](path)` inside the parsed body, never inside frontmatter (the frontmatter block is consumed as a single opaque token before inline parsing runs).
+
+**Resolution algorithm** (`expand_frontmatter_snippets()`):
+
+1. Scan the body line by line from the top. Blank/whitespace-only lines are skipped without stopping the scan.
+2. If the first non-blank line isn't a `PASTE_SNIPPET_INTO_FRONTMATTER` link, the body and frontmatter are returned completely unchanged (no marker mode at all — this is a cheap lookahead so ordinary files pay no cost and are never mutated).
+3. Otherwise, keep consuming `PASTE_SNIPPET_INTO_FRONTMATTER` lines (and blank lines between them) until hitting the first line that is neither. That line, and everything after it, becomes the returned body.
+4. Each referenced file is loaded relative to the *including* file (same convention as body snippets) and validated to resolve inside `snippets_dir` (same path-escape guard as `preprocess_snippets`).
+5. Each referenced file's content is parsed with `yaml.safe_load()` — it must be a YAML mapping, not Markdown prose. An error is reported (and that reference skipped) if the path escapes `snippets/`, the file is missing, the YAML is malformed, or it doesn't parse to a mapping.
+6. Matched snippets are merged into a `defaults` dict in order — later references override earlier ones for shared keys.
+7. The final frontmatter is `{**defaults, **frontmatter}` — the file's own frontmatter always wins over snippet values, so a single file can override one or two fields from a shared default without losing the rest.
+
+**Call sites:** wired in everywhere frontmatter is parsed for actual content sync — `_sync_content_file()` (pages/assignments/discussions) and the module sync path in `sync.py`, plus `parse_quiz_file()` and `parse_question_file()` in `quiz.py` (so quiz-level settings like `time_limit`, or per-question settings like `question_type`/`points_possible`, can be shared across a question bank too). It always runs *before* `preprocess_snippets()`, since the latter only needs to see the real Markdown body.
+
+**Differences from centralized `due_dates`:** `due_dates` (in `course_settings/course_settings.toml`) is for fields that are mostly *unique per item* but worth reviewing in one place, matched by title. `PASTE_SNIPPET_INTO_FRONTMATTER` is for fields that should be *identical* across many files — edit the snippet once, and every file that references it picks up the change on its next sync (subject to the same staleness caveat as body snippets above: touching only the snippet file does not mark including files as stale).
+
+**Not supported:** nested includes (a frontmatter snippet referencing another snippet) — snippet files are parsed as flat YAML, so there is no recursive expansion to support in the first place.

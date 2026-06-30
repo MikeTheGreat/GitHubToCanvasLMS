@@ -7,7 +7,7 @@ from typing import Any
 
 import yaml
 
-from .convert import markdown_to_html, preprocess_snippets
+from .convert import expand_frontmatter_snippets, markdown_to_html, preprocess_snippets
 
 
 def _parse_frontmatter(text: str) -> tuple[dict[str, Any], str]:
@@ -40,6 +40,7 @@ def parse_quiz_file(
     frontmatter, body = _parse_frontmatter(text)
 
     if snippets_dir is not None:
+        frontmatter, body = expand_frontmatter_snippets(frontmatter, body, quiz_md, snippets_dir)
         body = preprocess_snippets(body, quiz_md, snippets_dir)
 
     question_files: list[Path] = []
@@ -128,6 +129,7 @@ def parse_question_file(
     frontmatter, body = _parse_frontmatter(text)
 
     if snippets_dir is not None:
+        frontmatter, body = expand_frontmatter_snippets(frontmatter, body, q_path, snippets_dir)
         body = preprocess_snippets(body, q_path, snippets_dir)
 
     question_type = frontmatter.get("question_type", "essay_question")

@@ -14,7 +14,7 @@ import yaml
 from . import canvas_api as capi
 from . import manifest as manifest_lib
 from .config import Config
-from .convert import markdown_to_html, preprocess_snippets
+from .convert import expand_frontmatter_snippets, markdown_to_html, preprocess_snippets
 from .ignore import IgnoreMatcher, load_ignore_matcher
 from .link_rewrite import extract_local_refs, infer_canvas_type, rewrite_links
 from .orphans import ResourceKey, extract_canvas_refs
@@ -1108,6 +1108,11 @@ def _sync_content_file(
         if errors is not None:
             errors.append(msg)
         return
+    error_count_before_frontmatter_snippets = len(errors) if errors is not None else 0
+    frontmatter, body = expand_frontmatter_snippets(frontmatter, body, md_file, snippets_dir, errors)
+    if errors is not None and len(errors) > error_count_before_frontmatter_snippets:
+        print(f"  Skipping upload due to errors: {local_key}")
+        return
     error_count_before_snippets = len(errors) if errors is not None else 0
     body = preprocess_snippets(body, md_file, snippets_dir, errors)
     if errors is not None and len(errors) > error_count_before_snippets:
@@ -1430,6 +1435,7 @@ def _sync_module(
             errors.append(msg)
         return False
     snippets_dir = repo_root / "snippets"
+    frontmatter, body = expand_frontmatter_snippets(frontmatter, body, md_file, snippets_dir, errors)
     body = preprocess_snippets(body, md_file, snippets_dir)
     items = parse_module_body(body, md_file, repo_root)
 
