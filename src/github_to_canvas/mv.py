@@ -437,6 +437,22 @@ def compute_file_updates(
     return updates
 
 
+def _set_toml_string_value(content: str, key: str, value: str) -> str:
+    """Replace a top-level `key = "..."` scalar assignment in raw TOML text.
+
+    Edits the text directly instead of round-tripping through tomllib/tomli_w,
+    so comments and existing array formatting (e.g. due_dates, which tomli_w
+    would reflow into [[due_dates]] sections once lines exceed its 100-char
+    inline-table heuristic) are left untouched.
+    """
+    escaped_value = value.replace("\\", "\\\\").replace('"', '\\"')
+    pattern = re.compile(rf'^{re.escape(key)}\s*=\s*".*"$', re.MULTILINE)
+    new_content, count = pattern.subn(f'{key} = "{escaped_value}"', content, count=1)
+    if count == 0:
+        raise ValueError(f"Could not find top-level {key!r} assignment in course_settings.toml")
+    return new_content
+
+
 def _do_move(
     src: Path, dest: Path, repo_root: Path, use_git: bool,
     inner_renames: list[tuple[Path, Path]] | None = None,
@@ -631,8 +647,7 @@ def run_mv(src: Path, dest: Path, noop: bool = False, verbose: bool = False) -> 
 
     if course_settings_updates:
         settings_path = repo_root / "course_settings" / "course_settings.toml"
-        with settings_path.open("rb") as f:
-            data = tomllib.load(f)
-        data.update(course_settings_updates)
-        with settings_path.open("wb") as f:
-            tomli_w.dump(data, f)
+        content = settings_path.read_text(encoding="utf-8")
+        for field, new_value in course_settings_updates.items():
+            content = _set_toml_string_value(content, field, new_value)
+        settings_path.write_text(content, encoding="utf-8")
