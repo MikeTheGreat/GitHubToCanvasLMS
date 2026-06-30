@@ -408,7 +408,7 @@ def parse_module_body(
     return items
 
 
-def _content_default_published(repo_root: Path, local_path: str) -> bool:
+def _content_default_published(repo_root: Path, local_path: str, snippets_dir: Path) -> bool:
     """Published default for a module item with no explicit override.
 
     Mirrors content files' own `published` frontmatter so that re-syncing a
@@ -420,7 +420,10 @@ def _content_default_published(repo_root: Path, local_path: str) -> bool:
     if ref_path.suffix != ".md" or not ref_path.exists():
         return True
     try:
-        ref_frontmatter, _ = parse_frontmatter(ref_path.read_text())
+        ref_frontmatter, ref_body = parse_frontmatter(ref_path.read_text())
+        ref_frontmatter, _ = expand_frontmatter_snippets(
+            ref_frontmatter, ref_body, ref_path, snippets_dir
+        )
     except yaml.YAMLError:
         return True
     return bool(ref_frontmatter.get("published", False))
@@ -1520,7 +1523,7 @@ def _sync_module(
     items = parse_module_body(body, md_file, repo_root)
     for item in items:
         if item.get("type") == "content" and item.get("published") is None:
-            item["published"] = _content_default_published(repo_root, item["local_path"])
+            item["published"] = _content_default_published(repo_root, item["local_path"], snippets_dir)
 
     existing = manifest.get(local_key)
     title = frontmatter.get("title", md_file.stem)

@@ -258,3 +258,11 @@ Maybe remove KEEP?
 
 # Bugs to Fix:
 - Changing module_order.toml doesn't re-arrange the modules in Canvas
+
+- Within a module Markdown file: 'published' is connected to whether the underlying item is published (for example, an assignment) - maybe remove the <!-- published:false --> mechanism from modules & rely on the underlying content instead?
+
+- Even though I'm not changing anything in Canvas I sometimes still see an error about 'newer item on Canvas', like so:
+The following resources were NOT uploaded because Canvas has a newer version.
+Review these files and re-upload manually if needed (use --force-overwrite to skip this check):
+  assignments/worksheets/01-a-unit-worksheets.md
+  assignments/worksheets/01-b-unit-worksheets.md

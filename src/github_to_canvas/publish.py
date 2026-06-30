@@ -18,7 +18,7 @@ from typing import Any
 
 import yaml
 
-from .convert import preprocess_snippets
+from .convert import expand_frontmatter_snippets, preprocess_snippets
 from .quiz import parse_question_file
 from .sync import _content_default_published, parse_frontmatter, parse_module_body
 
@@ -33,7 +33,7 @@ def _item_published(item: dict, repo: Path) -> bool:
     """
     published = item.get("published", True)
     if published is None:
-        return _content_default_published(repo, item["local_path"])
+        return _content_default_published(repo, item["local_path"], repo / "snippets")
     return bool(published)
 
 
@@ -233,8 +233,9 @@ def _strip_pandoc_syntax(text: str) -> str:
 CONTENT_DIRS = ["assignments", "discussions", "modules", "pages"]
 
 
-def _is_published(md_path: Path) -> bool:
-    frontmatter, _ = parse_frontmatter(md_path.read_text())
+def _is_published(md_path: Path, repo: Path) -> bool:
+    frontmatter, body = parse_frontmatter(md_path.read_text())
+    frontmatter, _ = expand_frontmatter_snippets(frontmatter, body, md_path, repo / "snippets")
     return frontmatter.get("published", False) is True
 
 
@@ -254,7 +255,7 @@ def discover_published(repo: Path) -> dict[str, list[tuple[str, str]]]:
 
         items: list[tuple[str, str]] = []
         for md_file in sorted(content_dir.rglob("*.md")):
-            if not _is_published(md_file):
+            if not _is_published(md_file, repo):
                 continue
             fm, _ = parse_frontmatter(md_file.read_text())
             title = fm.get("title", md_file.stem)
@@ -279,7 +280,7 @@ def _discover_type(repo: Path, content_type: str) -> list[tuple[str, str]]:
         return []
     items: list[tuple[str, str]] = []
     for md_file in sorted(content_dir.rglob("*.md")):
-        if not _is_published(md_file):
+        if not _is_published(md_file, repo):
             continue
         fm, _ = parse_frontmatter(md_file.read_text())
         title = fm.get("title", md_file.stem)
@@ -308,7 +309,7 @@ def _find_syllabus(repo: Path) -> tuple[str, str] | None:
         )
 
     for md_file in candidates:
-        if not _is_published(md_file):
+        if not _is_published(md_file, repo):
             continue
         fm, _ = parse_frontmatter(md_file.read_text())
         title = fm.get("title", md_file.stem)

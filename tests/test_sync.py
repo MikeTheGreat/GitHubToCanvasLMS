@@ -3382,10 +3382,41 @@ def test_content_default_published_mirrors_referenced_frontmatter(tmp_path: Path
     (repo_root / "pages" / "unspecified.md").write_text("---\ntitle: P\n---\nbody\n")
     (repo_root / "assets").mkdir()
     (repo_root / "assets" / "file.docx").write_bytes(b"fake")
+    snippets_dir = repo_root / "snippets"
+    snippets_dir.mkdir()
 
-    assert _content_default_published(repo_root, "pages/published.md") is True
-    assert _content_default_published(repo_root, "pages/unspecified.md") is False
-    assert _content_default_published(repo_root, "assets/file.docx") is True
+    assert _content_default_published(repo_root, "pages/published.md", snippets_dir) is True
+    assert _content_default_published(repo_root, "pages/unspecified.md", snippets_dir) is False
+    assert _content_default_published(repo_root, "assets/file.docx", snippets_dir) is True
+
+
+def test_content_default_published_resolves_published_from_frontmatter_snippet(
+    tmp_path: Path,
+) -> None:
+    """A `published: true` set only via PASTE_SNIPPET_INTO_FRONTMATTER (not in the
+    file's own frontmatter block) must still be picked up — regression test for a
+    bug where _content_default_published read raw frontmatter and saw no
+    `published` key, silently unpublishing the module item."""
+    from github_to_canvas.sync import _content_default_published
+
+    repo_root = tmp_path
+    snippets_dir = repo_root / "snippets" / "frontmatter"
+    snippets_dir.mkdir(parents=True)
+    (snippets_dir / "defaults.yaml").write_text(
+        "published: true # can be replaced in individual files' frontmatter\n"
+    )
+    (repo_root / "assignments").mkdir()
+    (repo_root / "assignments" / "worksheet.md").write_text(
+        "---\ntitle: W\n---\n"
+        "[PASTE_SNIPPET_INTO_FRONTMATTER](../snippets/frontmatter/defaults.yaml)\n\nbody\n"
+    )
+
+    assert (
+        _content_default_published(
+            repo_root, "assignments/worksheet.md", repo_root / "snippets"
+        )
+        is True
+    )
 
 
 def test_parse_module_body_content_published_false(tmp_path: Path) -> None:
