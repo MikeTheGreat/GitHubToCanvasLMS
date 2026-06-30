@@ -232,6 +232,26 @@ When implemented, the suggested approach:
 - Use `canvasapi` directly in the test assertions to fetch each uploaded item and verify its content, metadata, and published state
 - Run this suite manually or in a separate CI job gated on `CANVAS_API_TOKEN` being present — not on every push
 
+## Angle-bracket URL syntax not handled in some Markdown parsers
+
+Markdown allows `[text](<url>)` to wrap a URL in angle brackets (typically used
+for filenames that contain spaces). This is handled in `mv.py` (link rewriting)
+and `publish.py:extract_local_refs` (reachability traversal), but three other
+places that parse raw Markdown link syntax do not strip the brackets and would
+silently fail if a link used this syntax:
+
+- **`convert.py:_SNIPPET_LINK_RE`** — block snippet expansion: `[text](<snippets/foo.md>)` would not be recognized as a snippet ref
+- **`sync.py:_MODULE_LINK_RE`** — module item parsing: `- [Title](<../pages/foo.md>)` would fail to resolve the content file
+- **`quiz.py:_QUIZ_LINK_RE`** — quiz question list: `1. [Q1](<questions/q1.md>)` would fail to find the question file
+
+These are considered negligible risk in practice because those link syntaxes are
+controlled/structured formats that users don't write by hand with angle brackets,
+but they could theoretically be triggered by an editor that auto-inserts `<>` for
+paths with spaces.
+
+Fix pattern (same as `mv.py` and `publish.py`): after capturing the URL group,
+check `if href.startswith("<") and href.endswith(">"):` and strip the brackets.
+
 ## Filesystem watcher for automatic move/rename tracking
 
 A background daemon (using Python's `watchdog` library) that monitors the course

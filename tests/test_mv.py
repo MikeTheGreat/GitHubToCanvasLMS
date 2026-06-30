@@ -221,6 +221,13 @@ class TestTransformLinks:
         assert "../assets/syllabus.docx" in result
         assert '"Syllabus File"' in result
 
+    def test_handles_angle_bracket_url(self) -> None:
+        content = "[Course Syllabus](<../assets/syllabus/file.docx>)"
+        path_map = {"assets/syllabus/file.docx": "assets/syllabus/file-v2.docx"}
+        result = transform_links(content, "course_settings", "course_settings", path_map)
+        assert "<../assets/syllabus/file-v2.docx>" in result
+        assert "file.docx>" not in result.replace("file-v2.docx>", "")
+
     def test_no_change_when_nothing_moved(self) -> None:
         content = "See [page](../pages/foo.md)"
         result = transform_links(content, "modules", "modules", {})
@@ -241,6 +248,26 @@ class TestTransformLinks:
         }
         result = transform_links(content, "pages", "pages/sub", path_map)
         assert "../../assignments/new.md" in result
+
+    def test_updates_html_href_link(self) -> None:
+        content = '<a href="../assets/syllabus/file.docx">Download</a>'
+        path_map = {"assets/syllabus/file.docx": "assets/docs/file.docx"}
+        result = transform_links(content, "course_settings", "course_settings", path_map)
+        assert "../assets/docs/file.docx" in result
+        assert "../assets/syllabus/file.docx" not in result
+
+    def test_updates_html_img_src(self) -> None:
+        content = '<img src="../assets/img.png" alt="logo"/>'
+        path_map = {"assets/img.png": "assets/images/img.png"}
+        result = transform_links(content, "course_settings", "course_settings", path_map)
+        assert "../assets/images/img.png" in result
+        assert "../assets/img.png" not in result
+
+    def test_leaves_external_html_href_alone(self) -> None:
+        content = '<a href="https://example.com">External</a>'
+        path_map = {"assets/x.pdf": "assets/y.pdf"}
+        result = transform_links(content, "course_settings", "course_settings", path_map)
+        assert result == content
 
 
 # ---------------------------------------------------------------------------
@@ -416,6 +443,28 @@ class TestComputeFileUpdates:
         assert "pages/sub/moveme.md" in updates
         _, new_content = updates["pages/sub/moveme.md"]
         assert "../../assignments/hw1.md" in new_content
+
+    def test_finds_html_href_in_syllabus(self, tmp_path: Path) -> None:
+        repo = _make_repo(tmp_path, {
+            "course_settings/syllabus.md": '<a href="../assets/syllabus/file.docx">Download</a>',
+        })
+        path_map = {"assets/syllabus/file.docx": "assets/docs/file.docx"}
+        updates = compute_file_updates(repo, path_map)
+        assert "course_settings/syllabus.md" in updates
+        _, new_content = updates["course_settings/syllabus.md"]
+        assert "../assets/docs/file.docx" in new_content
+        assert "../assets/syllabus/file.docx" not in new_content
+
+    def test_finds_html_img_in_syllabus(self, tmp_path: Path) -> None:
+        repo = _make_repo(tmp_path, {
+            "course_settings/syllabus.md": '<img src="../assets/banner.png" alt="banner"/>',
+        })
+        path_map = {"assets/banner.png": "assets/images/banner.png"}
+        updates = compute_file_updates(repo, path_map)
+        assert "course_settings/syllabus.md" in updates
+        _, new_content = updates["course_settings/syllabus.md"]
+        assert "../assets/images/banner.png" in new_content
+        assert "../assets/banner.png" not in new_content
 
 
 # ---------------------------------------------------------------------------
@@ -682,6 +731,19 @@ class TestRunMv:
             settings = tomllib.load(f)
         assert settings["front_page"] == "pages/old-home.md"
         assert settings["title"] == "Test"
+
+    def test_moving_asset_updates_syllabus_html_link(self, tmp_path: Path) -> None:
+        repo = _make_repo(tmp_path, {
+            "assets/syllabus/file.docx": "content",
+            "course_settings/syllabus.md": '<a href="../assets/syllabus/file.docx">Download</a>',
+            "assets/docs/.gitkeep": "",
+        })
+
+        run_mv(repo / "assets/syllabus/file.docx", repo / "assets/docs/file.docx")
+
+        syllabus_content = (repo / "course_settings/syllabus.md").read_text()
+        assert "../assets/docs/file.docx" in syllabus_content
+        assert "../assets/syllabus/file.docx" not in syllabus_content
 
 
 def _git_init(repo: Path) -> None:

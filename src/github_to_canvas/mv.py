@@ -22,6 +22,10 @@ _CONTENT_TYPE_DIRS = {
 
 _MD_LINK_RE = re.compile(r"(!?\[[^\]]*\])\(([^)]+)\)")
 _INLINE_SNIPPET_RE = re.compile(r"\$([^$\n]+\.md)\$")
+_HTML_IMG_RE = re.compile(r"<img\b[^>]*/?>", re.IGNORECASE)
+_HTML_A_RE = re.compile(r"<a\b[^>]*>", re.IGNORECASE)
+_HTML_SRC_ATTR_RE = re.compile(r'\bsrc="([^"]*)"')
+_HTML_HREF_ATTR_RE = re.compile(r'\bhref="([^"]*)"')
 
 
 def find_repo_root(start_path: Path) -> Path | None:
@@ -300,9 +304,15 @@ def transform_links(
         raw_url = m.group(2)
 
         url, title_suffix = _split_url_title(raw_url)
-        new_url = _transform_url(url)
+        # Markdown allows <url> syntax (e.g. for filenames with spaces); strip brackets
+        stripped = url.strip()
+        bracketed = stripped.startswith("<") and stripped.endswith(">")
+        inner = stripped[1:-1] if bracketed else url
+        new_url = _transform_url(inner)
         if new_url is None:
             return m.group(0)
+        if bracketed:
+            new_url = f"<{new_url}>"
         return f"{prefix}({new_url}{title_suffix})"
 
     def _replace_snippet(m: re.Match) -> str:
@@ -312,8 +322,20 @@ def transform_links(
             return m.group(0)
         return f"${new_path}$"
 
+    def _replace_html_attr(m: re.Match, attr_re: re.Pattern) -> str:
+        tag = m.group(0)
+        attr_m = attr_re.search(tag)
+        if attr_m is None:
+            return tag
+        new_url = _transform_url(attr_m.group(1))
+        if new_url is None:
+            return tag
+        return tag[: attr_m.start(1)] + new_url + tag[attr_m.end(1) :]
+
     content = _INLINE_SNIPPET_RE.sub(_replace_snippet, content)
     content = _MD_LINK_RE.sub(_replace_md_link, content)
+    content = _HTML_IMG_RE.sub(lambda m: _replace_html_attr(m, _HTML_SRC_ATTR_RE), content)
+    content = _HTML_A_RE.sub(lambda m: _replace_html_attr(m, _HTML_HREF_ATTR_RE), content)
     return content
 
 

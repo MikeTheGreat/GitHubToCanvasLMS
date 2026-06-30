@@ -332,6 +332,8 @@ def extract_local_refs(text: str, source_file: Path, repo: Path) -> set[str]:
         href = m.group(1)
         if href.startswith(("http://", "https://", "mailto:", "#")):
             continue
+        if href.startswith("<") and href.endswith(">"):
+            href = href[1:-1]
         href = href.split("#")[0]
         if not href:
             continue
