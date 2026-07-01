@@ -1660,6 +1660,61 @@ def test_assignment_group_id_unknown_name_skipped(
     assert "errors occurred" in captured.out
 
 
+def test_quiz_assignment_group_id_by_name_resolved_to_canvas_id(
+    mock_course, mocker, tmp_path
+) -> None:
+    """assignment_group_id on a quiz is resolved to the Canvas numeric ID, same as assignments."""
+    mocker.patch("github_to_canvas.manifest.flush")
+    root = _quiz_course_root(tmp_path)
+    (root / "quizzes" / "a-quiz" / "a-quiz.md").write_text(
+        "---\ntitle: A Quiz\nquiz_type: assignment\npublished: true\n"
+        "assignment_group_id: \"Labs\"\n---\n\n"
+        "1. [What is 2+2?](questions/what-is-2-plus-2.md)\n"
+        "2. [Explain something](questions/explain-something.md)\n"
+    )
+    labs_group = MagicMock()
+    labs_group.name = "Labs"
+    labs_group.id = 42
+    mock_course.get_assignment_groups.return_value = [labs_group]
+    quiz = _mock_quiz(12345)
+    mock_course.create_quiz.return_value = quiz
+    mock_course.get_quiz.return_value = quiz
+    quiz.create_question.side_effect = [_mock_quiz_question(i) for i in [101, 102]]
+
+    run_sync(_config(), root)
+
+    call_params = mock_course.create_quiz.call_args[1]["quiz"]
+    assert call_params["assignment_group_id"] == 42
+
+
+def test_quiz_assignment_group_id_unknown_name_skipped(
+    mock_course, mocker, tmp_path, capsys
+) -> None:
+    """Unknown assignment group name on a quiz prints a warning and omits the field."""
+    mocker.patch("github_to_canvas.manifest.flush")
+    root = _quiz_course_root(tmp_path)
+    (root / "quizzes" / "a-quiz" / "a-quiz.md").write_text(
+        "---\ntitle: A Quiz\nquiz_type: assignment\npublished: true\n"
+        "assignment_group_id: \"NoSuchGroup\"\n---\n\n"
+        "1. [What is 2+2?](questions/what-is-2-plus-2.md)\n"
+        "2. [Explain something](questions/explain-something.md)\n"
+    )
+    mock_course.get_assignment_groups.return_value = []
+    quiz = _mock_quiz(12345)
+    mock_course.create_quiz.return_value = quiz
+    mock_course.get_quiz.return_value = quiz
+    quiz.create_question.side_effect = [_mock_quiz_question(i) for i in [101, 102]]
+
+    had_errors = run_sync(_config(), root)
+
+    assert had_errors, "run_sync should return True (errors present)"
+    call_params = mock_course.create_quiz.call_args[1]["quiz"]
+    assert "assignment_group_id" not in call_params
+    captured = capsys.readouterr()
+    assert "WARNING" in captured.out
+    assert "NoSuchGroup" in captured.out
+
+
 # ---------------------------------------------------------------------------
 # Scenario 11: Graded discussion fields passed as nested assignment params
 # ---------------------------------------------------------------------------
@@ -1681,6 +1736,59 @@ def test_graded_discussion_fields_passed_as_assignment_dict(
     assert "due_at" in assignment_params
     assert "lock_at" in assignment_params
     assert "unlock_at" in assignment_params
+
+
+def test_discussion_assignment_group_id_by_name_resolved_to_canvas_id(
+    mock_course, course_root, mocker
+) -> None:
+    """assignment_group_id on a graded discussion is resolved, same as assignments/quizzes."""
+    mocker.patch("github_to_canvas.manifest.flush")
+    _setup_first_sync_mocks(mock_course)
+    labs_group = MagicMock()
+    labs_group.name = "Labs"
+    labs_group.id = 42
+    mock_course.get_assignment_groups.return_value = [labs_group]
+    (course_root / "discussions" / "week1-intro.md").write_text(
+        "---\n"
+        "title: \"Introduce Yourself\"\n"
+        "points_possible: 10\n"
+        "assignment_group_id: \"Labs\"\n"
+        "published: true\n"
+        "---\n\n"
+        "Tell us about yourself.\n"
+    )
+
+    run_sync(_config(), course_root)
+
+    assignment_params = mock_course.create_discussion_topic.call_args[1]["assignment"]
+    assert assignment_params["assignment_group_id"] == 42
+
+
+def test_discussion_assignment_group_id_unknown_name_skipped(
+    mock_course, course_root, mocker, capsys
+) -> None:
+    """Unknown assignment group name on a discussion prints a warning and omits the field."""
+    mocker.patch("github_to_canvas.manifest.flush")
+    _setup_first_sync_mocks(mock_course)
+    mock_course.get_assignment_groups.return_value = []
+    (course_root / "discussions" / "week1-intro.md").write_text(
+        "---\n"
+        "title: \"Introduce Yourself\"\n"
+        "points_possible: 10\n"
+        "assignment_group_id: \"NoSuchGroup\"\n"
+        "published: true\n"
+        "---\n\n"
+        "Tell us about yourself.\n"
+    )
+
+    had_errors = run_sync(_config(), course_root)
+
+    assert had_errors, "run_sync should return True (errors present)"
+    assignment_params = mock_course.create_discussion_topic.call_args[1]["assignment"]
+    assert "assignment_group_id" not in assignment_params
+    captured = capsys.readouterr()
+    assert "WARNING" in captured.out
+    assert "NoSuchGroup" in captured.out
 
 
 # ---------------------------------------------------------------------------

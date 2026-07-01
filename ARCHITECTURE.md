@@ -597,6 +597,7 @@ points_possible: 10
 due_at: "2025-02-01T23:59:00-05:00"
 lock_at: "2025-02-08T23:59:00-05:00"
 unlock_at: "2025-01-27T00:00:00-05:00"
+assignment_group_id: "Labs"   # same name/numeric-ID resolution as assignments and quizzes
 published: true
 ---
 ```
@@ -637,6 +638,12 @@ time_limit: 30               # minutes; omit if no time limit
 allowed_attempts: 1
 shuffle_answers: false
 show_correct_answers: true
+assignment_group_id: "Labs"   # name (resolved via course_settings.toml) or numeric
+                              #   Canvas ID; shared resolution logic with
+                              #   assignments and discussions (sync.py:
+                              #   _resolve_assignment_group_id). Only affects
+                              #   grading when quiz_type is assignment or
+                              #   graded_survey.
 published: true
 ---
 

@@ -967,7 +967,10 @@ peer reviews** are all settable from the frontmatter above. A few caveats:
 - **Assignment group:** `assignment_group_id` accepts either the group name as a
   string (e.g. `"Labs"`) or a numeric Canvas ID. When a name is given the tool
   resolves it to the Canvas ID using the groups defined in `course_settings.toml`.
-  If the name is not found a warning is printed and the field is skipped.
+  If the name is not found a warning is printed and the field is skipped. This
+  field works the same way on every graded content type — assignments, quizzes
+  (see [Quiz](#quiz-quizzes)), and graded discussions (see
+  [Discussion](#discussion-discussions)).
 - **Rubric:** `rubric` accepts either a rubric title (string) or numeric Canvas
   rubric ID. When a title is given the tool resolves it to the Canvas ID using
   rubrics defined in `course_settings/rubrics.toml`. A rubric association is
@@ -988,9 +991,9 @@ peer reviews** are all settable from the frontmatter above. A few caveats:
 Discussions are updated in place on Canvas when re-synced.
 
 A discussion is **ungraded** unless you add the grading fields (`points_possible`,
-`due_at`, `lock_at`, `unlock_at`). Including any of them attaches a Canvas
-assignment and makes the discussion graded; omit them all for an ungraded
-discussion.
+`due_at`, `lock_at`, `unlock_at`, `assignment_group_id`). Including any of them
+attaches a Canvas assignment and makes the discussion graded; omit them all for
+an ungraded discussion.
 
 ```markdown
 ---
@@ -1004,6 +1007,8 @@ points_possible: 10
 due_at:    "2025-02-01T23:59:00-05:00"
 unlock_at: "2025-01-27T00:00:00-05:00"
 lock_at:   "2025-02-08T23:59:00-05:00"
+assignment_group_id: "Labs"  # name of an assignment group defined in
+                             #   course_settings.toml, or a numeric Canvas ID
 ---
 
 Post your initial response by Wednesday, then reply to two classmates.
@@ -1128,6 +1133,10 @@ time_limit: 30            # minutes; omit for no time limit
 allowed_attempts: 1       # -1 = unlimited attempts
 shuffle_answers: false    # randomize answer order per student
 show_correct_answers: true  # reveal correct answers after submitting
+assignment_group_id: "Labs"  # name of an assignment group defined in
+                             #   course_settings.toml, or a numeric Canvas ID;
+                             #   only affects grading for graded quiz_type values
+                             #   (assignment, graded_survey) — see note below
 ---
 
 Read each question carefully.   <!-- optional description; everything that isn't a
@@ -1136,6 +1145,12 @@ Read each question carefully.   <!-- optional description; everything that isn't
 1. [What is 2+2?](questions/what-is-2-plus-2.md)
 2. [Explain gravity](questions/explain-gravity.md)
 ```
+
+**Assignment group:** `assignment_group_id` works the same way as it does for
+[assignments](#assignment-assignments) — a group name resolved via
+`course_settings.toml`, or a numeric Canvas ID. Canvas only uses it for grading
+when `quiz_type` is `assignment` or `graded_survey`; it has no effect for
+`practice_quiz` or `survey` since those aren't graded.
 
 **Question files** — each question is a separate `.md` file. Every question type shares these fields:
 

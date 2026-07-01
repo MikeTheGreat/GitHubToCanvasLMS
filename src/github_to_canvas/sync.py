@@ -200,6 +200,31 @@ def find_due_date_override(
 _DATE_SENTINELS = {"none", "keep", "create_none_then_keep"}
 
 
+def _resolve_assignment_group_id(
+    value: Any,
+    assignment_group_ids: dict[str, int] | None,
+    local_key: str,
+    errors: list[str] | None,
+) -> int | None:
+    """Resolve an assignment_group_id frontmatter value (name or numeric ID) to a
+    numeric Canvas ID. Prints and records a warning, returning None, if a name
+    isn't found among the course's assignment groups."""
+    if not isinstance(value, str):
+        return value
+    resolved = (assignment_group_ids or {}).get(value)
+    if resolved is None:
+        known = list(assignment_group_ids.keys()) if assignment_group_ids else []
+        msg = (
+            f"WARNING: {local_key}: assignment group '{value}' not found on Canvas "
+            f"(known: {known}); skipping assignment_group_id"
+        )
+        print(f"  {msg}")
+        if errors is not None:
+            errors.append(msg)
+        return None
+    return resolved
+
+
 def _resolve_date_overrides(
     override: dict[str, Any],
     canvas_id: int | None,
@@ -824,6 +849,7 @@ def run_sync(
                     synced_keys=synced_content_keys,
                     verbose=verbose,
                     due_dates=due_dates,
+                    assignment_group_ids=assignment_group_ids,
                 )
 
     # 2.6. Question banks
@@ -1291,22 +1317,11 @@ def _sync_content_file(
             extra.update(
                 _resolve_date_overrides(override, canvas_id, local_key, errors)
             )
-        if "assignment_group_id" in extra and isinstance(
-            extra["assignment_group_id"], str
-        ):
-            name = extra["assignment_group_id"]
-            resolved = (assignment_group_ids or {}).get(name)
+        if "assignment_group_id" in extra:
+            resolved = _resolve_assignment_group_id(
+                extra["assignment_group_id"], assignment_group_ids, local_key, errors
+            )
             if resolved is None:
-                known = (
-                    list(assignment_group_ids.keys()) if assignment_group_ids else []
-                )
-                msg = (
-                    f"WARNING: {local_key}: assignment group '{name}' not found on Canvas "
-                    f"(known: {known}); skipping assignment_group_id"
-                )
-                print(f"  {msg}")
-                if errors is not None:
-                    errors.append(msg)
                 del extra["assignment_group_id"]
             else:
                 extra["assignment_group_id"] = resolved
@@ -1411,13 +1426,31 @@ def _sync_content_file(
         extra = {}
         if "require_initial_post" in frontmatter:
             extra["require_initial_post"] = frontmatter["require_initial_post"]
-        grading_keys = ("points_possible", "due_at", "lock_at", "unlock_at")
+        grading_keys = (
+            "points_possible",
+            "due_at",
+            "lock_at",
+            "unlock_at",
+            # Assignment group (grading category)
+            "assignment_group_id",
+        )
         grading_params = {k: frontmatter[k] for k in grading_keys if k in frontmatter}
         override = find_due_date_override(due_dates or [], title, "discussion")
         if override is not None:
             grading_params.update(
                 _resolve_date_overrides(override, canvas_id, local_key, errors)
             )
+        if "assignment_group_id" in grading_params:
+            resolved = _resolve_assignment_group_id(
+                grading_params["assignment_group_id"],
+                assignment_group_ids,
+                local_key,
+                errors,
+            )
+            if resolved is None:
+                del grading_params["assignment_group_id"]
+            else:
+                grading_params["assignment_group_id"] = resolved
         if grading_params:
             extra["assignment"] = grading_params
         entry = capi.create_or_update_discussion(
@@ -1617,6 +1650,7 @@ def _sync_quiz(
     synced_keys: set[str] | None = None,
     verbose: bool = False,
     due_dates: list[dict[str, Any]] | None = None,
+    assignment_group_ids: dict[str, int] | None = None,
 ) -> None:
     if newer_on_canvas is None:
         newer_on_canvas = []
@@ -1664,9 +1698,19 @@ def _sync_quiz(
         "due_at",
         "lock_at",
         "unlock_at",
+        # Assignment group (grading category)
+        "assignment_group_id",
     ):
         if key in frontmatter:
             quiz_kwargs[key] = frontmatter[key]
+    if "assignment_group_id" in quiz_kwargs:
+        resolved = _resolve_assignment_group_id(
+            quiz_kwargs["assignment_group_id"], assignment_group_ids, local_key, errors
+        )
+        if resolved is None:
+            del quiz_kwargs["assignment_group_id"]
+        else:
+            quiz_kwargs["assignment_group_id"] = resolved
     def _stub_creator(ref_local_path: str, ref_canvas_type: str) -> dict[str, Any]:
         title_stub = (
             Path(ref_local_path).stem.replace("-", " ").replace("_", " ").title()
@@ -1971,6 +2015,7 @@ def run_targeted_sync(
                 errors,
                 verbose=verbose,
                 due_dates=due_dates,
+                assignment_group_ids=assignment_group_ids,
             )
         else:
             _sync_content_file(
