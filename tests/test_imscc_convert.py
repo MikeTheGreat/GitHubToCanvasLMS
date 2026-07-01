@@ -24,6 +24,7 @@ from github_to_canvas.imscc_import import (
     _parse_rubrics,
     _restore_iframes,
     _shift_headings_down,
+    _simplify_pandoc_attrs,
     _strip_canvas_img_attrs,
     parse_assignment_settings,
     parse_qti_questions,
@@ -157,6 +158,111 @@ def test_strip_canvas_img_attrs_preserves_alt_text() -> None:
     result = _strip_canvas_img_attrs(html)
     assert 'alt="A screenshot of the download dialog"' in result
     assert 'loading' not in result
+
+
+# ---------------------------------------------------------------------------
+# _simplify_pandoc_attrs
+# ---------------------------------------------------------------------------
+
+
+def test_simplify_pandoc_attrs_heading_keeps_id_and_style() -> None:
+    md = (
+        '## Academic Integrity {#academic-integrity-rules-read-carefully '
+        'style="color: #ffffff; background-color: #6a0dad; text-align: left;"}\n'
+    )
+    result = _simplify_pandoc_attrs(md)
+    assert '#academic-integrity-rules-read-carefully' in result
+    assert 'style="color: #ffffff; background-color: #6a0dad; text-align: left;"' in result
+
+
+def test_simplify_pandoc_attrs_heading_drops_class() -> None:
+    md = '## Heading {.unnumbered #my-id}\n'
+    result = _simplify_pandoc_attrs(md)
+    assert '.unnumbered' not in result
+    assert '#my-id' in result
+
+
+def test_simplify_pandoc_attrs_heading_all_dropped_removes_braces() -> None:
+    md = '## Heading {.unnumbered .toc-ignore}\n'
+    result = _simplify_pandoc_attrs(md)
+    assert result == '## Heading\n'
+
+
+def test_simplify_pandoc_attrs_link_keeps_style_drops_class_and_target() -> None:
+    md = '[link](http://x){.btn target="_blank" style="color:red"}\n'
+    result = _simplify_pandoc_attrs(md)
+    assert result == '[link](http://x){style="color:red"}\n'
+
+
+def test_simplify_pandoc_attrs_link_all_dropped_removes_braces() -> None:
+    md = '[link](http://x){.btn target="_blank"}\n'
+    result = _simplify_pandoc_attrs(md)
+    assert result == '[link](http://x)\n'
+
+
+def test_simplify_pandoc_attrs_image_keeps_id_and_style() -> None:
+    md = '![](a.png){#img1 .foo style="width:50px"}\n'
+    result = _simplify_pandoc_attrs(md)
+    assert result == '![](a.png){#img1 style="width:50px"}\n'
+
+
+def test_simplify_pandoc_attrs_span_keeps_style_only() -> None:
+    md = '[hi]{.hl style="color:red"}\n'
+    result = _simplify_pandoc_attrs(md)
+    assert result == '[hi]{style="color:red"}\n'
+
+
+def test_simplify_pandoc_attrs_fenced_div_emptied_is_unwrapped() -> None:
+    md = '::: {.a .b .c foo="bar"}\ntext\n:::\n'
+    result = _simplify_pandoc_attrs(md)
+    assert result == 'text\n'
+
+
+def test_simplify_pandoc_attrs_fenced_div_bare_class_shorthand_is_unwrapped() -> None:
+    md = '::: z\ntext\n:::\n'
+    result = _simplify_pandoc_attrs(md)
+    assert result == 'text\n'
+
+
+def test_simplify_pandoc_attrs_fenced_div_keeps_wrapper_when_style_survives() -> None:
+    md = '::: {#outer style="color:red"}\ntext\n:::\n'
+    result = _simplify_pandoc_attrs(md)
+    assert result == '::: {#outer style="color:red"}\ntext\n:::\n'
+
+
+def test_simplify_pandoc_attrs_nested_fenced_divs_partial_unwrap() -> None:
+    md = '::: {#outer style="color:red"}\ntext\n\n::: z\ndeep\n:::\n:::\n'
+    result = _simplify_pandoc_attrs(md)
+    assert result == '::: {#outer style="color:red"}\ntext\n\ndeep\n:::\n'
+
+
+def test_simplify_pandoc_attrs_nested_fenced_divs_fully_unwrap() -> None:
+    md = '::: {.a .b .c foo="bar"}\ntext\n\n::: z\n::: y\ndeep\n:::\n:::\n:::\n'
+    result = _simplify_pandoc_attrs(md)
+    assert result == 'text\n\ndeep\n'
+
+
+def test_simplify_pandoc_attrs_leaves_unrelated_braces_alone() -> None:
+    md = 'Some prose that mentions {curly braces} in passing.\n'
+    result = _simplify_pandoc_attrs(md)
+    assert result == md
+
+
+def test_html_to_markdown_end_to_end_keeps_style_drops_class() -> None:
+    html = (
+        '<h2 id="academic-integrity-rules-read-carefully" '
+        'style="color: #ffffff; background-color: #6a0dad;">Academic Integrity</h2>'
+    )
+    md = _html_to_markdown(html)
+    assert '#academic-integrity-rules-read-carefully' in md
+    assert 'style="color: #ffffff; background-color: #6a0dad;"' in md
+
+
+def test_html_to_markdown_end_to_end_unwraps_emptied_div() -> None:
+    html = '<div class="a b c" data-foo="bar"><p>text</p></div>'
+    md = _html_to_markdown(html)
+    assert ':::' not in md
+    assert 'text' in md
 
 
 # ---------------------------------------------------------------------------

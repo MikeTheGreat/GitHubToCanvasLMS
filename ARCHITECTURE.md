@@ -328,6 +328,17 @@ This shift is **conditional**: it runs **only when the converted Markdown actual
 
 The complementary check on the **upload** side (`sync.py`) is unconditional: any content whose rendered HTML contains an `<h1>` is rejected with an error so the author fixes the source rather than letting Canvas silently mangle it.
 
+### Pandoc attribute simplification
+
+Pandoc's HTML→Markdown conversion (`_html_to_markdown()`, used by every content type during import) attaches curly-brace attribute blocks to headings, links, images, spans, code, and fenced divs (`::: {...}`) — e.g. `## Heading {#my-id .some-class data-foo="bar" style="color:red"}`. Most of these attributes are Canvas RCE cruft with no meaning outside Canvas. `_simplify_pandoc_attrs()` strips every such block down to just:
+
+- `#id` — kept because in-document anchor links (e.g. a table of contents) may target it
+- `style="..."` — kept because it's user-authored formatting
+
+Everything else (classes, `data-*`, `target`, etc.) is dropped. If a block has nothing left after filtering, the `{...}` (and its braces) are removed entirely — including the bare single-class shorthand Pandoc emits for divs with exactly one class and no other attributes (`::: classname`).
+
+Fenced divs get one further step: if a div's attribute block ends up empty, the div wrapper itself (both the opening and closing `:::` fence lines) is removed and its content unwrapped, recursively for nested divs. Since Pandoc only ever emits fenced-div syntax for a `<div>` that has at least one attribute (an attribute-less div is passed through as raw HTML instead), fence pairing is done on the pre-simplification text — every opening fence line is guaranteed to have content, and every bare (attribute-less) `:::` line is unambiguously a closing fence.
+
 ### Module file generation
 
 - `ContextModuleSubHeader` indent 0 → `## Title` heading

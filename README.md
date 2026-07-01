@@ -1472,6 +1472,8 @@ github-to-canvas import course-export.imscc ./my-course-repo
 This converts pages, assignments, discussions, quizzes, question banks, modules, and course settings to local files ready for use with this tool. A `canvas.toml` skeleton is written with the Canvas domain and course ID pre-filled from the export metadata.
 
 > **Heading levels:** Canvas already strips H1s from the content it exports, so imported headings normally keep their original levels — an H2 stays an H2. As a safety net, if a converted file *does* still contain an H1 (which Canvas would silently turn into an inaccessible styled paragraph; see the H1 warning above), the import shifts every heading in that file down one level so the H1 becomes an H2. Files without an H1 are left untouched.
+>
+> **Attribute cleanup:** Pandoc attaches curly-brace attribute blocks (e.g. `## Heading {#id .class style="..."}`) to headings, links, images, spans, and fenced divs during HTML→Markdown conversion. Import strips these down to just `id` (kept in case a table of contents links to it) and `style` (kept as user-authored formatting) — classes and other Canvas-internal attributes are dropped. If nothing is left, the `{...}` is removed entirely, and an emptied fenced div (`:::`) is unwrapped rather than left as an empty wrapper.
 
 ### Verifying the import
 
