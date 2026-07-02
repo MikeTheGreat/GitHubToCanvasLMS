@@ -134,25 +134,32 @@ but should **not** be touched.
 
 ## 3. Test-suite improvements (big wins, no product code touched)
 
-### T1. Cut the test suite from ~4 min to well under 1 min
+### T1. Cut the test suite from ~4 min to well under 1 min — DONE 2026-07-02
 
-- **Diagnosis:** `tests/test_imscc_import.py` contains **128 calls** to
+- **Was:** `tests/test_imscc_import.py` contained **124 calls** to
   `run_import(FIXTURE_DIR, output_dir)`, each a full pipeline run spawning many
-  Pandoc subprocesses (~1.6 s each). Those two IMSCC files account for 203 s of the
-  243 s total. `test_sync.py` (166 tests) takes only 25 s — it is not the problem.
-- **Fix:** add a **module-scoped fixture** that runs `run_import` once into a shared
-  tmp directory, and convert the read-only tests (the vast majority — they only
-  `read_text()` and assert) to use it. Keep per-test `run_import` only for tests
-  that (a) assert on printed output, (b) mutate the output, or (c) test failure
-  modes (`test_run_import_fails_if_output_nonempty`). Grep shows **zero `capsys`
-  uses** in `test_imscc_import.py`, so (a) is currently empty.
-- Same pattern applies to any full-pipeline tests in `test_imscc_convert.py` and
-  the import-pipeline tests inside `test_due_dates.py`.
-- **Effort:** 1–2 h. **Risk:** low — a test that accidentally mutates the shared
-  dir could poison later tests; mitigate by `chmod`-free convention: fixture yields
-  the path, tests must not write. Assert count stays 831.
-- **Benefit:** every future edit-test loop gets ~3 min faster. This compounds more
-  than any other item in this report.
+  Pandoc subprocesses (~1.6 s each). `test_imscc_convert.py` turned out to be fast
+  already (2.5 s, no `run_import` calls at all — it only unit-tests pure parsers);
+  the report's estimate of it being part of the hotspot was wrong. `test_sync.py`
+  (166 tests) takes only ~5 s — it was never the problem.
+- **Fix applied:** added a `scope="module"` fixture `imported_dir` (in
+  `test_imscc_import.py`, using `tmp_path_factory`) that runs `run_import` once per
+  module and shares the output directory; ~124 read-only tests were switched from a
+  per-test `run_import` call to consuming this shared fixture. Kept per-test
+  `run_import` for the 4 tests that need their own directory: failure-mode
+  (`test_run_import_fails_if_output_nonempty`), zip-input equivalence
+  (`test_run_import_from_zip`), and the two tests that mutate a copied fixture
+  (`test_run_import_no_domain_no_snippet`, `test_run_import_no_course_id_no_snippet`).
+  One test (`test_lti_resource_imscc_path_set`) had an unused `output_dir` param
+  (it only calls `parse_imsmanifest` directly) — dropped the dead param. Applied the
+  same module-scoped-fixture pattern to the 2 `run_import` calls in
+  `test_due_dates.py` (`due_dates_imported_dir`).
+- **Verified:** 831 passed, 202 warnings, stable at **~39 s** across repeated runs
+  (was 226 s baseline on this machine). No test count change, no behavior change —
+  all switched tests were confirmed read-only against the output directory before
+  the fixture scope changed.
+- **Note for TODO.md/TESTING.md:** TESTING.md now documents the `uv run pytest -q`
+  invocation and the fast-suite expectation near the top.
 
 ### T2. `pathspec` deprecation warning (86+ occurrences per run)
 
@@ -514,7 +521,7 @@ For a future session doing this work top-down:
 
 1. ~~E1 (venv)~~ — already fixed; run `uv run pytest -q` to confirm baseline 831 passed.
 2. H1–H6 (one pass, ~1 h total).
-3. T1 (test speed) — pays for itself immediately.
+3. ~~T1 (test speed)~~ — done 2026-07-02, 226 s → ~39 s.
 4. T2 (pathspec) — small, fenced.
 5. P1 (`SyncContext`) — the flagship; do alone, full suite after.
 6. D1–D4 (small dedups, now easier post-P1).

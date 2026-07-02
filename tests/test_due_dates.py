@@ -630,10 +630,16 @@ def test_settings_change_applies_dates_only(
 # ---------------------------------------------------------------------------
 
 
-def test_import_generates_due_dates_table(tmp_path: Path) -> None:
-    output_dir = tmp_path / "output"
-    run_import(IMSCC_FIXTURES, output_dir)
-    cs_toml = output_dir / "course_settings" / "course_settings.toml"
+@pytest.fixture(scope="module")
+def due_dates_imported_dir(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """Run the import pipeline once and share the output between the read-only tests below."""
+    out = tmp_path_factory.mktemp("due_dates_import")
+    run_import(IMSCC_FIXTURES, out)
+    return out
+
+
+def test_import_generates_due_dates_table(due_dates_imported_dir: Path) -> None:
+    cs_toml = due_dates_imported_dir / "course_settings" / "course_settings.toml"
     assert cs_toml.exists()
     with cs_toml.open("rb") as f:
         data = tomllib.load(f)
@@ -644,11 +650,9 @@ def test_import_generates_due_dates_table(tmp_path: Path) -> None:
     assert len(due_dates) >= 0  # may be zero if fixture has no dates
 
 
-def test_import_comments_out_dates_in_assignment(tmp_path: Path) -> None:
-    output_dir = tmp_path / "output"
-    run_import(IMSCC_FIXTURES, output_dir)
+def test_import_comments_out_dates_in_assignment(due_dates_imported_dir: Path) -> None:
     # Check that assignments have commented-out date fields
-    assignments_dir = output_dir / "assignments"
+    assignments_dir = due_dates_imported_dir / "assignments"
     if assignments_dir.exists():
         for md_file in assignments_dir.glob("*.md"):
             text = md_file.read_text()

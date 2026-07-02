@@ -2,6 +2,14 @@
 
 Tests are organised in three layers. All tests live in `tests/` in this repo; no external test repos or live Canvas instances are required for the normal test suite.
 
+## Running the tests
+
+```sh
+uv run pytest -q
+```
+
+831 tests, all passing, in well under a minute (~40s). The full IMSCC import pipeline (Pandoc subprocesses included) used to run once per assertion in `test_imscc_import.py`; it now runs once per test module via a module-scoped `imported_dir` fixture, and the ~125 read-only tests just assert against the shared output. Tests that need their own isolated output directory (failure-mode tests, the zip-input test, tests that mutate the fixture) still call `run_import` directly.
+
 ## Layer 1 — Pure unit tests
 
 Test individual functions in isolation, with no network or Canvas dependency. Each test passes in a string or small data structure and asserts on the output:
