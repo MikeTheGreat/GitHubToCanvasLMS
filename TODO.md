@@ -276,6 +276,11 @@ Maybe remove KEEP?
 ## Would be nice to import Announcements
 - By default make them unpublished, so they could be posted later?
 
+## Publish command: include a schedule
+- it would be nice to include a schedule, sorted chronologically
+- maybe on the syllabus page, like in Canvas?
+  - Rename to Syllabus + Schedule
+
 # Bugs to Fix:
 - Changing module_order.toml doesn't re-arrange the modules in Canvas
 
@@ -286,3 +291,4 @@ The following resources were NOT uploaded because Canvas has a newer version.
 Review these files and re-upload manually if needed (use --force-overwrite to skip this check):
   assignments/worksheets/01-a-unit-worksheets.md
   assignments/worksheets/01-b-unit-worksheets.md
+

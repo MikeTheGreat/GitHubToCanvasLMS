@@ -1010,6 +1010,8 @@ The link text must be the literal string `PASTE_SNIPPET_INTO_FRONTMATTER` — th
 
 **Call sites:** wired in everywhere frontmatter is parsed for actual content sync — `_sync_content_file()` (pages/assignments/discussions) and the module sync path in `sync.py`, plus `parse_quiz_file()` and `parse_question_file()` in `quiz.py` (so quiz-level settings like `time_limit`, or per-question settings like `question_type`/`points_possible`, can be shared across a question bank too). It always runs *before* `preprocess_snippets()`, since the latter only needs to see the real Markdown body.
 
+`publish.py`'s `stage_content_markdown()` (pages/assignments/discussions in the static site) also calls `expand_frontmatter_snippets()` before `preprocess_snippets()`, for the same reason. Skipping it there was a bug: `preprocess_snippets()`'s block-snippet regex (`[text](path)`) matches the `PASTE_SNIPPET_INTO_FRONTMATTER` marker too, so without the frontmatter pass running first, the marker got treated as an ordinary body snippet include and the *raw YAML* of the referenced snippet was spliced straight into the published page body.
+
 **Differences from centralized `due_dates`:** `due_dates` (in `course_settings/course_settings.toml`) is for fields that are mostly *unique per item* but worth reviewing in one place, matched by title. `PASTE_SNIPPET_INTO_FRONTMATTER` is for fields that should be *identical* across many files — edit the snippet once, and every file that references it picks up the change on its next full `update`/`publish` run (see below).
 
 ### Snippet dependency staleness

@@ -200,6 +200,24 @@ def test_stage_content_prepends_h1_when_missing():
     assert md.startswith("# Introduce Yourself")
 
 
+def test_stage_content_strips_frontmatter_snippet_marker(tmp_path):
+    (tmp_path / "snippets").mkdir()
+    (tmp_path / "snippets" / "defaults.md").write_text(
+        "due_at: 2026-01-01\npoints_possible: 10\n"
+    )
+    (tmp_path / "assignments").mkdir()
+    assignment = tmp_path / "assignments" / "hw1.md"
+    assignment.write_text(
+        "---\ntitle: HW1\npublished: true\n---\n"
+        "[PASTE_SNIPPET_INTO_FRONTMATTER](../snippets/defaults.md)\n\n"
+        "Do the thing.\n"
+    )
+    md = publish.stage_content_markdown(assignment, tmp_path)
+    assert "due_at" not in md
+    assert "points_possible" not in md
+    assert md == "# HW1\n\nDo the thing.\n"
+
+
 def test_stage_content_rewrites_quiz_links(tmp_path):
     (tmp_path / "snippets").mkdir()
     page = tmp_path / "page.md"

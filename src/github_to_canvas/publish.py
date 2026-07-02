@@ -446,6 +446,7 @@ def stage_content_markdown(md_path: Path, repo: Path) -> str:
     an H1 heading (used as the page title).
     """
     frontmatter, body = parse_frontmatter(md_path.read_text())
+    frontmatter, body = expand_frontmatter_snippets(frontmatter, body, md_path, repo / "snippets")
     body = preprocess_snippets(body, md_path, repo / "snippets")
     body = _rewrite_quiz_links(body)
     body = _strip_pandoc_syntax(body)
