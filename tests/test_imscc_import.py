@@ -439,6 +439,13 @@ def test_course_settings_toml_post_policy(output_dir: Path) -> None:
     assert data["default_post_policy"]["post_manually"] is True
 
 
+def test_course_settings_toml_has_group_weighting_scheme(output_dir: Path) -> None:
+    import tomllib
+    run_import(FIXTURE_DIR, output_dir)
+    data = tomllib.loads((output_dir / "course_settings" / "course_settings.toml").read_text())
+    assert data["group_weighting_scheme"] == "percent"
+
+
 def test_course_settings_toml_has_last_modified(output_dir: Path) -> None:
     import tomllib
     run_import(FIXTURE_DIR, output_dir)

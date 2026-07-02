@@ -34,6 +34,7 @@ Mock the `canvasapi` library with `pytest-mock`. Run the full sync pipeline agai
 - **Graded discussion fields**: `points_possible`, `due_at`, `lock_at`, `unlock_at` passed to `create_discussion_topic()` as `assignment={...}` nested dict (fixture `discussions/week1-intro.md` carries these fields)
 - **Syllabus sync**: `course_settings/syllabus.md` body converted to HTML and passed to `course.update(course={"syllabus_body": ...})`; absent file → no update called
 - **Course metadata sync**: flat fields from `course_settings/course_settings.toml` reach `course.update(course={...})`; absent file → no crash
+- **Assignment group weights**: `group_weighting_scheme = "percent"` → `apply_assignment_group_weights: true` in the course update; any other scheme → `false`; scheme absent but a `group_weight` present on any `[[assignment_groups]]` entry → inferred `true`; neither present → flag not sent; explicit scheme wins over inference; full-pipeline test asserts both the flag and `group_weight` on `create_assignment_group()`
 - **`course_settings/` folder isolation**: files inside `course_settings/` are never uploaded as Canvas Pages
 - `--target-recursively`: BFS from a module reaches all referenced content; module deferred until content is in manifest
 - `--single-target`: only specified files processed; no BFS

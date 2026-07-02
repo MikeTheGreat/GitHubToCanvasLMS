@@ -74,6 +74,18 @@ def update_course_metadata(course, settings: dict[str, Any], grading_standard_id
     for toml_key, api_key in _COURSE_METADATA_KEYS.items():
         if toml_key in settings and toml_key not in _COURSE_METADATA_SKIP:
             params[api_key] = settings[toml_key]
+    # Canvas only applies (and displays) assignment-group weights when the
+    # course-level flag is on. The IMSCC export name is group_weighting_scheme
+    # ("percent" = weighted); if it's absent, the presence of any group_weight
+    # implies the user wants weighting.
+    if "group_weighting_scheme" in settings:
+        params["apply_assignment_group_weights"] = (
+            settings["group_weighting_scheme"] == "percent"
+        )
+    elif any(
+        "group_weight" in g for g in settings.get("assignment_groups", [])
+    ):
+        params["apply_assignment_group_weights"] = True
     if grading_standard_id is not None:
         params["grading_standard_id"] = grading_standard_id
     if params:
@@ -126,7 +138,9 @@ def sync_assignment_groups(course, groups: list[dict[str, Any]]) -> None:
         if rules:
             kwargs["rules"] = rules
         if name in existing:
-            existing[name].edit(assignment_group={"name": name, **kwargs})
+            # The update endpoint only permits flat top-level params; anything
+            # nested under assignment_group[...] is silently dropped by Canvas.
+            existing[name].edit(name=name, **kwargs)
         else:
             course.create_assignment_group(name=name, **kwargs)
 

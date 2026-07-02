@@ -10,6 +10,7 @@
   <is_public>false</is_public>
   <license>private</license>
   <grading_standard_enabled>true</grading_standard_enabled>
+  <group_weighting_scheme>percent</group_weighting_scheme>
   <home_page_announcement_limit>3</home_page_announcement_limit>
   <image_identifier_ref>g_asset_1</image_identifier_ref>
   <default_post_policy>

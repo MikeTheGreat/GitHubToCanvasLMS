@@ -542,6 +542,11 @@ grading_standard_enabled = true   # use a letter-grade scheme
 # grading_standard_id    = 12345
 hide_final_grade         = false  # hide running total from students
 hide_distribution_graphs = false  # hide grade-distribution graphs
+# Weight the final grade by assignment group ("percent") or grade on raw
+# points ("equal"). Usually you can omit this: if any [[assignment_groups]]
+# entry below has a group_weight, weighting is turned on automatically.
+# Set it explicitly only to force weighting OFF while keeping the weights:
+# group_weighting_scheme = "equal"
 
 # ── Discussions / forums / wiki ──────────────────────────────────────────
 allow_student_discussion_topics  = true
@@ -633,10 +638,13 @@ points_based   = false   # optional: scheme is points-based rather than percent
 scaling_factor = 1.0     # optional: used together with points_based
 
 # ── Assignment groups (grade categories & weighting) ─────────────────────
+# Giving any group a group_weight automatically enables weighted grading for
+# the course (the percentages then show on the Assignments page); see
+# group_weighting_scheme in the Grades section above to override that.
 [[assignment_groups]]
 title        = "Homework"
 position     = 1         # display order (lowest first)
-group_weight = 40.0      # percent of the final grade (when weighting is on)
+group_weight = 40.0      # percent of the final grade
 # Optional drop rules — drop_type is "drop_lowest" or "drop_highest":
 [[assignment_groups.rules]]
 drop_type  = "drop_lowest"

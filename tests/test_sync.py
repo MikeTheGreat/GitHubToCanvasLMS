@@ -2301,6 +2301,116 @@ def test_graphql_raises_on_top_level_errors() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Scenario 13d: Assignment group weights — apply_assignment_group_weights flag
+# ---------------------------------------------------------------------------
+
+
+def test_group_weighting_scheme_percent_enables_weights() -> None:
+    """group_weighting_scheme = "percent" sets apply_assignment_group_weights."""
+    course = MagicMock()
+    _capi.update_course_metadata(course, {"title": "T", "group_weighting_scheme": "percent"})
+
+    params = course.update.call_args[1]["course"]
+    assert params["apply_assignment_group_weights"] is True
+
+
+def test_group_weighting_scheme_equal_disables_weights() -> None:
+    """A non-"percent" scheme explicitly turns weighting off."""
+    course = MagicMock()
+    _capi.update_course_metadata(course, {"title": "T", "group_weighting_scheme": "equal"})
+
+    params = course.update.call_args[1]["course"]
+    assert params["apply_assignment_group_weights"] is False
+
+
+def test_group_weights_present_implies_weighting_enabled() -> None:
+    """Any group_weight in assignment_groups enables weighting when no scheme is given."""
+    course = MagicMock()
+    _capi.update_course_metadata(course, {
+        "title": "T",
+        "assignment_groups": [
+            {"title": "Homework", "position": 1, "group_weight": 30.0},
+            {"title": "Exams", "position": 2, "group_weight": 70.0},
+        ],
+    })
+
+    params = course.update.call_args[1]["course"]
+    assert params["apply_assignment_group_weights"] is True
+
+
+def test_no_weights_no_scheme_leaves_weighting_untouched() -> None:
+    """Without weights or a scheme, the flag is not sent at all."""
+    course = MagicMock()
+    _capi.update_course_metadata(course, {
+        "title": "T",
+        "assignment_groups": [{"title": "Homework", "position": 1}],
+    })
+
+    params = course.update.call_args[1]["course"]
+    assert "apply_assignment_group_weights" not in params
+
+
+def test_explicit_scheme_overrides_group_weights() -> None:
+    """An explicit non-percent scheme wins over group_weight-implied enabling."""
+    course = MagicMock()
+    _capi.update_course_metadata(course, {
+        "title": "T",
+        "group_weighting_scheme": "equal",
+        "assignment_groups": [{"title": "Homework", "group_weight": 30.0}],
+    })
+
+    params = course.update.call_args[1]["course"]
+    assert params["apply_assignment_group_weights"] is False
+
+
+def test_existing_group_edited_with_flat_params() -> None:
+    """Existing groups are edited with flat top-level params — Canvas's update
+    endpoint silently drops params nested under assignment_group[...]."""
+    course = MagicMock()
+    homework = MagicMock()
+    homework.name = "Homework"
+    course.get_assignment_groups.return_value = [homework]
+
+    _capi.sync_assignment_groups(course, [
+        {"title": "Homework", "position": 1, "group_weight": 30.0},
+    ])
+
+    course.create_assignment_group.assert_not_called()
+    homework.edit.assert_called_once_with(name="Homework", position=1, group_weight=30.0)
+
+
+def test_group_weights_reach_canvas_via_run_sync(mock_course, mocker, tmp_path) -> None:
+    """Full pipeline: weighted assignment_groups enable the course flag and
+    pass group_weight to create_assignment_group."""
+    mocker.patch("github_to_canvas.manifest.flush")
+    root = tmp_path / "course"
+    root.mkdir()
+    cs_dir = root / "course_settings"
+    cs_dir.mkdir()
+    (cs_dir / "course_settings.toml").write_text(
+        'title = "Intro to CS"\n'
+        'assignment_groups = [\n'
+        '    { title = "Homework", position = 1, group_weight = 40.0 },\n'
+        '    { title = "Exams", position = 2, group_weight = 60.0 },\n'
+        ']\n'
+    )
+    mock_course.get_assignment_groups.return_value = []
+
+    run_sync(_config(), root)
+
+    meta_calls = [c for c in mock_course.update.call_args_list if "name" in c[1].get("course", {})]
+    assert len(meta_calls) == 1
+    assert meta_calls[0][1]["course"]["apply_assignment_group_weights"] is True
+
+    create_calls = mock_course.create_assignment_group.call_args_list
+    assert len(create_calls) == 2
+    assert create_calls[0][1]["name"] == "Homework"
+    assert create_calls[0][1]["group_weight"] == 40.0
+    assert create_calls[1][1]["name"] == "Exams"
+    assert create_calls[1][1]["group_weight"] == 60.0
+
+
+# ---------------------------------------------------------------------------
 # Scenario 14: course_settings/ folder not processed as Canvas Pages
 # ---------------------------------------------------------------------------
 
