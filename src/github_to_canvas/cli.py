@@ -6,6 +6,7 @@ from pathlib import Path
 
 import click
 import pypandoc
+import requests
 
 #
 from dotenv import find_dotenv, load_dotenv
@@ -296,6 +297,8 @@ def prune(repo: Path, config: Path | None, mode: str | None) -> None:
         die(f"Invalid canvas.toml: {e}")
     except (ValueError, KeyError) as e:
         die("KeyError or ValueError:" + str(e))
+    except requests.exceptions.ConnectionError:
+        die("could not connect to Canvas - are you offline?")
     except Exception as e:
         raise e  # For unknown errors print rich debugging info
 
@@ -340,6 +343,8 @@ def find_orphans_cmd(repo: Path, config: Path | None) -> None:
         die(f"Invalid canvas.toml: {e}")
     except (ValueError, KeyError) as e:
         die("KeyError or ValueError:" + str(e))
+    except requests.exceptions.ConnectionError:
+        die("could not connect to Canvas - are you offline?")
     except Exception as e:
         raise e
 
@@ -419,6 +424,8 @@ def create_tool_aliases(course_url: str) -> None:
         click.echo(_format_tab_configuration(tab_config))
     except (ValueError, KeyError) as e:
         die(str(e))
+    except requests.exceptions.ConnectionError:
+        die("could not connect to Canvas - are you offline?")
     except Exception as e:
         raise e
 
@@ -622,5 +629,7 @@ def update(
         die(f"Invalid canvas.toml: {e}")
     except (ValueError, KeyError) as e:
         die("KeyError or ValueError:" + str(e))
+    except requests.exceptions.ConnectionError:
+        die("could not connect to Canvas - are you offline?")
     except Exception as e:
         raise e  # For unknown errors print rich debugging info
