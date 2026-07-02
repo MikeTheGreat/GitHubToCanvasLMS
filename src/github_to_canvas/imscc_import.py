@@ -8,7 +8,6 @@ import tempfile
 import xml.etree.ElementTree as ET
 import zipfile
 from dataclasses import dataclass, field
-from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any
 from urllib.parse import unquote
@@ -492,7 +491,6 @@ def rewrite_imscc_links(
     prefix = "../" * depth  # e.g. '../' for files one dir deep
 
     def _replace_canvas_ref(m: re.Match) -> str:
-        content_type = m.group(1)   # e.g. "assignments", "pages"
         imscc_id = m.group(2)       # e.g. "g_assignment_1"
 
         entry = temp_manifest.get(imscc_id)
@@ -1105,7 +1103,7 @@ def parse_quiz_meta(meta_path: Path) -> tuple[dict[str, Any], str]:
         return {}, ""
 
 
-def _qti_text(el: ET.Element, ns: str) -> str:
+def _qti_text(el: ET.Element) -> str:
     """Get text content from a QTI mattext element, stripping the namespace."""
     for mat in el.iter():
         if _strip_ns(mat.tag) == "mattext" and mat.text:
@@ -1191,7 +1189,7 @@ def _parse_qti_items(root_el: ET.Element) -> list[dict[str, Any]]:
                 continue
             for mat_el in pres_el:
                 if _strip_ns(mat_el.tag) == "material":
-                    question_text = _qti_text(mat_el, "")
+                    question_text = _qti_text(mat_el)
                     break
             break
 
@@ -1208,7 +1206,7 @@ def _parse_qti_items(root_el: ET.Element) -> list[dict[str, Any]]:
                     for label_el in rl_el:
                         if _strip_ns(label_el.tag) == "response_label":
                             ident = label_el.get("ident", "")
-                            text = _qti_text(label_el, "")
+                            text = _qti_text(label_el)
                             answers.append((ident, text))
             for cond_el in item_el.iter():
                 if _strip_ns(cond_el.tag) == "varequal":
@@ -1221,7 +1219,7 @@ def _parse_qti_items(root_el: ET.Element) -> list[dict[str, Any]]:
                     for label_el in rl_el:
                         if _strip_ns(label_el.tag) == "response_label":
                             ident = label_el.get("ident", "")
-                            text = _qti_text(label_el, "")
+                            text = _qti_text(label_el)
                             answers.append((ident, text))
             # Correct idents are direct <varequal> children of the <and> block
             for cond_el in item_el.iter():
@@ -1258,11 +1256,11 @@ def _parse_qti_items(root_el: ET.Element) -> list[dict[str, Any]]:
             if not fb_ident:
                 continue
             if fb_ident == "solution":
-                fb_text = _qti_text(fb_el, "")
+                fb_text = _qti_text(fb_el)
                 if fb_text:
                     solution = fb_text
             else:
-                fb_text = _qti_text(fb_el, "")
+                fb_text = _qti_text(fb_el)
                 if fb_text:
                     feedback[fb_ident] = fb_text
 
@@ -1761,7 +1759,6 @@ def _parse_course_settings_full(xml_path: Path) -> dict[str, Any]:
     try:
         tree = ET.parse(xml_path)
         root = tree.getroot()
-        ns = _xml_ns(root)
 
         result: dict[str, Any] = {}
         for child in root:
@@ -2569,7 +2566,7 @@ def run_import(imscc_path: Path, output_dir: Path) -> None:
             cs_dir = output_dir / "course_settings"
             cs_dir.mkdir(parents=True, exist_ok=True)
             (cs_dir / "module_order.toml").write_text(order_toml, encoding="utf-8")
-            print(f"Generating module order: course_settings/module_order.toml")
+            print("Generating module order: course_settings/module_order.toml")
 
         # Phase 7: course settings
         create_course_settings(imscc_dir, temp_manifest, output_dir, course_id, base_url, due_dates=due_dates)

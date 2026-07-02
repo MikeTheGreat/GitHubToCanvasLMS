@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from github_to_canvas.config import Config, load
+from github_to_canvas.config import load
 
 
 def _write_toml(path: Path, content: str) -> Path:

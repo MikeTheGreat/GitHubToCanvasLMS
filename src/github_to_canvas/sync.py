@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 import re
 import tomllib
-from collections import deque
+from collections import defaultdict, deque
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -465,8 +465,6 @@ def check_title_collisions(
     fallback) would overwrite each other.  Returns a list of error strings,
     one per collision group.
     """
-    from collections import defaultdict
-
     title_to_paths: dict[str, list[str]] = defaultdict(list)
     for md_file in md_files:
         try:

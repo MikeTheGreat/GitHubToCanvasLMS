@@ -1,7 +1,6 @@
 """Unit tests for quiz.py — quiz and question file parsing."""
 from pathlib import Path
 
-import pytest
 
 from github_to_canvas.quiz import parse_question_file, parse_quiz_file
 

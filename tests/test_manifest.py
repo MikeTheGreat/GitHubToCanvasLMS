@@ -2,10 +2,8 @@
 from __future__ import annotations
 
 import os
-import tomllib
 from pathlib import Path
 
-import pytest
 
 from github_to_canvas.manifest import flush, load, needs_sync, record
 

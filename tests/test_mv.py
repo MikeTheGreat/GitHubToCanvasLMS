@@ -1,7 +1,6 @@
 """Tests for the mv (move/rename) command."""
 from __future__ import annotations
 
-import os
 import subprocess
 import tomllib
 from pathlib import Path

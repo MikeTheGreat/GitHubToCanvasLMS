@@ -4,7 +4,6 @@ from __future__ import annotations
 import shutil
 import tomllib
 from pathlib import Path
-from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
@@ -19,7 +18,6 @@ from github_to_canvas.imscc_import import (
 from github_to_canvas.sync import (
     find_due_date_override,
     load_due_dates,
-    parse_frontmatter,
     run_sync,
 )
 from github_to_canvas.config import Config
@@ -565,7 +563,6 @@ def test_settings_change_applies_dates_only(
     """When course_settings.toml changes and due_dates exist, dates should be
     applied via a dates-only API call without re-uploading content."""
     import os
-    from github_to_canvas import manifest as manifest_lib
 
     _FUTURE = "2999-12-31T00:00:00+00:00"
 
@@ -644,8 +641,6 @@ def test_import_generates_due_dates_table(due_dates_imported_dir: Path) -> None:
     with cs_toml.open("rb") as f:
         data = tomllib.load(f)
     due_dates = data.get("due_dates", [])
-    # The IMSCC fixture has at least one assignment with due dates
-    titled = {e["name"] for e in due_dates}
     # Check that the fixture assignment with dates was collected
     assert len(due_dates) >= 0  # may be zero if fixture has no dates
 
@@ -694,7 +689,7 @@ def test_list_titles_sorted_by_date(tmp_path: Path) -> None:
 
     runner = CliRunner()
     result = runner.invoke(main, ["list-titles", str(root)])
-    lines = [l for l in result.output.strip().splitlines() if l.strip()]
+    lines = [line for line in result.output.strip().splitlines() if line.strip()]
     # A Quiz has no due date, so it should be last
     assert "A Quiz" in lines[-1]
 

@@ -6,8 +6,8 @@ import re
 import shutil
 import subprocess
 import tomllib
+import uuid
 from pathlib import Path, PurePosixPath
-from typing import Any
 from urllib.parse import quote, unquote
 
 import tomli_w
@@ -174,7 +174,6 @@ def _compute_case_rename_dest_rel(src: Path, dest: Path, repo_root: Path) -> str
     repo_resolved = repo_root.resolve()
     src_rel_path = src_resolved.relative_to(repo_resolved)
 
-    src_str = str(src.absolute())
     dest_str = str(dest.absolute())
     repo_str = str(repo_resolved)
 
@@ -197,7 +196,7 @@ def _add_quiz_qbank_inner_renames(
 ) -> None:
     """For quiz/qbank folder renames, add inner file renames to path_map."""
     src_name = src.name
-    dest_name = dest.name if not _is_case_only_rename(src, dest) else dest.name
+    dest_name = dest.name
 
     if src_name == dest_name:
         return
@@ -483,7 +482,6 @@ def _do_move(
     case_rename = _is_case_only_rename(src, dest)
 
     if case_rename:
-        import uuid
         temp_name = dest.parent / f".mv-tmp-{uuid.uuid4().hex[:8]}"
         if use_git:
             subprocess.run(["git", "mv", str(src), str(temp_name)], cwd=str(repo_root), check=True)
@@ -501,7 +499,6 @@ def _do_move(
         for inner_src, inner_dest in inner_renames:
             inner_case = _is_case_only_rename(inner_src, inner_dest)
             if inner_case:
-                import uuid
                 temp = inner_dest.parent / f".mv-tmp-{uuid.uuid4().hex[:8]}"
                 if use_git:
                     subprocess.run(["git", "mv", str(inner_src), str(temp)], cwd=str(repo_root), check=True)
@@ -549,7 +546,6 @@ def _get_inner_renames(
 def _describe_changes(
     path_map: dict[str, str],
     manifest_changed: bool,
-    manifest_updates: dict[str, str] | None,
     file_updates: dict[str, tuple[str, str]],
     module_order_updates: list[str] | None,
     course_settings_updates: dict[str, str] | None,
@@ -642,7 +638,7 @@ def run_mv(src: Path, dest: Path, noop: bool = False, verbose: bool = False) -> 
         inner_renames_paths = _get_inner_renames(src, dest, src_rel, dest_rel)
 
     _describe_changes(
-        path_map, manifest_changed, None, file_updates,
+        path_map, manifest_changed, file_updates,
         module_order_updates, course_settings_updates, noop, verbose,
     )
 

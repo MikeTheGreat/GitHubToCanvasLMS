@@ -3,9 +3,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
 
-from github_to_canvas.imscc_import import TempEntry, parse_imsmanifest
+from github_to_canvas.imscc_import import parse_imsmanifest
 
 FIXTURE_DIR = Path(__file__).parent / "fixtures" / "imscc"
 

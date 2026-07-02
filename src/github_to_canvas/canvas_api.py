@@ -8,7 +8,6 @@ from typing import Any
 
 from canvasapi import Canvas
 from canvasapi.exceptions import BadRequest, ResourceDoesNotExist
-from canvasapi.paginated_list import PaginatedList
 from canvasapi.rubric import RubricAssociation
 from canvasapi.util import combine_kwargs
 
@@ -771,6 +770,10 @@ def _set_module_item_published(module, mi, title: str, published: bool) -> str |
     if canvas_type == "File":
         return title
 
+    # Kept as a local import on purpose: this is the one raw-requests call in the
+    # module (a deliberate workaround for a canvasapi/Canvas bug). tests/conftest.py
+    # blocks real HTTP by monkeypatching the `requests.put` attribute; because this
+    # binds the same `requests` module object, that patch still applies here.
     import requests as _requests
 
     req = module._requester

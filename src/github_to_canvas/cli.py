@@ -2,15 +2,19 @@ import os
 import subprocess
 import sys
 import tomllib
+from datetime import datetime
 from pathlib import Path
 
 import click
 import pypandoc
 import requests
-
-#
 from dotenv import find_dotenv, load_dotenv
 
+# load_dotenv() must run before the local package imports below, because .config
+# (imported transitively by canvas_api/sync/etc.) reads CANVAS_API_TOKEN from the
+# environment at import time. That is why those imports deliberately come after
+# this call rather than at the top of the file — ruff's E402 is ignored for this
+# file in pyproject.toml for exactly this reason.
 load_dotenv(find_dotenv(usecwd=True), override=True, verbose=True)
 
 
@@ -299,8 +303,7 @@ def prune(repo: Path, config: Path | None, mode: str | None) -> None:
         die("KeyError or ValueError:" + str(e))
     except requests.exceptions.ConnectionError:
         die("could not connect to Canvas - are you offline?")
-    except Exception as e:
-        raise e  # For unknown errors print rich debugging info
+    # unknown errors: let them traceback for debugging
 
 
 @main.command(name="find-orphans")
@@ -345,8 +348,7 @@ def find_orphans_cmd(repo: Path, config: Path | None) -> None:
         die("KeyError or ValueError:" + str(e))
     except requests.exceptions.ConnectionError:
         die("could not connect to Canvas - are you offline?")
-    except Exception as e:
-        raise e
+    # unknown errors: let them traceback for debugging
 
 
 def _parse_canvas_url(url: str) -> tuple[str, int]:
@@ -426,8 +428,7 @@ def create_tool_aliases(course_url: str) -> None:
         die(str(e))
     except requests.exceptions.ConnectionError:
         die("could not connect to Canvas - are you offline?")
-    except Exception as e:
-        raise e
+    # unknown errors: let them traceback for debugging
 
 
 @main.command(name="list-titles")
@@ -513,7 +514,6 @@ def _format_concise_date(iso_date: str) -> str:
     try:
         # Strip trailing timezone info for display
         clean = iso_date.replace("Z", "+00:00")
-        from datetime import datetime
         dt = datetime.fromisoformat(clean)
         return dt.strftime("%Y-%m-%d %H:%M")
     except (ValueError, TypeError):
@@ -631,5 +631,4 @@ def update(
         die("KeyError or ValueError:" + str(e))
     except requests.exceptions.ConnectionError:
         die("could not connect to Canvas - are you offline?")
-    except Exception as e:
-        raise e  # For unknown errors print rich debugging info
+    # unknown errors: let them traceback for debugging

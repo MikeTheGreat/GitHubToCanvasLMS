@@ -896,7 +896,7 @@ def test_replace_canvas_course_url_skips_frontmatter_values(tmp_path: Path) -> N
     """Plain-text occurrences of the URL in frontmatter are not touched."""
     (tmp_path / "assignments").mkdir()
     md = tmp_path / "assignments" / "hw.md"
-    md.write_text(f"---\ngroup_category_id: 12345\n---\n\nSome text.\n")
+    md.write_text("---\ngroup_category_id: 12345\n---\n\nSome text.\n")
     _replace_canvas_course_url_in_md_files(tmp_path, BASE_URL)
     assert "group_category_id: 12345" in md.read_text()
 
@@ -959,8 +959,6 @@ def test_run_import_snippet_roundtrip(imported_dir: Path) -> None:
 
 def test_run_import_no_domain_no_snippet(tmp_path: Path) -> None:
     """When context.xml has no canvas_domain, no snippet file is created."""
-    import shutil
-
     fixture_copy = tmp_path / "imscc"
     shutil.copytree(FIXTURE_DIR, fixture_copy)
 
@@ -979,8 +977,6 @@ def test_run_import_no_domain_no_snippet(tmp_path: Path) -> None:
 
 def test_run_import_no_course_id_no_snippet(tmp_path: Path) -> None:
     """When context.xml has no course_id, no snippet file is created."""
-    import shutil
-
     fixture_copy = tmp_path / "imscc"
     shutil.copytree(FIXTURE_DIR, fixture_copy)
 

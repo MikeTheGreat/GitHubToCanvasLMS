@@ -17,8 +17,7 @@ but should **not** be touched.
 
 ## 0. Ground rules for working from this report
 
-1. **Run the baseline first.** `uv run pytest -q` → expect **831 passed** (~4–5 min;
-   see item T1 for why it's slow).
+1. **Run the baseline first.** `uv run pytest -q` → expect **831 passed** (~1 min).
 2. **One item per change.** Do one report item, run the full suite, stop. Don't
    batch unrelated items into one edit session.
 3. **Never commit** (per CLAUDE.md) unless the user explicitly asks.
@@ -63,9 +62,16 @@ but should **not** be touched.
 
 ---
 
-## 2. Zero-risk hygiene (mechanical; do in one pass each)
+## 2. Zero-risk hygiene (mechanical; do in one pass each) — DONE 2026-07-02
 
-### H1. Ruff findings in `src/` (6 items)
+All of H1–H6 applied in one session. `uvx ruff check src/ tests/` is now fully
+clean (exit 0), and `uv run pytest -q` still reports **831 passed** — no behavior
+change. Notes on what actually landed are inline under each item below.
+
+### H1. Ruff findings in `src/` (6 items) — DONE 2026-07-02
+
+- Fixed all six listed findings, plus one drifted-in seventh: `mv.py:10` unused
+  `from typing import Any` (F401), same zero-risk class.
 
 - `canvas_api.py:11` — unused import `PaginatedList` (F401).
 - `imscc_import.py:11` — unused import `HTMLParser` (F401).
@@ -76,7 +82,15 @@ but should **not** be touched.
 - `mv.py:177` — unused local `src_str` in `_compute_case_rename_dest_rel` (F841).
 - **Effort:** minutes. **Risk:** none. Run full suite after.
 
-### H2. Adopt a ruff config so the remaining findings stop being noise
+### H2. Adopt a ruff config so the remaining findings stop being noise — DONE 2026-07-02
+
+- Added `[tool.ruff.lint.per-file-ignores]` to `pyproject.toml` ignoring `E402` for
+  `cli.py`, with an explanatory comment. The stray `#` on the old `cli.py:10` was
+  replaced with a full comment above the `load_dotenv()` call explaining the import
+  ordering. Deleted the two redundant function-local `import shutil` in
+  `tests/test_imscc_import.py` (fixes the F401 + both F811), fixed the F541 there,
+  the F841 (`titled`) and E741 (`l`→`line`) in `tests/test_due_dates.py`, and removed
+  all remaining unused test imports (`ruff --fix`). Whole tree is now ruff-clean.
 
 - Add `[tool.ruff]` / `[tool.ruff.lint]` to `pyproject.toml`. The 7 E402 findings in
   `cli.py` are **intentional** (`load_dotenv()` must run before the `.config` import
@@ -90,7 +104,7 @@ but should **not** be touched.
   `import shutil` statements shadowing the module-level import; just delete them).
 - **Effort:** ~30 min. **Risk:** none.
 
-### H3. Dead parameter and dead conditional in `mv.py`
+### H3. Dead parameter and dead conditional in `mv.py` — DONE 2026-07-02
 
 - `_describe_changes(... manifest_updates ...)` (`mv.py:549-558`): the
   `manifest_updates` parameter is always passed `None` (`mv.py:645`) and never used.
@@ -99,13 +113,18 @@ but should **not** be touched.
   — both branches are identical. Replace with `dest_name = dest.name`.
 - **Effort:** minutes. **Risk:** none.
 
-### H4. Unused parameter in `imscc_import._qti_text`
+### H4. Unused parameter in `imscc_import._qti_text` — DONE 2026-07-02
 
 - `_qti_text(el, ns)` (`imscc_import.py:1108`) never uses `ns`; all ~10 call sites
   pass `""`. Drop the parameter.
 - **Effort:** minutes. **Risk:** none.
 
-### H5. Function-local imports that belong at module top
+### H5. Function-local imports that belong at module top — DONE 2026-07-02
+
+- `defaultdict` merged into sync.py's existing `from collections import ...`;
+  `datetime` and `uuid` hoisted in cli.py and mv.py. The `canvas_api` raw-requests
+  import was **left local on purpose** and given an explanatory comment (conftest
+  patches `requests.put`; verified still blocked).
 
 - `sync.py:468` — `from collections import defaultdict` inside
   `check_title_collisions`.
@@ -118,7 +137,12 @@ but should **not** be touched.
 - **Effort:** minutes. **Risk:** none except the canvas_api one — treat that one
   as read-only.
 
-### H6. `cli.py` — pointless re-raise clauses
+### H6. `cli.py` — pointless re-raise clauses — DONE 2026-07-02
+
+- Deleted all four `except Exception as e: raise e` clauses (identical behavior:
+  unknown errors still traceback), each replaced with a
+  `# unknown errors: let them traceback for debugging` comment. Did **not** convert
+  them to `die()` (that would change behavior; still tracked in TODO.md).
 
 - Four commands end their `try` with `except Exception as e: raise e` (`cli.py:299,
   343, 422, 625`). `raise e` from an except block is equivalent to letting it
@@ -520,7 +544,7 @@ Do **not** "improve" these without an explicit user request:
 For a future session doing this work top-down:
 
 1. ~~E1 (venv)~~ — already fixed; run `uv run pytest -q` to confirm baseline 831 passed.
-2. H1–H6 (one pass, ~1 h total).
+2. ~~H1–H6 (one pass, ~1 h total).~~ — done 2026-07-02; tree is ruff-clean, 831 passed.
 3. ~~T1 (test speed)~~ — done 2026-07-02, 226 s → ~39 s.
 4. T2 (pathspec) — small, fenced.
 5. P1 (`SyncContext`) — the flagship; do alone, full suite after.

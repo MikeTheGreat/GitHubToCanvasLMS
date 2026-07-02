@@ -1,9 +1,8 @@
 """Unit tests for orphan detection logic."""
 from __future__ import annotations
 
-from unittest.mock import MagicMock, PropertyMock
+from unittest.mock import MagicMock
 
-import pytest
 
 from github_to_canvas.orphans import ResourceKey, extract_canvas_refs, find_orphans
 
