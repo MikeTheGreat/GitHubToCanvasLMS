@@ -185,26 +185,21 @@ change. Notes on what actually landed are inline under each item below.
 - **Note for TODO.md/TESTING.md:** TESTING.md now documents the `uv run pytest -q`
   invocation and the fast-suite expectation near the top.
 
-### T2. `pathspec` deprecation warning (86+ occurrences per run)
+### T2. `pathspec` deprecation warning (86+ occurrences per run) — DONE 2026-07-02
 
-- `ignore.py:48` uses `PathSpec.from_lines("gitwildmatch", ...)`, which pathspec has
-  deprecated in favor of `GitIgnoreSpec`. **Do not blind-swap**: `GitIgnoreSpec`
-  changes `!`-negation semantics to match git more closely.
-- Approach: change to `pathspec.GitIgnoreSpec.from_lines(lines)` in a scratch
-  branch, run `tests/test_ignore.py` + the ignore-related tests in `test_sync.py`.
-  If green, adopt (the tests cover globs, `~$*`, dir-only `build/`, `!` negation).
-  If anything fails, instead add a targeted `filterwarnings` entry in
-  `pyproject.toml`'s pytest config and leave the code alone.
-- **Effort:** ~30 min. **Risk:** low-medium (semantics), fully fenced by tests.
+- **Was:** `ignore.py:48` used `PathSpec.from_lines("gitwildmatch", ...)`, which
+  pathspec has deprecated in favor of `GitIgnoreSpec`.
+- **Fix applied:** swapped to `pathspec.GitIgnoreSpec.from_lines(lines)` (and the
+  `IgnoreMatcher.__init__` type hint to `pathspec.GitIgnoreSpec`). Ran
+  `tests/test_ignore.py` (6 passed, with `-W error::DeprecationWarning`) and the
+  ignore-related tests in `test_sync.py` (3 passed) — all green, so the adopt path
+  was taken; no `filterwarnings` fallback needed.
+- **Verified:** full suite still **831 passed** (~40 s) and the pathspec
+  deprecation warnings are gone from the run (warning count dropped from 202).
+- No behavior change observed: the tests cover globs, `~$*`, dir-only `build/`, and
+  `!` negation, and none of them changed.
 
-### T3. Optional: block *all* outbound HTTP in tests, not just `requests.put`
-
-- `tests/conftest.py` patches only `requests.put` (the one raw-requests call in
-  `canvas_api._set_module_item_published`). All other network calls go through the
-  mocked `canvasapi`. A socket-level guard (e.g., autouse fixture that raises on
-  `socket.connect` to non-local addresses) would make "a test forgot to mock" fail
-  loudly instead of hitting a real Canvas.
-- **Effort:** ~30 min. **Risk:** none in principle; skip if it fights with pypandoc.
+(T3 moved to TODO.md — "Optional: block all outbound HTTP in tests" — 2026-07-02.)
 
 ---
 
@@ -546,7 +541,7 @@ For a future session doing this work top-down:
 1. ~~E1 (venv)~~ — already fixed; run `uv run pytest -q` to confirm baseline 831 passed.
 2. ~~H1–H6 (one pass, ~1 h total).~~ — done 2026-07-02; tree is ruff-clean, 831 passed.
 3. ~~T1 (test speed)~~ — done 2026-07-02, 226 s → ~39 s.
-4. T2 (pathspec) — small, fenced.
+4. ~~T2 (pathspec)~~ — done 2026-07-02; swapped to `GitIgnoreSpec`, warning gone.
 5. P1 (`SyncContext`) — the flagship; do alone, full suite after.
 6. D1–D4 (small dedups, now easier post-P1).
 7. D5–D11 in any order.

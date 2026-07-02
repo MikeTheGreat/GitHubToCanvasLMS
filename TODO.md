@@ -281,6 +281,16 @@ Maybe remove KEEP?
 - maybe on the syllabus page, like in Canvas?
   - Rename to Syllabus + Schedule
 
+## Optional: block *all* outbound HTTP in tests, not just `requests.put`
+
+`tests/conftest.py` patches only `requests.put` (the one raw-requests call in
+`canvas_api._set_module_item_published`). All other network calls go through the
+mocked `canvasapi`. A socket-level guard (e.g., an autouse fixture that raises on
+`socket.connect` to non-local addresses) would make "a test forgot to mock" fail
+loudly instead of hitting a real Canvas.
+
+Effort: ~30 min. Risk: none in principle; skip if it fights with pypandoc.
+
 # Bugs to Fix:
 - Changing module_order.toml doesn't re-arrange the modules in Canvas
 

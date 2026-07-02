@@ -19,7 +19,7 @@ _IGNORE_FILES = (".gitignore", ".canvasignore")
 class IgnoreMatcher:
     """Matches repo-root-relative paths against combined ignore patterns."""
 
-    def __init__(self, spec: pathspec.PathSpec) -> None:
+    def __init__(self, spec: pathspec.GitIgnoreSpec) -> None:
         self._spec = spec
 
     def is_ignored(self, path: Path, repo_root: Path) -> bool:
@@ -45,5 +45,5 @@ def load_ignore_matcher(repo_root: Path) -> IgnoreMatcher:
         ignore_path = repo_root / name
         if ignore_path.exists():
             lines.extend(ignore_path.read_text().splitlines())
-    spec = pathspec.PathSpec.from_lines("gitwildmatch", lines)
+    spec = pathspec.GitIgnoreSpec.from_lines(lines)
     return IgnoreMatcher(spec)
