@@ -8,6 +8,7 @@ import pytest
 from github_to_canvas.convert import (
     expand_frontmatter_snippets,
     find_referenced_snippets,
+    mark_decorative_images,
     markdown_to_html,
     preprocess_snippets,
 )
@@ -507,3 +508,64 @@ def test_markdown_to_html_list() -> None:
 def test_markdown_to_html_mathml() -> None:
     html = markdown_to_html("Inline math: $x^2 + y^2 = z^2$\n")
     assert "<math" in html
+
+
+# ---------------------------------------------------------------------------
+# mark_decorative_images / decorative images in markdown_to_html
+# ---------------------------------------------------------------------------
+
+def test_empty_alt_image_marked_decorative() -> None:
+    html = markdown_to_html("![](../assets/banner.svg)\n")
+    assert 'alt=""' in html
+    assert 'role="presentation"' in html
+
+
+def test_whitespace_alt_image_marked_decorative() -> None:
+    html = markdown_to_html("![  ](../assets/banner.svg)\n")
+    assert 'alt=""' in html
+    assert 'role="presentation"' in html
+
+
+def test_real_alt_image_not_marked_decorative() -> None:
+    html = markdown_to_html("![A course banner](../assets/banner.svg)\\\n")
+    assert 'alt="A course banner"' in html
+    assert 'role="presentation"' not in html
+
+
+def test_inline_empty_alt_image_marked_decorative() -> None:
+    html = markdown_to_html("Some text ![](icon.png) inline.\n")
+    assert '<img src="icon.png" alt="" role="presentation" />' in html
+
+
+def test_existing_role_attribute_preserved() -> None:
+    # Round-trip case: imported markdown carries role="presentation" as a
+    # Pandoc attribute; only alt="" should be added, not a second role.
+    html = markdown_to_html('![](img.png){role="presentation"}\n')
+    assert html.count('role="presentation"') == 1
+    assert 'alt=""' in html
+
+
+def test_mark_decorative_images_missing_alt_attr() -> None:
+    html = mark_decorative_images('<p><img src="x.png" /></p>')
+    assert '<img src="x.png" alt="" role="presentation" />' in html
+
+
+def test_mark_decorative_images_empty_alt_attr() -> None:
+    html = mark_decorative_images('<p><img src="x.png" alt=""></p>')
+    assert '<img src="x.png" alt="" role="presentation">' in html
+
+
+def test_mark_decorative_images_whitespace_alt_normalized() -> None:
+    html = mark_decorative_images('<img src="x.png" alt="   " />')
+    assert 'alt=""' in html
+    assert 'role="presentation"' in html
+
+
+def test_mark_decorative_images_real_alt_untouched() -> None:
+    tag = '<img src="x.png" alt="A chart of results" />'
+    assert mark_decorative_images(tag) == tag
+
+
+def test_mark_decorative_images_existing_role_untouched() -> None:
+    tag = '<img src="x.png" alt="" role="presentation" />'
+    assert mark_decorative_images(tag) == tag

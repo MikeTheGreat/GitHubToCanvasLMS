@@ -23,6 +23,10 @@ _FRONTMATTER_SNIPPET_RE = re.compile(
     r"^\[PASTE_SNIPPET_INTO_FRONTMATTER\]\(([^)]+)\)$"
 )
 
+_IMG_TAG_RE = re.compile(r"<img\b[^>]*/?>", re.IGNORECASE)
+_ALT_ATTR_RE = re.compile(r'\balt="([^"]*)"')
+_ROLE_ATTR_RE = re.compile(r'\brole="[^"]*"')
+
 
 def preprocess_snippets(
     text: str,
@@ -214,10 +218,47 @@ def expand_frontmatter_snippets(
     return merged, remaining_body
 
 
+def mark_decorative_images(html: str) -> str:
+    """Mark alt-less images as decorative for the Canvas accessibility checker.
+
+    Pandoc drops the alt attribute entirely for ``![](image.png)``, and the
+    Canvas accessibility checker flags such images as missing alt text. An
+    ``<img>`` whose alt is missing or whitespace-only is treated as
+    decorative: it gets ``alt=""`` plus ``role="presentation"`` — the same
+    markup the Canvas editor writes when an image is marked decorative.
+    Images with real alt text, or with an explicit role attribute already
+    set, are left untouched.
+    """
+
+    def _fix(m: re.Match) -> str:
+        tag = m.group(0)
+        alt_m = _ALT_ATTR_RE.search(tag)
+        if alt_m is not None and alt_m.group(1).strip():
+            return tag  # real alt text — not decorative
+        if alt_m is not None and alt_m.group(1):
+            # whitespace-only alt — normalize to alt=""
+            tag = tag[: alt_m.start(1)] + tag[alt_m.end(1) :]
+        additions = []
+        if alt_m is None:
+            additions.append('alt=""')
+        if _ROLE_ATTR_RE.search(tag) is None:
+            additions.append('role="presentation"')
+        if not additions:
+            return tag
+        if tag.endswith("/>"):
+            head, close = tag[:-2].rstrip(), " />"
+        else:
+            head, close = tag[:-1].rstrip(), ">"
+        return f"{head} {' '.join(additions)}{close}"
+
+    return _IMG_TAG_RE.sub(_fix, html)
+
+
 def markdown_to_html(text: str) -> str:
-    return pypandoc.convert_text(
+    html = pypandoc.convert_text(
         text,
         to="html5",
         format="markdown+smart",
         extra_args=["--mathml"],
     )
+    return mark_decorative_images(html)

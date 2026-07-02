@@ -30,6 +30,13 @@ git clone (local)
        a. skip if mtime ≤ manifest last_synced (unless --force-uploads); print "Skipping (up-to-date)"
        b. snippet preprocessing: replace any [text](snippets/...) links with snippet file contents
        c. convert Markdown → HTML via Pandoc
+          - accessibility post-pass (mark_decorative_images(), part of markdown_to_html()):
+            any <img> with a missing or whitespace-only alt attribute gets alt="" and
+            role="presentation" so Canvas's accessibility checker treats it as decorative;
+            images with real alt text or an existing role attribute are untouched.
+            Note: on import, _simplify_pandoc_attrs() drops role="presentation" from
+            attribute blocks (id + style only), leaving ![](...) — this pass regenerates
+            the decorative markup on upload, so the round trip is lossless.
        d. for each <img> and <a href> that points to a local file:
             - if local file does not exist → print error, remove the tag, skip (do NOT stub)
             - if in manifest → rewrite tag to Canvas URL

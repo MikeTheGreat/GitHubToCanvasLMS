@@ -889,6 +889,8 @@ Pages are updated in place on Canvas when re-synced.
 | Decorative image (no alt, no caption) | `![](image.svg)` |
 | Image with visible caption | `![Caption text](image.svg)` (standalone paragraph) |
 
+**Accessibility (decorative images):** an image whose alt text is empty (or only spaces) is automatically marked as decorative in the uploaded HTML — it gets `alt=""` and `role="presentation"`, the same markup the Canvas editor produces when you tick "Decorative image". This keeps the Canvas accessibility checker happy and tells screen readers to skip the image. Images with real alt text are left alone, so every image is accessible either way: give meaningful images alt text, and leave the alt text empty for purely decorative ones.
+
 **WARNING:**  Make sure that you start your headers at H2.  **DO NOT USE H1 HEADERS!!!**  
 Canvas will translate the H1 headers into styled normal paragraphs so it looks right but
 will not work correctly with screen readers!!
