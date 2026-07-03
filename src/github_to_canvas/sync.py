@@ -62,13 +62,17 @@ class SyncContext:
     unpublishable_items: list[tuple[str, str]] = field(default_factory=list)
 
 
-def load_due_dates(repo_path: Path) -> list[dict[str, Any]]:
-    """Load centralized due_dates from course_settings/course_settings.toml."""
-    settings_path = repo_path / "course_settings" / "course_settings.toml"
-    if not settings_path.exists():
-        return []
-    with settings_path.open("rb") as fh:
-        settings = tomllib.load(fh)
+def load_due_dates(repo_path: Path, settings: dict | None = None) -> list[dict[str, Any]]:
+    """Load centralized due_dates from course_settings/course_settings.toml.
+
+    If settings dict is provided (pre-loaded), use it; otherwise read from disk.
+    """
+    if settings is None:
+        settings_path = repo_path / "course_settings" / "course_settings.toml"
+        if not settings_path.exists():
+            return []
+        with settings_path.open("rb") as fh:
+            settings = tomllib.load(fh)
     return settings.get("due_dates", [])
 
 
@@ -737,6 +741,171 @@ def sync_course_settings(
     return rubric_ids, settings_stale
 
 
+def _phase_assets(ctx: SyncContext) -> None:
+    """Phase 1: Upload assets (depth-first, files before subdirs, alphabetical)."""
+    assets_dir = ctx.repo_path / "assets"
+    if assets_dir.exists():
+        _walk_assets(ctx, assets_dir, assets_dir)
+
+
+def _phase_content(ctx: SyncContext) -> bool:
+    """Phase 2: Upload content (pages, assignments, discussions).
+
+    Returns False if collision check passes; True if aborted due to collisions.
+    """
+    repo_path = ctx.repo_path
+    matcher = ctx.matcher
+    errors = ctx.errors
+    verbose = ctx.verbose
+    skip = {
+        "assets",
+        "modules",
+        "quizzes",
+        "snippets",
+        "course_settings",
+        "question_banks",
+    }
+    content_dirs = sorted(
+        d
+        for d in repo_path.iterdir()
+        if d.is_dir()
+        and not d.name.startswith(".")
+        and d.name not in skip
+        and not matcher.is_ignored(d, repo_path)
+    )
+    all_content_files: list[Path] = []
+    for content_dir in content_dirs:
+        for md_file in sorted(content_dir.rglob("*.md")):
+            if matcher.is_ignored(md_file, repo_path):
+                if verbose:
+                    print(f"Ignoring: {md_file.relative_to(repo_path).as_posix()}")
+                continue
+            all_content_files.append(md_file)
+
+    collision_errors = check_title_collisions(all_content_files, repo_path)
+    if collision_errors:
+        for msg in collision_errors:
+            warn(msg, errors)
+        print("\nAborting: resolve title collisions before syncing.")
+        return True
+
+    for md_file in all_content_files:
+        _sync_content_file(ctx, md_file)
+    return False
+
+
+def _phase_quizzes(ctx: SyncContext) -> None:
+    """Phase 2.5: Upload quizzes (each quiz lives in its own sub-folder)."""
+    repo_path = ctx.repo_path
+    matcher = ctx.matcher
+    verbose = ctx.verbose
+    quizzes_dir = repo_path / "quizzes"
+    if quizzes_dir.exists():
+        for quiz_folder in sorted(d for d in quizzes_dir.iterdir() if d.is_dir()):
+            if matcher.is_ignored(quiz_folder, repo_path):
+                if verbose:
+                    print(f"Ignoring: {quiz_folder.relative_to(repo_path).as_posix()}")
+                continue
+            quiz_md = quiz_folder / f"{quiz_folder.name}.md"
+            if quiz_md.exists():
+                _sync_quiz(ctx, quiz_folder, quiz_md)
+
+
+def _phase_question_banks(ctx: SyncContext) -> None:
+    """Phase 2.6: Sync question banks."""
+    _sync_question_banks(ctx)
+
+
+def _phase_front_page(
+    ctx: SyncContext, front_page_path: str | None, settings_synced: bool
+) -> None:
+    """Phase 2.7: Set front page (only when course_settings.toml or the target page was re-synced)."""
+    course = ctx.course
+    manifest = ctx.manifest
+    errors = ctx.errors
+    synced_keys = ctx.synced_keys
+    if front_page_path and (settings_synced or front_page_path in synced_keys):
+        entry = manifest.get(front_page_path)
+        if entry and "canvas_url" in entry:
+            print(f"Setting front page: {front_page_path}")
+            try:
+                capi.set_front_page(course, entry["canvas_url"])
+            except Exception as exc:
+                if "unpublished" in str(exc).lower():
+                    msg = (
+                        f"front_page '{front_page_path}' must be published before it can be set "
+                        f"as the front page. Add the following to its frontmatter and re-run:\n"
+                        f"    published: true"
+                    )
+                else:
+                    msg = f"set front page failed for '{front_page_path}': {exc}"
+                print(f"  WARNING: {msg}")
+                errors.append(msg)
+        else:
+            msg = f"front_page '{front_page_path}' not found in manifest — sync the page first"
+            print(f"  WARNING: {msg}")
+            errors.append(msg)
+
+
+def _phase_modules(ctx: SyncContext, force_uploads: bool) -> None:
+    """Phase 3: Sync modules (alphabetical, with optional explicit position from module_order.toml)."""
+    repo_path = ctx.repo_path
+    manifest = ctx.manifest
+    manifest_path = ctx.manifest_path
+    matcher = ctx.matcher
+    errors = ctx.errors
+    verbose = ctx.verbose
+    course = ctx.course
+    snippets_dir = ctx.snippets_dir
+    synced_keys = ctx.synced_keys
+    _order_key = "course_settings/module_order.toml"
+    _order_path = repo_path / _order_key
+    position_map = _load_module_order(repo_path)
+    order_changed = _order_path.exists() and manifest_lib.needs_sync(
+        manifest, _order_key, _order_path, force_uploads
+    )
+    modules_dir = repo_path / "modules"
+    if modules_dir.exists():
+        modules_with_updated_refs: set[Path] = set()
+        if synced_keys:
+            for md_file in modules_dir.glob("*.md"):
+                if matcher.is_ignored(md_file, repo_path):
+                    continue
+                try:
+                    _, body = parse_frontmatter(md_file.read_text())
+                except yaml.YAMLError:
+                    continue
+                body = preprocess_snippets(body, md_file, snippets_dir)
+                items = parse_module_body(body, md_file, repo_path)
+                refs = {i["local_path"] for i in items if i["type"] == "content"}
+                if refs & synced_keys:
+                    modules_with_updated_refs.add(md_file)
+
+        for md_file in sorted(modules_dir.glob("*.md")):
+            if matcher.is_ignored(md_file, repo_path):
+                if verbose:
+                    print(f"Ignoring: {md_file.relative_to(repo_path).as_posix()}")
+                continue
+            position = position_map.get(md_file.name)
+            force_this = force_uploads or md_file in modules_with_updated_refs
+            had_module_warnings = _sync_module(
+                ctx, md_file, position=position, force_this=force_this
+            )
+            if had_module_warnings:
+                errors.append(f"module {md_file.name}: some items could not be added")
+    if order_changed:
+        _reorder_modules(course, position_map, repo_path, manifest, errors)
+        manifest_lib.record(manifest, manifest_path, _order_key, 0, "module_order")
+
+
+def _phase_due_dates(ctx: SyncContext, due_dates: list, settings_synced: bool) -> None:
+    """Phase 4: Apply and check due dates."""
+    if due_dates and settings_synced:
+        _apply_due_dates_only(ctx)
+    if due_dates:
+        _check_due_dates_coverage(due_dates, ctx.repo_path, ctx.matcher)
+
+
 def run_sync(
     config: Config,
     repo_path: Path,
@@ -755,21 +924,20 @@ def run_sync(
     synced_content_keys: set[str] = set()
     unpublishable_items: list[tuple[str, str]] = []
 
-    # Read front_page setting up front so we can apply it after pages are synced.
     _cs_path = repo_path / "course_settings" / "course_settings.toml"
     _front_page_path: str | None = None
+    _settings_dict: dict | None = None
     if _cs_path.exists():
         with _cs_path.open("rb") as _fh:
-            _front_page_path = tomllib.load(_fh).get("front_page")
+            _settings_dict = tomllib.load(_fh)
+            _front_page_path = _settings_dict.get("front_page")
 
     # 0. Course settings (metadata, grading standards, assignment groups, policies, rubrics)
     rubric_ids, settings_synced = sync_course_settings(course, repo_path, manifest, manifest_path, force_uploads, verbose=verbose)
 
-    # Fetch assignment group IDs once so assignments can reference groups by name
     assignment_group_ids = capi.get_assignment_group_ids(course)
 
-    # Load centralized due dates for override
-    due_dates = load_due_dates(repo_path)
+    due_dates = load_due_dates(repo_path, _settings_dict)
 
     ctx = SyncContext(
         course=course,
@@ -794,139 +962,28 @@ def run_sync(
     # 0.5. Syllabus
     sync_syllabus(ctx)
 
-    # 1. Assets (depth-first, files before subdirs, alphabetical)
-    assets_dir = repo_path / "assets"
-    if assets_dir.exists():
-        _walk_assets(ctx, assets_dir, assets_dir)
+    # 1. Assets
+    _phase_assets(ctx)
 
-    # 2. Content folders (alphabetical, excl. assets, modules, quizzes, snippets, course_settings, hidden)
-    skip = {
-        "assets",
-        "modules",
-        "quizzes",
-        "snippets",
-        "course_settings",
-        "question_banks",
-    }
-    content_dirs = sorted(
-        d
-        for d in repo_path.iterdir()
-        if d.is_dir()
-        and not d.name.startswith(".")
-        and d.name not in skip
-        and not matcher.is_ignored(d, repo_path)
-    )
-    # Collect all content .md files (recursively, to support subfolders) and
-    # check for title collisions before uploading anything.
-    all_content_files: list[Path] = []
-    for content_dir in content_dirs:
-        for md_file in sorted(content_dir.rglob("*.md")):
-            if matcher.is_ignored(md_file, repo_path):
-                if verbose:
-                    print(f"Ignoring: {md_file.relative_to(repo_path).as_posix()}")
-                continue
-            all_content_files.append(md_file)
-
-    collision_errors = check_title_collisions(all_content_files, repo_path)
-    if collision_errors:
-        for msg in collision_errors:
-            warn(msg, errors)
-        print("\nAborting: resolve title collisions before syncing.")
+    # 2. Content
+    if _phase_content(ctx):
         _print_errors_summary(errors)
         return True
 
-    for md_file in all_content_files:
-        _sync_content_file(ctx, md_file)
-
-    # 2.5. Quizzes (each quiz lives in its own sub-folder)
-    quizzes_dir = repo_path / "quizzes"
-    if quizzes_dir.exists():
-        for quiz_folder in sorted(d for d in quizzes_dir.iterdir() if d.is_dir()):
-            if matcher.is_ignored(quiz_folder, repo_path):
-                if verbose:
-                    print(f"Ignoring: {quiz_folder.relative_to(repo_path).as_posix()}")
-                continue
-            quiz_md = quiz_folder / f"{quiz_folder.name}.md"
-            if quiz_md.exists():
-                _sync_quiz(ctx, quiz_folder, quiz_md)
+    # 2.5. Quizzes
+    _phase_quizzes(ctx)
 
     # 2.6. Question banks
-    _sync_question_banks(ctx)
+    _phase_question_banks(ctx)
 
-    # 2.7. Front page (only when course_settings.toml or the target page was re-synced)
-    if _front_page_path and (
-        settings_synced or _front_page_path in synced_content_keys
-    ):
-        entry = manifest.get(_front_page_path)
-        if entry and "canvas_url" in entry:
-            print(f"Setting front page: {_front_page_path}")
-            try:
-                capi.set_front_page(course, entry["canvas_url"])
-            except Exception as exc:
-                if "unpublished" in str(exc).lower():
-                    msg = (
-                        f"front_page '{_front_page_path}' must be published before it can be set "
-                        f"as the front page. Add the following to its frontmatter and re-run:\n"
-                        f"    published: true"
-                    )
-                else:
-                    msg = f"set front page failed for '{_front_page_path}': {exc}"
-                print(f"  WARNING: {msg}")
-                errors.append(msg)
-        else:
-            msg = f"front_page '{_front_page_path}' not found in manifest — sync the page first"
-            print(f"  WARNING: {msg}")
-            errors.append(msg)
+    # 2.7. Front page
+    _phase_front_page(ctx, _front_page_path, settings_synced)
 
-    # 3. Modules (alphabetical, with optional explicit position from module_order.toml)
-    _order_key = "course_settings/module_order.toml"
-    _order_path = repo_path / _order_key
-    position_map = _load_module_order(repo_path)
-    order_changed = _order_path.exists() and manifest_lib.needs_sync(
-        manifest, _order_key, _order_path, force_uploads
-    )
-    modules_dir = repo_path / "modules"
-    if modules_dir.exists():
-        # Determine which modules reference content that was just synced this run.
-        modules_with_updated_refs: set[Path] = set()
-        if synced_content_keys:
-            for md_file in modules_dir.glob("*.md"):
-                if matcher.is_ignored(md_file, repo_path):
-                    continue
-                try:
-                    _, body = parse_frontmatter(md_file.read_text())
-                except yaml.YAMLError:
-                    continue
-                body = preprocess_snippets(body, md_file, snippets_dir)
-                items = parse_module_body(body, md_file, repo_path)
-                refs = {i["local_path"] for i in items if i["type"] == "content"}
-                if refs & synced_content_keys:
-                    modules_with_updated_refs.add(md_file)
+    # 3. Modules
+    _phase_modules(ctx, force_uploads)
 
-        for md_file in sorted(modules_dir.glob("*.md")):
-            if matcher.is_ignored(md_file, repo_path):
-                if verbose:
-                    print(f"Ignoring: {md_file.relative_to(repo_path).as_posix()}")
-                continue
-            position = position_map.get(md_file.name)
-            force_this = (
-                force_uploads
-                or md_file in modules_with_updated_refs
-            )
-            had_module_warnings = _sync_module(
-                ctx, md_file, position=position, force_this=force_this
-            )
-            if had_module_warnings:
-                errors.append(f"module {md_file.name}: some items could not be added")
-    if order_changed:
-        _reorder_modules(course, position_map, repo_path, manifest, errors)
-        manifest_lib.record(manifest, manifest_path, _order_key, 0, "module_order")
-
-    if due_dates and settings_synced:
-        _apply_due_dates_only(ctx)
-
-    if due_dates:
-        _check_due_dates_coverage(due_dates, repo_path, matcher)
+    # 4. Due dates
+    _phase_due_dates(ctx, due_dates, settings_synced)
 
     _print_newer_on_canvas_summary(newer_on_canvas)
     _print_unpublishable_summary(unpublishable_items)
@@ -1102,6 +1159,260 @@ def _walk_assets(ctx: SyncContext, dir_path: Path, assets_root: Path) -> None:
             _walk_assets(ctx, entry, assets_root)
 
 
+def _validate_annotatable_attachment(
+    ctx: SyncContext, frontmatter: dict, local_key: str, extra: dict
+) -> None:
+    """Check annotatable attachment consistency and add id to extra dict."""
+    repo_root = ctx.repo_path
+    manifest = ctx.manifest
+    errors = ctx.errors
+    uses_student_annotation = "student_annotation" in (
+        frontmatter.get("submission_types") or []
+    )
+    if uses_student_annotation and "annotatable_attachment" not in frontmatter:
+        msg = (
+            f"WARNING: {local_key}: submission_types includes student_annotation "
+            f"but annotatable_attachment is not set"
+        )
+        warn(msg, errors)
+    elif "annotatable_attachment" in frontmatter:
+        asset_path = frontmatter["annotatable_attachment"]
+        if not (repo_root / asset_path).exists():
+            msg = (
+                f"WARNING: {local_key}: annotatable_attachment '{asset_path}' "
+                f"does not exist on disk"
+            )
+            warn(msg, errors)
+        else:
+            asset_entry = manifest.get(asset_path)
+            if asset_entry is None or asset_entry.get("canvas_type") != "file":
+                msg = (
+                    f"WARNING: {local_key}: annotatable_attachment '{asset_path}' not found "
+                    f"in manifest — sync assets/ first, then re-run"
+                )
+                warn(msg, errors)
+            else:
+                extra["annotatable_attachment_id"] = asset_entry["canvas_id"]
+
+
+def _apply_rubric(
+    ctx: SyncContext, entry: dict, frontmatter: dict, local_key: str
+) -> None:
+    """Handle rubric association or removal."""
+    course = ctx.course
+    errors = ctx.errors
+    rubric_ids = ctx.rubric_ids
+    rubric_ref = frontmatter.get("rubric")
+    if rubric_ref is not None:
+        rubric_canvas_id: int | None = None
+        if isinstance(rubric_ref, str):
+            resolved = (rubric_ids or {}).get(rubric_ref)
+            if resolved is None:
+                known = list(rubric_ids.keys()) if rubric_ids else []
+                msg = (
+                    f"WARNING: {local_key}: rubric '{rubric_ref}' not found on Canvas "
+                    f"(known: {known}); skipping rubric association"
+                )
+                warn(msg, errors)
+            else:
+                rubric_canvas_id = resolved
+        else:
+            rubric_canvas_id = int(rubric_ref)
+        if rubric_canvas_id is not None:
+            use_for_grading = frontmatter.get("use_for_grading", True)
+            try:
+                capi.associate_rubric_with_assignment(
+                    course, rubric_canvas_id, entry["canvas_id"], use_for_grading
+                )
+            except Exception as exc:
+                msg = f"WARNING: {local_key}: rubric association failed: {exc}"
+                warn(msg, errors)
+    elif entry.get("rubric_settings") is not None:
+        rubric_settings = entry["rubric_settings"]
+        rubric_id = (
+            rubric_settings["id"]
+            if isinstance(rubric_settings, dict)
+            else rubric_settings.id
+        )
+        try:
+            removed = capi.remove_rubric_from_assignment(
+                course, entry["canvas_id"], rubric_id
+            )
+            if removed:
+                print(f"  Removed rubric association: {local_key}")
+        except Exception as exc:
+            msg = f"WARNING: {local_key}: rubric removal failed: {exc}"
+            warn(msg, errors)
+
+
+def _upload_page(
+    ctx: SyncContext, existing: dict | None, frontmatter: dict, html: str, title: str,
+    published: bool, local_key: str
+) -> None:
+    """Upload a page to Canvas."""
+    course = ctx.course
+    manifest = ctx.manifest
+    manifest_path = ctx.manifest_path
+    synced_keys = ctx.synced_keys
+    canvas_url = existing.get("canvas_url") if existing else None
+    entry = capi.create_or_update_page(
+        course,
+        canvas_url,
+        title,
+        html,
+        published=published,
+        editing_roles=frontmatter.get("editing_roles", "teachers"),
+    )
+    print(f"  Link: {entry['html_url']}")
+    manifest_lib.record(
+        manifest,
+        manifest_path,
+        local_key,
+        entry["canvas_id"],
+        "page",
+        extra={"canvas_url": entry["canvas_url"]},
+    )
+    if synced_keys is not None:
+        synced_keys.add(local_key)
+
+
+def _upload_assignment(
+    ctx: SyncContext, existing: dict | None, frontmatter: dict, html: str, title: str,
+    published: bool, local_key: str
+) -> None:
+    """Upload an assignment to Canvas."""
+    course = ctx.course
+    manifest = ctx.manifest
+    manifest_path = ctx.manifest_path
+    due_dates = ctx.due_dates
+    errors = ctx.errors
+    assignment_group_ids = ctx.assignment_group_ids
+    synced_keys = ctx.synced_keys
+    canvas_id = existing["canvas_id"] if existing else None
+    extra: dict[str, Any] = {}
+    for key in (
+        "points_possible",
+        "due_at",
+        "lock_at",
+        "unlock_at",
+        "submission_types",
+        "allowed_extensions",
+        "allowed_attempts",
+        "grading_type",
+        # Assignment group (grading category)
+        "assignment_group_id",
+        # Group assignment
+        "group_category_id",
+        "grade_group_students_individually",
+        # Anonymous grading
+        "anonymous_grading",
+        # Moderated grading
+        "moderated_grading",
+        "grader_count",
+        "final_grader_id",
+        "grader_comments_visible_to_graders",
+        "graders_anonymous_to_graders",
+        "grader_names_visible_to_final_grader",
+        # Peer reviews
+        "peer_reviews",
+        "automatic_peer_reviews",
+        "peer_review_count",
+        "peer_reviews_assign_at",
+        "anonymous_peer_reviews",
+        "intra_group_peer_reviews",
+    ):
+        if key in frontmatter:
+            extra[key] = frontmatter[key]
+    override = find_due_date_override(due_dates or [], title, "assignment")
+    if override is not None:
+        extra.update(
+            _resolve_date_overrides(override, canvas_id, local_key, errors)
+        )
+    if "assignment_group_id" in extra:
+        resolved = _resolve_assignment_group_id(
+            extra["assignment_group_id"], assignment_group_ids, local_key, errors
+        )
+        if resolved is None:
+            del extra["assignment_group_id"]
+        else:
+            extra["assignment_group_id"] = resolved
+    _validate_annotatable_attachment(ctx, frontmatter, local_key, extra)
+    entry = capi.create_or_update_assignment(
+        course, canvas_id, title, html, published=published, **extra
+    )
+    if entry.get("date_warning"):
+        msg = _date_rejection_message(
+            local_key, title, extra.get("due_at"), entry.get("html_url")
+        )
+        warn(msg, errors)
+    print(f"  Link: {entry['html_url']}")
+    manifest_lib.record(
+        manifest, manifest_path, local_key, entry["canvas_id"], "assignment"
+    )
+    _apply_rubric(ctx, entry, frontmatter, local_key)
+    if synced_keys is not None:
+        synced_keys.add(local_key)
+
+
+def _upload_discussion(
+    ctx: SyncContext, existing: dict | None, frontmatter: dict, html: str, title: str,
+    published: bool, local_key: str
+) -> None:
+    """Upload a discussion to Canvas."""
+    course = ctx.course
+    manifest = ctx.manifest
+    manifest_path = ctx.manifest_path
+    due_dates = ctx.due_dates
+    errors = ctx.errors
+    assignment_group_ids = ctx.assignment_group_ids
+    synced_keys = ctx.synced_keys
+    canvas_id = existing["canvas_id"] if existing else None
+    extra = {}
+    if "require_initial_post" in frontmatter:
+        extra["require_initial_post"] = frontmatter["require_initial_post"]
+    grading_keys = (
+        "points_possible",
+        "due_at",
+        "lock_at",
+        "unlock_at",
+        # Assignment group (grading category)
+        "assignment_group_id",
+    )
+    grading_params = {k: frontmatter[k] for k in grading_keys if k in frontmatter}
+    override = find_due_date_override(due_dates or [], title, "discussion")
+    if override is not None:
+        grading_params.update(
+            _resolve_date_overrides(override, canvas_id, local_key, errors)
+        )
+    if "assignment_group_id" in grading_params:
+        resolved = _resolve_assignment_group_id(
+            grading_params["assignment_group_id"],
+            assignment_group_ids,
+            local_key,
+            errors,
+        )
+        if resolved is None:
+            del grading_params["assignment_group_id"]
+        else:
+            grading_params["assignment_group_id"] = resolved
+    if grading_params:
+        extra["assignment"] = grading_params
+    entry = capi.create_or_update_discussion(
+        course, canvas_id, title, html, published=published, **extra
+    )
+    if entry.get("date_warning"):
+        msg = _date_rejection_message(
+            local_key, title, grading_params.get("due_at"), entry.get("html_url")
+        )
+        warn(msg, errors)
+    print(f"  Link: {entry['html_url']}")
+    manifest_lib.record(
+        manifest, manifest_path, local_key, entry["canvas_id"], "discussion"
+    )
+    if synced_keys is not None:
+        synced_keys.add(local_key)
+
+
 def _sync_content_file(ctx: SyncContext, md_file: Path) -> None:
     course = ctx.course
     repo_root = ctx.repo_path
@@ -1113,11 +1424,7 @@ def _sync_content_file(ctx: SyncContext, md_file: Path) -> None:
     force_overwrite = ctx.force_overwrite
     newer_on_canvas = ctx.newer_on_canvas
     errors = ctx.errors
-    assignment_group_ids = ctx.assignment_group_ids
-    rubric_ids = ctx.rubric_ids
-    synced_keys = ctx.synced_keys
     verbose = ctx.verbose
-    due_dates = ctx.due_dates
     local_key = md_file.relative_to(repo_root).as_posix()
 
     if not manifest_lib.needs_sync(
@@ -1180,203 +1487,11 @@ def _sync_content_file(ctx: SyncContext, md_file: Path) -> None:
 
     print(f"  Uploading: {local_key}")
     if canvas_type == "page":
-        canvas_url = existing.get("canvas_url") if existing else None
-        entry = capi.create_or_update_page(
-            course,
-            canvas_url,
-            title,
-            html,
-            published=published,
-            editing_roles=frontmatter.get("editing_roles", "teachers"),
-        )
-        print(f"  Link: {entry['html_url']}")
-        manifest_lib.record(
-            manifest,
-            manifest_path,
-            local_key,
-            entry["canvas_id"],
-            "page",
-            extra={"canvas_url": entry["canvas_url"]},
-        )
-        if synced_keys is not None:
-            synced_keys.add(local_key)
+        _upload_page(ctx, existing, frontmatter, html, title, published, local_key)
     elif canvas_type == "assignment":
-        canvas_id = existing["canvas_id"] if existing else None
-        extra: dict[str, Any] = {}
-        for key in (
-            "points_possible",
-            "due_at",
-            "lock_at",
-            "unlock_at",
-            "submission_types",
-            "allowed_extensions",
-            "allowed_attempts",
-            "grading_type",
-            # Assignment group (grading category)
-            "assignment_group_id",
-            # Group assignment
-            "group_category_id",
-            "grade_group_students_individually",
-            # Anonymous grading
-            "anonymous_grading",
-            # Moderated grading
-            "moderated_grading",
-            "grader_count",
-            "final_grader_id",
-            "grader_comments_visible_to_graders",
-            "graders_anonymous_to_graders",
-            "grader_names_visible_to_final_grader",
-            # Peer reviews
-            "peer_reviews",
-            "automatic_peer_reviews",
-            "peer_review_count",
-            "peer_reviews_assign_at",
-            "anonymous_peer_reviews",
-            "intra_group_peer_reviews",
-        ):
-            if key in frontmatter:
-                extra[key] = frontmatter[key]
-        override = find_due_date_override(due_dates or [], title, "assignment")
-        if override is not None:
-            extra.update(
-                _resolve_date_overrides(override, canvas_id, local_key, errors)
-            )
-        if "assignment_group_id" in extra:
-            resolved = _resolve_assignment_group_id(
-                extra["assignment_group_id"], assignment_group_ids, local_key, errors
-            )
-            if resolved is None:
-                del extra["assignment_group_id"]
-            else:
-                extra["assignment_group_id"] = resolved
-        uses_student_annotation = "student_annotation" in (
-            frontmatter.get("submission_types") or []
-        )
-        if uses_student_annotation and "annotatable_attachment" not in frontmatter:
-            msg = (
-                f"WARNING: {local_key}: submission_types includes student_annotation "
-                f"but annotatable_attachment is not set"
-            )
-            warn(msg, errors)
-        elif "annotatable_attachment" in frontmatter:
-            asset_path = frontmatter["annotatable_attachment"]
-            if not (repo_root / asset_path).exists():
-                msg = (
-                    f"WARNING: {local_key}: annotatable_attachment '{asset_path}' "
-                    f"does not exist on disk"
-                )
-                warn(msg, errors)
-            else:
-                asset_entry = manifest.get(asset_path)
-                if asset_entry is None or asset_entry.get("canvas_type") != "file":
-                    msg = (
-                        f"WARNING: {local_key}: annotatable_attachment '{asset_path}' not found "
-                        f"in manifest — sync assets/ first, then re-run"
-                    )
-                    warn(msg, errors)
-                else:
-                    extra["annotatable_attachment_id"] = asset_entry["canvas_id"]
-        entry = capi.create_or_update_assignment(
-            course, canvas_id, title, html, published=published, **extra
-        )
-        if entry.get("date_warning"):
-            msg = _date_rejection_message(
-                local_key, title, extra.get("due_at"), entry.get("html_url")
-            )
-            warn(msg, errors)
-        print(f"  Link: {entry['html_url']}")
-        manifest_lib.record(
-            manifest, manifest_path, local_key, entry["canvas_id"], "assignment"
-        )
-        rubric_ref = frontmatter.get("rubric")
-        if rubric_ref is not None:
-            rubric_canvas_id: int | None = None
-            if isinstance(rubric_ref, str):
-                resolved = (rubric_ids or {}).get(rubric_ref)
-                if resolved is None:
-                    known = list(rubric_ids.keys()) if rubric_ids else []
-                    msg = (
-                        f"WARNING: {local_key}: rubric '{rubric_ref}' not found on Canvas "
-                        f"(known: {known}); skipping rubric association"
-                    )
-                    warn(msg, errors)
-                else:
-                    rubric_canvas_id = resolved
-            else:
-                rubric_canvas_id = int(rubric_ref)
-            if rubric_canvas_id is not None:
-                use_for_grading = frontmatter.get("use_for_grading", True)
-                try:
-                    capi.associate_rubric_with_assignment(
-                        course, rubric_canvas_id, entry["canvas_id"], use_for_grading
-                    )
-                except Exception as exc:
-                    msg = f"WARNING: {local_key}: rubric association failed: {exc}"
-                    warn(msg, errors)
-        elif entry.get("rubric_settings") is not None:
-            rubric_settings = entry["rubric_settings"]
-            rubric_id = (
-                rubric_settings["id"]
-                if isinstance(rubric_settings, dict)
-                else rubric_settings.id
-            )
-            try:
-                removed = capi.remove_rubric_from_assignment(
-                    course, entry["canvas_id"], rubric_id
-                )
-                if removed:
-                    print(f"  Removed rubric association: {local_key}")
-            except Exception as exc:
-                msg = f"WARNING: {local_key}: rubric removal failed: {exc}"
-                warn(msg, errors)
-        if synced_keys is not None:
-            synced_keys.add(local_key)
+        _upload_assignment(ctx, existing, frontmatter, html, title, published, local_key)
     elif canvas_type == "discussion":
-        canvas_id = existing["canvas_id"] if existing else None
-        extra = {}
-        if "require_initial_post" in frontmatter:
-            extra["require_initial_post"] = frontmatter["require_initial_post"]
-        grading_keys = (
-            "points_possible",
-            "due_at",
-            "lock_at",
-            "unlock_at",
-            # Assignment group (grading category)
-            "assignment_group_id",
-        )
-        grading_params = {k: frontmatter[k] for k in grading_keys if k in frontmatter}
-        override = find_due_date_override(due_dates or [], title, "discussion")
-        if override is not None:
-            grading_params.update(
-                _resolve_date_overrides(override, canvas_id, local_key, errors)
-            )
-        if "assignment_group_id" in grading_params:
-            resolved = _resolve_assignment_group_id(
-                grading_params["assignment_group_id"],
-                assignment_group_ids,
-                local_key,
-                errors,
-            )
-            if resolved is None:
-                del grading_params["assignment_group_id"]
-            else:
-                grading_params["assignment_group_id"] = resolved
-        if grading_params:
-            extra["assignment"] = grading_params
-        entry = capi.create_or_update_discussion(
-            course, canvas_id, title, html, published=published, **extra
-        )
-        if entry.get("date_warning"):
-            msg = _date_rejection_message(
-                local_key, title, grading_params.get("due_at"), entry.get("html_url")
-            )
-            warn(msg, errors)
-        print(f"  Link: {entry['html_url']}")
-        manifest_lib.record(
-            manifest, manifest_path, local_key, entry["canvas_id"], "discussion"
-        )
-        if synced_keys is not None:
-            synced_keys.add(local_key)
+        _upload_discussion(ctx, existing, frontmatter, html, title, published, local_key)
 
 
 def _load_module_order(repo_path: Path) -> dict[str, int]:

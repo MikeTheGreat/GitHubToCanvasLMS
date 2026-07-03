@@ -149,6 +149,277 @@ def _strip_ns(tag: str) -> str:
     return tag
 
 
+def _classify_syllabus(
+    res: ET.Element, identifier: str, res_type: str, href: str, intended_use: str
+) -> TempEntry | None:
+    """Classify resource as syllabus (special case of associatedcontent)."""
+    if intended_use == "syllabus":
+        return TempEntry(
+            imscc_id=identifier,
+            category="syllabus",
+            imscc_path=href,
+            local_path="course_settings/syllabus.md",
+            title="Syllabus",
+        )
+    return None
+
+
+def _classify_question_bank(
+    res: ET.Element, identifier: str, res_type: str, href: str, imscc_dir: Path
+) -> TempEntry | None:
+    """Classify resource as question bank (QTI objectbank)."""
+    if not (res_type.startswith("associatedcontent/") and href.startswith("non_cc_assessments/")):
+        return None
+    bank_title = ""
+    is_objectbank = False
+    try:
+        ob_tree = ET.parse(imscc_dir / href)
+        ob_root = ob_tree.getroot()
+        first_child = next(
+            (c for c in ob_root if _strip_ns(c.tag) in ("objectbank", "assessment")),
+            None,
+        )
+        if first_child is not None and _strip_ns(first_child.tag) == "objectbank":
+            is_objectbank = True
+            for field_el in first_child.iter():
+                if _strip_ns(field_el.tag) != "qtimetadatafield":
+                    continue
+                lbl = next((c for c in field_el if _strip_ns(c.tag) == "fieldlabel"), None)
+                ent = next((c for c in field_el if _strip_ns(c.tag) == "fieldentry"), None)
+                if lbl is not None and ent is not None:
+                    if (lbl.text or "").strip() == "bank_title":
+                        bank_title = (ent.text or "").strip()
+                        break
+    except (OSError, ET.ParseError):
+        pass
+    if is_objectbank:
+        slug = _slugify(bank_title) if bank_title else _slugify(identifier)
+        return TempEntry(
+            imscc_id=identifier,
+            category="question_bank",
+            imscc_path=href,
+            local_path=f"question_banks/{slug}/{slug}.toml",
+            title=bank_title or identifier,
+        )
+    return None
+
+
+def _classify_course_settings(
+    res: ET.Element, identifier: str, res_type: str, href: str
+) -> TempEntry | None:
+    """Classify resource as course settings (associatedcontent root)."""
+    if res_type.startswith("associatedcontent/") and not href.endswith(".html") and not href.endswith(".xml"):
+        return TempEntry(
+            imscc_id=identifier,
+            category="course_settings",
+            imscc_path=href,
+            local_path="course_settings/course_settings.toml",
+            title="Course Settings",
+        )
+    return None
+
+
+def _classify_page(
+    res: ET.Element, identifier: str, res_type: str, href: str, imscc_dir: Path
+) -> TempEntry | None:
+    """Classify resource as page (webcontent + wiki_content/)."""
+    if res_type == "webcontent" and href.startswith("wiki_content/"):
+        html_path = imscc_dir / href
+        title = _title_from_html_file(html_path)
+        stem = Path(href).stem
+        return TempEntry(
+            imscc_id=identifier,
+            category="page",
+            imscc_path=href,
+            local_path=f"pages/{stem}.md",
+            title=title,
+        )
+    return None
+
+
+def _classify_asset(
+    res: ET.Element, identifier: str, res_type: str, href: str
+) -> TempEntry | None:
+    """Classify resource as asset (webcontent + web_resources/)."""
+    if res_type == "webcontent" and href.startswith("web_resources/"):
+        rel = href[len("web_resources/") :]
+        return TempEntry(
+            imscc_id=identifier,
+            category="asset",
+            imscc_path=href,
+            local_path=f"assets/{rel}",
+            title=Path(href).name,
+        )
+    return None
+
+
+def _classify_discussion(
+    res: ET.Element, identifier: str, res_type: str, href: str, imscc_dir: Path, resource_map: dict
+) -> TempEntry | None:
+    """Classify resource as discussion (imsdt_xmlv1p1)."""
+    if res_type != "imsdt_xmlv1p1":
+        return None
+    if not href:
+        href = next(
+            (f_el.get("href", "") for f_el in res
+             if _strip_ns(f_el.tag) == "file" and f_el.get("href", "")),
+            "",
+        )
+    if not href:
+        print(f"  WARNING: Discussion resource {identifier!r} has no href — skipping")
+        return None
+
+    meta_id = None
+    for dep in res:
+        if _strip_ns(dep.tag) == "dependency":
+            meta_id = dep.get("identifierref")
+            break
+    meta_path = None
+    if meta_id and meta_id in resource_map:
+        meta_path = resource_map[meta_id].get("href", "")
+
+    title = ""
+    if meta_path:
+        title = _title_from_xml_element(imscc_dir / meta_path, "title")
+    if not title:
+        title = _title_from_xml_element(imscc_dir / href, "title")
+    if not title:
+        title = identifier
+
+    return TempEntry(
+        imscc_id=identifier,
+        category="discussion",
+        imscc_path=href,
+        local_path=f"discussions/{_slugify(title)}.md",
+        title=title,
+        metadata={"meta_path": meta_path or ""},
+    )
+
+
+def _classify_assignment(
+    res: ET.Element, identifier: str, res_type: str, href: str, imscc_dir: Path
+) -> TempEntry | None:
+    """Classify resource as assignment (associatedcontent + href into gXXX/ with HTML)."""
+    if res_type.startswith("associatedcontent/") and href.endswith(".html"):
+        settings_path = imscc_dir / Path(href).parent / "assignment_settings.xml"
+        if settings_path.exists():
+            title = _title_from_xml_element(settings_path, "title")
+            stem = Path(href).stem
+            return TempEntry(
+                imscc_id=identifier,
+                category="assignment",
+                imscc_path=href,
+                local_path=f"assignments/{stem}.md",
+                title=title,
+                metadata={"settings_path": str(settings_path.relative_to(imscc_dir))},
+            )
+    return None
+
+
+def _classify_quiz(
+    res: ET.Element, identifier: str, res_type: str, href: str, imscc_dir: Path, resource_map: dict
+) -> TempEntry | None:
+    """Classify resource as quiz (imsqti_xmlv1p2/)."""
+    if not res_type.startswith("imsqti_xmlv1p2/"):
+        return None
+    file_hrefs = [
+        f_el.get("href", "")
+        for f_el in res
+        if _strip_ns(f_el.tag) == "file"
+    ]
+    meta_href = href
+
+    if not meta_href:
+        for dep_el in res:
+            if _strip_ns(dep_el.tag) == "dependency":
+                dep_id = dep_el.get("identifierref", "")
+                dep_res = resource_map.get(dep_id)
+                if dep_res is not None:
+                    dep_href = dep_res.get("href", "")
+                    if dep_href.endswith("assessment_meta.xml"):
+                        meta_href = dep_href
+                        for f_el in dep_res:
+                            if _strip_ns(f_el.tag) == "file":
+                                f_href = f_el.get("href", "")
+                                if f_href and f_href not in file_hrefs:
+                                    file_hrefs.append(f_href)
+                        break
+
+    title = _title_from_xml_element(imscc_dir / meta_href, "title") if meta_href else identifier
+    slug = _slugify(title) if title else identifier
+
+    qti_path = next((h for h in file_hrefs if h.endswith(".xml.qti")), None)
+    if qti_path is None:
+        qti_path = next(
+            (h for h in file_hrefs if h != meta_href and h.endswith(".xml")),
+            "",
+        )
+
+    return TempEntry(
+        imscc_id=identifier,
+        category="quiz",
+        imscc_path=meta_href,
+        local_path=f"quizzes/{slug}/{slug}.md",
+        title=title,
+        metadata={"meta_path": meta_href, "qti_path": qti_path},
+    )
+
+
+def _classify_external_url(
+    res: ET.Element, identifier: str, res_type: str, href: str, imscc_dir: Path
+) -> TempEntry | None:
+    """Classify resource as external URL (imswl_xmlv1p1)."""
+    if res_type != "imswl_xmlv1p1":
+        return None
+    title = _title_from_xml_element(imscc_dir / href, "title") if href else identifier
+    url = ""
+    target = ""
+    window_features = ""
+    try:
+        wl_tree = ET.parse(imscc_dir / href)
+        for el in wl_tree.getroot().iter():
+            if _strip_ns(el.tag) == "url":
+                url = el.get("href", "")
+                target = el.get("target", "")
+                window_features = el.get("windowFeatures", "")
+                break
+    except (OSError, ET.ParseError):
+        pass
+    meta: dict[str, Any] = {"url": url}
+    if target:
+        meta["target"] = target
+    if window_features:
+        meta["window_features"] = window_features
+    return TempEntry(
+        imscc_id=identifier,
+        category="external_url",
+        imscc_path=href,
+        local_path="",
+        title=title,
+        metadata=meta,
+    )
+
+
+def _classify_lti(
+    res: ET.Element, identifier: str, res_type: str, href: str
+) -> TempEntry | None:
+    """Classify resource as LTI tool (imsbasiclti_)."""
+    if not res_type.startswith("imsbasiclti_"):
+        return None
+    file_hrefs = [
+        f_el.get("href", "")
+        for f_el in res
+        if _strip_ns(f_el.tag) == "file"
+    ]
+    return TempEntry(
+        imscc_id=identifier,
+        category="lti",
+        imscc_path=file_hrefs[0] if file_hrefs else href,
+        local_path="",
+        title=identifier,
+    )
+
+
 def parse_imsmanifest(imscc_dir: Path) -> dict[str, TempEntry]:
     """Parse imsmanifest.xml and return a temp manifest dict.
 
@@ -184,249 +455,21 @@ def parse_imsmanifest(imscc_dir: Path) -> dict[str, TempEntry]:
         href = res.get("href", "")
         intended_use = res.get("intendeduse", "")
 
-        # --- Syllabus (special case of associatedcontent) ---
-        if intended_use == "syllabus":
-            result[identifier] = TempEntry(
-                imscc_id=identifier,
-                category="syllabus",
-                imscc_path=href,
-                local_path="course_settings/syllabus.md",
-                title="Syllabus",
-            )
-            continue
+        entry: TempEntry | None = None
+        entry = entry or _classify_syllabus(res, identifier, res_type, href, intended_use)
+        entry = entry or _classify_question_bank(res, identifier, res_type, href, imscc_dir)
+        entry = entry or _classify_course_settings(res, identifier, res_type, href)
+        entry = entry or _classify_page(res, identifier, res_type, href, imscc_dir)
+        entry = entry or _classify_asset(res, identifier, res_type, href)
+        entry = entry or _classify_discussion(res, identifier, res_type, href, imscc_dir, resource_map)
+        entry = entry or _classify_assignment(res, identifier, res_type, href, imscc_dir)
+        entry = entry or _classify_quiz(res, identifier, res_type, href, imscc_dir, resource_map)
+        entry = entry or _classify_external_url(res, identifier, res_type, href, imscc_dir)
+        entry = entry or _classify_lti(res, identifier, res_type, href)
 
-        # --- QTI objectbank files (Canvas question banks) ---
-        # non_cc_assessments/ files may be objectbanks (question pools) or quiz-linked
-        # QTI files. Read the file and check the root child to distinguish them.
-        if res_type.startswith("associatedcontent/") and href.startswith("non_cc_assessments/"):
-            bank_title = ""
-            is_objectbank = False
-            try:
-                ob_tree = ET.parse(imscc_dir / href)
-                ob_root = ob_tree.getroot()
-                first_child = next(
-                    (c for c in ob_root if _strip_ns(c.tag) in ("objectbank", "assessment")),
-                    None,
-                )
-                if first_child is not None and _strip_ns(first_child.tag) == "objectbank":
-                    is_objectbank = True
-                    for field_el in first_child.iter():
-                        if _strip_ns(field_el.tag) != "qtimetadatafield":
-                            continue
-                        lbl = next((c for c in field_el if _strip_ns(c.tag) == "fieldlabel"), None)
-                        ent = next((c for c in field_el if _strip_ns(c.tag) == "fieldentry"), None)
-                        if lbl is not None and ent is not None:
-                            if (lbl.text or "").strip() == "bank_title":
-                                bank_title = (ent.text or "").strip()
-                                break
-            except (OSError, ET.ParseError):
-                pass
-            if is_objectbank:
-                slug = _slugify(bank_title) if bank_title else _slugify(identifier)
-                result[identifier] = TempEntry(
-                    imscc_id=identifier,
-                    category="question_bank",
-                    imscc_path=href,
-                    local_path=f"question_banks/{slug}/{slug}.toml",
-                    title=bank_title or identifier,
-                )
-            continue
-
-        # --- Course settings root resource (no html href) ---
-        if res_type.startswith("associatedcontent/") and not href.endswith(".html") and not href.endswith(".xml"):
-            result[identifier] = TempEntry(
-                imscc_id=identifier,
-                category="course_settings",
-                imscc_path=href,
-                local_path="course_settings/course_settings.toml",
-                title="Course Settings",
-            )
-            continue
-
-        # --- Pages (webcontent + wiki_content/) ---
-        if res_type == "webcontent" and href.startswith("wiki_content/"):
-            html_path = imscc_dir / href
-            title = _title_from_html_file(html_path)
-            stem = Path(href).stem
-            result[identifier] = TempEntry(
-                imscc_id=identifier,
-                category="page",
-                imscc_path=href,
-                local_path=f"pages/{stem}.md",
-                title=title,
-            )
-            continue
-
-        # --- Assets (webcontent + web_resources/) ---
-        if res_type == "webcontent" and href.startswith("web_resources/"):
-            rel = href[len("web_resources/"):]
-            result[identifier] = TempEntry(
-                imscc_id=identifier,
-                category="asset",
-                imscc_path=href,
-                local_path=f"assets/{rel}",
-                title=Path(href).name,
-            )
-            continue
-
-        # --- Discussions (imsdt_xmlv1p1) ---
-        if res_type == "imsdt_xmlv1p1":
-            if not href:
-                href = next(
-                    (f_el.get("href", "") for f_el in res
-                     if _strip_ns(f_el.tag) == "file" and f_el.get("href", "")),
-                    "",
-                )
-            if not href:
-                print(f"  WARNING: Discussion resource {identifier!r} has no href — skipping")
-                continue
-
-            # find the dependency (topicMeta)
-            meta_id = None
-            for dep in res:
-                if _strip_ns(dep.tag) == "dependency":
-                    meta_id = dep.get("identifierref")
-                    break
-            meta_path = None
-            if meta_id and meta_id in resource_map:
-                meta_path = resource_map[meta_id].get("href", "")
-
-            # get title from topicMeta if available, else from topic XML
-            title = ""
-            if meta_path:
-                title = _title_from_xml_element(imscc_dir / meta_path, "title")
-            if not title:
-                title = _title_from_xml_element(imscc_dir / href, "title")
-            if not title:
-                title = identifier
-
-            result[identifier] = TempEntry(
-                imscc_id=identifier,
-                category="discussion",
-                imscc_path=href,
-                local_path=f"discussions/{_slugify(title)}.md",
-                title=title,
-                metadata={"meta_path": meta_path or ""},
-            )
-            continue
-
-        # --- Assignments (associatedcontent + href into a gXXX/ dir with HTML) ---
-        if res_type.startswith("associatedcontent/") and href.endswith(".html"):
-            settings_path = imscc_dir / Path(href).parent / "assignment_settings.xml"
-            if settings_path.exists():
-                title = _title_from_xml_element(settings_path, "title")
-                stem = Path(href).stem
-                result[identifier] = TempEntry(
-                    imscc_id=identifier,
-                    category="assignment",
-                    imscc_path=href,
-                    local_path=f"assignments/{stem}.md",
-                    title=title,
-                    metadata={"settings_path": str(settings_path.relative_to(imscc_dir))},
-                )
-                continue
-
-        # --- Quizzes ---
-        if res_type.startswith("imsqti_xmlv1p2/"):
-            file_hrefs = [
-                f_el.get("href", "")
-                for f_el in res
-                if _strip_ns(f_el.tag) == "file"
-            ]
-            meta_href = href  # standard format: href points directly to assessment_meta.xml
-
-            # Canvas export format: href="" and assessment_meta.xml is in a <dependency>
-            if not meta_href:
-                for dep_el in res:
-                    if _strip_ns(dep_el.tag) == "dependency":
-                        dep_id = dep_el.get("identifierref", "")
-                        dep_res = resource_map.get(dep_id)
-                        if dep_res is not None:
-                            dep_href = dep_res.get("href", "")
-                            if dep_href.endswith("assessment_meta.xml"):
-                                meta_href = dep_href
-                                # Gather dependency file hrefs (.xml.qti has richer metadata)
-                                for f_el in dep_res:
-                                    if _strip_ns(f_el.tag) == "file":
-                                        f_href = f_el.get("href", "")
-                                        if f_href and f_href not in file_hrefs:
-                                            file_hrefs.append(f_href)
-                                break
-
-            title = _title_from_xml_element(imscc_dir / meta_href, "title") if meta_href else identifier
-            slug = _slugify(title) if title else identifier
-
-            # Prefer non-CC QTI (.xml.qti) which has question_type and points_possible labels;
-            # fall back to any .xml that isn't the meta file.
-            qti_path = next((h for h in file_hrefs if h.endswith(".xml.qti")), None)
-            if qti_path is None:
-                qti_path = next(
-                    (h for h in file_hrefs if h != meta_href and h.endswith(".xml")),
-                    "",
-                )
-
-            result[identifier] = TempEntry(
-                imscc_id=identifier,
-                category="quiz",
-                imscc_path=meta_href,
-                local_path=f"quizzes/{slug}/{slug}.md",
-                title=title,
-                metadata={"meta_path": meta_href, "qti_path": qti_path},
-            )
-            continue
-
-        # --- External URLs ---
-        if res_type == "imswl_xmlv1p1":
-            title = _title_from_xml_element(imscc_dir / href, "title") if href else identifier
-            # read the URL, target, and windowFeatures from the webLink XML (spec §4.8)
-            url = ""
-            target = ""
-            window_features = ""
-            try:
-                wl_tree = ET.parse(imscc_dir / href)
-                for el in wl_tree.getroot().iter():
-                    if _strip_ns(el.tag) == "url":
-                        url = el.get("href", "")
-                        target = el.get("target", "")
-                        window_features = el.get("windowFeatures", "")
-                        break
-            except (OSError, ET.ParseError):
-                pass
-            meta: dict[str, Any] = {"url": url}
-            if target:
-                meta["target"] = target
-            if window_features:
-                meta["window_features"] = window_features
-            result[identifier] = TempEntry(
-                imscc_id=identifier,
-                category="external_url",
-                imscc_path=href,
-                local_path="",
-                title=title,
-                metadata=meta,
-            )
-            continue
-
-        # --- LTI tools ---
-        if res_type.startswith("imsbasiclti_"):
-            # Canvas exports set href="" on LTI resources; the actual file is in <file> children.
-            file_hrefs = [
-                f_el.get("href", "")
-                for f_el in res
-                if _strip_ns(f_el.tag) == "file"
-            ]
-            result[identifier] = TempEntry(
-                imscc_id=identifier,
-                category="lti",
-                imscc_path=file_hrefs[0] if file_hrefs else href,
-                local_path="",
-                title=identifier,
-            )
-            continue
-
-        # --- Unknown / secondary resources ---
-        # Skip dependency-only resources silently; warn on others.
-        if identifier not in dependency_ids and res_type:
+        if entry is not None:
+            result[identifier] = entry
+        elif identifier not in dependency_ids and res_type:
             print(f"  WARNING: Unknown resource type '{res_type}' for {identifier!r} — skipping")
 
     return result
@@ -1111,6 +1154,89 @@ _SUPPORTED_QUESTION_TYPES = frozenset({
 })
 
 
+def _extract_choice_answers(item_el: ET.Element) -> tuple[list[tuple[str, str]], str]:
+    """Extract answers and correct identifier for multiple choice and true/false."""
+    answers: list[tuple[str, str]] = []
+    correct_ident: str = ""
+    for rl_el in item_el.iter():
+        if _strip_ns(rl_el.tag) == "render_choice":
+            for label_el in rl_el:
+                if _strip_ns(label_el.tag) == "response_label":
+                    ident = label_el.get("ident", "")
+                    text = _qti_text(label_el)
+                    answers.append((ident, text))
+    for cond_el in item_el.iter():
+        if _strip_ns(cond_el.tag) == "varequal":
+            correct_ident = (cond_el.text or "").strip()
+            break
+    return answers, correct_ident
+
+
+def _extract_multiple_response_answers(item_el: ET.Element) -> tuple[list[tuple[str, str]], list[str]]:
+    """Extract answers and correct identifiers for multiple response."""
+    answers: list[tuple[str, str]] = []
+    correct_idents: list[str] = []
+    for rl_el in item_el.iter():
+        if _strip_ns(rl_el.tag) == "render_choice":
+            for label_el in rl_el:
+                if _strip_ns(label_el.tag) == "response_label":
+                    ident = label_el.get("ident", "")
+                    text = _qti_text(label_el)
+                    answers.append((ident, text))
+    for cond_el in item_el.iter():
+        if _strip_ns(cond_el.tag) == "and":
+            for child in cond_el:
+                if _strip_ns(child.tag) == "varequal":
+                    ident = (child.text or "").strip()
+                    if ident:
+                        correct_idents.append(ident)
+            break
+    return answers, correct_idents
+
+
+def _extract_fib_answers(item_el: ET.Element) -> list[str]:
+    """Extract answers for fill-in-the-blank question."""
+    fib_answers: list[str] = []
+    for cond_el in item_el.iter():
+        if _strip_ns(cond_el.tag) == "varequal":
+            ans = (cond_el.text or "").strip()
+            if ans:
+                fib_answers.append(ans)
+    return fib_answers
+
+
+def _extract_pattern_answers(item_el: ET.Element) -> list[str]:
+    """Extract pattern answers for pattern match question."""
+    pattern_answers: list[str] = []
+    for cond_el in item_el.iter():
+        if _strip_ns(cond_el.tag) == "varsubstring":
+            pat = (cond_el.text or "").strip()
+            if pat:
+                pattern_answers.append(pat)
+    return pattern_answers
+
+
+def _extract_feedback(item_el: ET.Element) -> tuple[dict[str, str], str]:
+    """Extract feedback and sample solution from itemfeedback elements."""
+    feedback: dict[str, str] = {}
+    solution: str = ""
+    for fb_el in item_el:
+        if _strip_ns(fb_el.tag) != "itemfeedback":
+            continue
+        fb_ident = fb_el.get("ident", "")
+        if not fb_ident:
+            continue
+        if fb_ident == "solution":
+            fb_text = _qti_text(fb_el)
+            if fb_text:
+                solution = fb_text
+        else:
+            fb_text = _qti_text(fb_el)
+            if fb_text:
+                feedback[fb_ident] = fb_text
+    return feedback, solution
+
+
 def _parse_qti_items(root_el: ET.Element) -> list[dict[str, Any]]:
     """Parse all <item> elements under root_el and return question dicts.
 
@@ -1182,68 +1308,16 @@ def _parse_qti_items(root_el: ET.Element) -> list[dict[str, Any]]:
         match_type: str = ""
 
         if question_type in ("multiple_choice_question", "true_false_question"):
-            for rl_el in item_el.iter():
-                if _strip_ns(rl_el.tag) == "render_choice":
-                    for label_el in rl_el:
-                        if _strip_ns(label_el.tag) == "response_label":
-                            ident = label_el.get("ident", "")
-                            text = _qti_text(label_el)
-                            answers.append((ident, text))
-            for cond_el in item_el.iter():
-                if _strip_ns(cond_el.tag) == "varequal":
-                    correct_ident = (cond_el.text or "").strip()
-                    break
-
+            answers, correct_ident = _extract_choice_answers(item_el)
         elif question_type == "multiple_response_question":
-            for rl_el in item_el.iter():
-                if _strip_ns(rl_el.tag) == "render_choice":
-                    for label_el in rl_el:
-                        if _strip_ns(label_el.tag) == "response_label":
-                            ident = label_el.get("ident", "")
-                            text = _qti_text(label_el)
-                            answers.append((ident, text))
-            # Correct idents are direct <varequal> children of the <and> block
-            for cond_el in item_el.iter():
-                if _strip_ns(cond_el.tag) == "and":
-                    for child in cond_el:
-                        if _strip_ns(child.tag) == "varequal":
-                            ident = (child.text or "").strip()
-                            if ident:
-                                correct_idents.append(ident)
-                    break
-
+            answers, correct_idents = _extract_multiple_response_answers(item_el)
         elif question_type == "fill_in_blank_question":
-            for cond_el in item_el.iter():
-                if _strip_ns(cond_el.tag) == "varequal":
-                    ans = (cond_el.text or "").strip()
-                    if ans:
-                        fib_answers.append(ans)
-
+            fib_answers = _extract_fib_answers(item_el)
         elif question_type == "pattern_match_question":
             match_type = "substring"
-            for cond_el in item_el.iter():
-                if _strip_ns(cond_el.tag) == "varsubstring":
-                    pat = (cond_el.text or "").strip()
-                    if pat:
-                        fib_answers.append(pat)
+            fib_answers = _extract_pattern_answers(item_el)
 
-        # Feedback extraction from <itemfeedback> elements (spec §4.10.7)
-        feedback: dict[str, str] = {}
-        solution: str = ""
-        for fb_el in item_el:
-            if _strip_ns(fb_el.tag) != "itemfeedback":
-                continue
-            fb_ident = fb_el.get("ident", "")
-            if not fb_ident:
-                continue
-            if fb_ident == "solution":
-                fb_text = _qti_text(fb_el)
-                if fb_text:
-                    solution = fb_text
-            else:
-                fb_text = _qti_text(fb_el)
-                if fb_text:
-                    feedback[fb_ident] = fb_text
+        feedback, solution = _extract_feedback(item_el)
 
         q_slug = _slugify(title) if title else f"question-{len(questions) + 1}"
 
@@ -1279,12 +1353,102 @@ def parse_qti_questions(qti_path: Path) -> list[dict[str, Any]]:
     return _parse_qti_items(root)
 
 
+def _write_true_false_body(
+    q: dict[str, Any], fm_fields: dict[str, Any], answers: list[tuple[str, str]], body_lines: list[str]
+) -> None:
+    """Add true/false question-specific fields to frontmatter."""
+    correct_ident: str = q.get("correct_ident", "")
+    correct_val: Any = None
+    for ident, text in answers:
+        if ident == correct_ident:
+            correct_val = text.lower() == "true"
+            break
+    if correct_val is None and correct_ident:
+        correct_val = True
+    fm_fields["correct"] = correct_val
+
+
+def _write_multiple_choice_body(
+    q: dict[str, Any], fm_fields: dict[str, Any], answers: list[tuple[str, str]], body_lines: list[str]
+) -> None:
+    """Add multiple choice question-specific fields and answers to body."""
+    correct_ident: str = q.get("correct_ident", "")
+    correct_idx: int | None = None
+    for i, (ident, _) in enumerate(answers, start=1):
+        if ident == correct_ident:
+            correct_idx = i
+            break
+    fm_fields["correct"] = correct_idx
+    body_lines.append("## Answers")
+    body_lines.append("")
+    for _, text in answers:
+        answer_md = _html_to_markdown(text).strip() if text else ""
+        body_lines.append(f"1. {answer_md}")
+
+
+def _write_multiple_response_body(
+    q: dict[str, Any], fm_fields: dict[str, Any], answers: list[tuple[str, str]], body_lines: list[str]
+) -> None:
+    """Add multiple response question-specific fields and answers to body."""
+    correct_idents_set = set(q.get("correct_idents", []))
+    correct_indices = [
+        i for i, (ident, _) in enumerate(answers, start=1)
+        if ident in correct_idents_set
+    ]
+    fm_fields["correct"] = correct_indices
+    body_lines.append("## Answers")
+    body_lines.append("")
+    for _, text in answers:
+        answer_md = _html_to_markdown(text).strip() if text else ""
+        body_lines.append(f"1. {answer_md}")
+
+
+def _write_fib_body(q: dict[str, Any], fm_fields: dict[str, Any]) -> None:
+    """Add fill-in-the-blank question-specific fields."""
+    fm_fields["answers"] = q.get("fib_answers", [])
+
+
+def _write_pattern_body(q: dict[str, Any], fm_fields: dict[str, Any]) -> None:
+    """Add pattern match question-specific fields."""
+    fm_fields["answers"] = q.get("fib_answers", [])
+    fm_fields["match_type"] = "substring"
+
+
+def _write_feedback_section(
+    feedback: dict[str, str], answers: list[tuple[str, str]], body_lines: list[str]
+) -> None:
+    """Add feedback section to question body."""
+    if not feedback:
+        return
+    body_lines.extend(["", "## Feedback", ""])
+    if "general_fb" in feedback:
+        fb_md = _html_to_markdown(feedback["general_fb"]).strip()
+        body_lines.extend(["### General", "", fb_md, ""])
+    if "correct_fb" in feedback:
+        fb_md = _html_to_markdown(feedback["correct_fb"]).strip()
+        body_lines.extend(["### Correct", "", fb_md, ""])
+    if "general_incorrect_fb" in feedback:
+        fb_md = _html_to_markdown(feedback["general_incorrect_fb"]).strip()
+        body_lines.extend(["### Incorrect", "", fb_md, ""])
+    per_answer = {
+        k: v for k, v in feedback.items()
+        if k not in ("general_fb", "correct_fb", "general_incorrect_fb")
+    }
+    if per_answer and answers:
+        body_lines.append("### Per-answer")
+        body_lines.append("")
+        for i, (ident, _) in enumerate(answers, start=1):
+            fb_key = f"{ident}_fb"
+            if fb_key in per_answer:
+                fb_md = _html_to_markdown(per_answer[fb_key]).strip()
+                body_lines.append(f"- answer {i}: {fb_md}")
+
+
 def _write_question_file(q: dict[str, Any], q_path: Path) -> None:
     """Write a single question Markdown file."""
     q_path.parent.mkdir(parents=True, exist_ok=True)
     qt = q["question_type"]
     answers: list[tuple[str, str]] = q.get("answers", [])
-    correct_ident: str = q.get("correct_ident", "")
     feedback: dict[str, str] = q.get("feedback", {})
     solution: str = q.get("solution", "")
 
@@ -1303,72 +1467,17 @@ def _write_question_file(q: dict[str, Any], q_path: Path) -> None:
     body_lines: list[str] = []
 
     if qt == "true_false_question":
-        correct_val: Any = None
-        for ident, text in answers:
-            if ident == correct_ident:
-                correct_val = text.lower() == "true"
-                break
-        if correct_val is None and correct_ident:
-            correct_val = True
-        fm_fields["correct"] = correct_val
-
+        _write_true_false_body(q, fm_fields, answers, body_lines)
     elif qt == "multiple_choice_question":
-        correct_idx: int | None = None
-        for i, (ident, _) in enumerate(answers, start=1):
-            if ident == correct_ident:
-                correct_idx = i
-                break
-        fm_fields["correct"] = correct_idx
-        body_lines.append("## Answers")
-        body_lines.append("")
-        for _, text in answers:
-            answer_md = _html_to_markdown(text).strip() if text else ""
-            body_lines.append(f"1. {answer_md}")
-
+        _write_multiple_choice_body(q, fm_fields, answers, body_lines)
     elif qt == "multiple_response_question":
-        correct_idents_set = set(q.get("correct_idents", []))
-        correct_indices = [
-            i for i, (ident, _) in enumerate(answers, start=1)
-            if ident in correct_idents_set
-        ]
-        fm_fields["correct"] = correct_indices
-        body_lines.append("## Answers")
-        body_lines.append("")
-        for _, text in answers:
-            answer_md = _html_to_markdown(text).strip() if text else ""
-            body_lines.append(f"1. {answer_md}")
-
+        _write_multiple_response_body(q, fm_fields, answers, body_lines)
     elif qt == "fill_in_blank_question":
-        fm_fields["answers"] = q.get("fib_answers", [])
-
+        _write_fib_body(q, fm_fields)
     elif qt == "pattern_match_question":
-        fm_fields["answers"] = q.get("fib_answers", [])
-        fm_fields["match_type"] = "substring"
+        _write_pattern_body(q, fm_fields)
 
-    # Feedback section (spec §4.10.7)
-    if feedback:
-        body_lines.extend(["", "## Feedback", ""])
-        if "general_fb" in feedback:
-            fb_md = _html_to_markdown(feedback["general_fb"]).strip()
-            body_lines.extend(["### General", "", fb_md, ""])
-        if "correct_fb" in feedback:
-            fb_md = _html_to_markdown(feedback["correct_fb"]).strip()
-            body_lines.extend(["### Correct", "", fb_md, ""])
-        if "general_incorrect_fb" in feedback:
-            fb_md = _html_to_markdown(feedback["general_incorrect_fb"]).strip()
-            body_lines.extend(["### Incorrect", "", fb_md, ""])
-        per_answer = {
-            k: v for k, v in feedback.items()
-            if k not in ("general_fb", "correct_fb", "general_incorrect_fb")
-        }
-        if per_answer and answers:
-            body_lines.append("### Per-answer")
-            body_lines.append("")
-            for i, (ident, _) in enumerate(answers, start=1):
-                fb_key = f"{ident}_fb"
-                if fb_key in per_answer:
-                    fb_md = _html_to_markdown(per_answer[fb_key]).strip()
-                    body_lines.append(f"- answer {i}: {fb_md}")
+    _write_feedback_section(feedback, answers, body_lines)
 
     # Sample solution for essay questions (spec §4.10.11.2)
     if solution:

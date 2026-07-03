@@ -3,6 +3,7 @@ import subprocess
 import sys
 import tomllib
 from datetime import datetime
+from functools import wraps
 from pathlib import Path
 
 import click
@@ -38,6 +39,23 @@ def _ensure_pandoc() -> None:
         pypandoc.get_pandoc_version()
     except OSError:
         die("Pandoc not found. Run `github-to-canvas setup` to install it.")
+
+
+def _handle_cli_errors(func):
+    """Decorator that catches common CLI errors and formats them for the user."""
+    @wraps(func)
+    def wrapper(*args, **kwargs):
+        try:
+            return func(*args, **kwargs)
+        except FileNotFoundError as e:
+            die(f"Config file not found: {e.filename}")
+        except tomllib.TOMLDecodeError as e:
+            die(f"Invalid canvas.toml: {e}")
+        except (ValueError, KeyError) as e:
+            die("KeyError or ValueError:" + str(e))
+        except requests.exceptions.ConnectionError:
+            die("could not connect to Canvas - are you offline?")
+    return wrapper
 
 
 class _FullHelpGroup(click.Group):
@@ -265,6 +283,7 @@ def emit_workflow_cmd(course_dir: Path) -> None:
     flag_value="manifest",
     help="Remove orphaned entries from the local manifest only; never touch Canvas.",
 )
+@_handle_cli_errors
 def prune(repo: Path, config: Path | None, mode: str | None) -> None:
     """Delete or unpublish Canvas items whose local source file no longer exists.
 
@@ -277,33 +296,23 @@ def prune(repo: Path, config: Path | None, mode: str | None) -> None:
         die("Exactly one of --delete, --unpublish, or --manifest-only is required.")
     if config is None:
         config = repo / "course_settings" / "canvas.toml"
-    try:
-        cfg = load_config(config)
+    cfg = load_config(config)
 
-        click.echo(f"Repo:      {repo.resolve()}")
-        click.echo(f"Course ID: {cfg.course_id}  ({cfg.base_url})")
+    click.echo(f"Repo:      {repo.resolve()}")
+    click.echo(f"Course ID: {cfg.course_id}  ({cfg.base_url})")
 
-        if mode != "manifest":
-            course = get_course(cfg)
-            click.echo(f"Course:    {course.name}")
+    if mode != "manifest":
+        course = get_course(cfg)
+        click.echo(f"Course:    {course.name}")
 
-        had_errors = run_prune(cfg, repo, mode)
+    had_errors = run_prune(cfg, repo, mode)
 
-        if had_errors:
-            click.secho(
-                "Prune complete; please check warnings listed above.", fg="yellow"
-            )
-        else:
-            click.secho("Prune successful", fg="green")
-    except FileNotFoundError as e:
-        die(f"Config file not found: {e.filename}")
-    except tomllib.TOMLDecodeError as e:
-        die(f"Invalid canvas.toml: {e}")
-    except (ValueError, KeyError) as e:
-        die("KeyError or ValueError:" + str(e))
-    except requests.exceptions.ConnectionError:
-        die("could not connect to Canvas - are you offline?")
-    # unknown errors: let them traceback for debugging
+    if had_errors:
+        click.secho(
+            "Prune complete; please check warnings listed above.", fg="yellow"
+        )
+    else:
+        click.secho("Prune successful", fg="green")
 
 
 @main.command(name="find-orphans")
@@ -318,6 +327,7 @@ def prune(repo: Path, config: Path | None, mode: str | None) -> None:
     type=click.Path(path_type=Path),
     help="Path to canvas.toml (default: <repo>/course_settings/canvas.toml)",
 )
+@_handle_cli_errors
 def find_orphans_cmd(repo: Path, config: Path | None) -> None:
     """Find Canvas resources not referenced by any other resource in the course.
 
@@ -329,26 +339,16 @@ def find_orphans_cmd(repo: Path, config: Path | None) -> None:
     """
     if config is None:
         config = repo / "course_settings" / "canvas.toml"
-    try:
-        cfg = load_config(config)
+    cfg = load_config(config)
 
-        click.echo(f"Course ID: {cfg.course_id}  ({cfg.base_url})")
+    click.echo(f"Course ID: {cfg.course_id}  ({cfg.base_url})")
 
-        course = get_course(cfg)
-        click.echo(f"Course:    {course.name}")
-        click.echo()
+    course = get_course(cfg)
+    click.echo(f"Course:    {course.name}")
+    click.echo()
 
-        orphans = find_orphans(course)
-        print_report(orphans, cfg.base_url)
-    except FileNotFoundError as e:
-        die(f"Config file not found: {e.filename}")
-    except tomllib.TOMLDecodeError as e:
-        die(f"Invalid canvas.toml: {e}")
-    except (ValueError, KeyError) as e:
-        die("KeyError or ValueError:" + str(e))
-    except requests.exceptions.ConnectionError:
-        die("could not connect to Canvas - are you offline?")
-    # unknown errors: let them traceback for debugging
+    orphans = find_orphans(course)
+    print_report(orphans, cfg.base_url)
 
 
 def _parse_canvas_url(url: str) -> tuple[str, int]:
@@ -395,6 +395,7 @@ def _format_tab_configuration(tab_config: list[dict]) -> str:
 
 @main.command(name="create-tool-aliases", no_args_is_help=True)
 @click.argument("course_url")
+@_handle_cli_errors
 def create_tool_aliases(course_url: str) -> None:
     """Read navigation tabs from a Canvas course and print a tab_configuration block.
 
@@ -414,21 +415,15 @@ def create_tool_aliases(course_url: str) -> None:
     if not api_token:
         die("CANVAS_API_TOKEN environment variable is not set.")
 
-    try:
-        cfg = Config(base_url=base_url, course_id=course_id, api_token=api_token)
+    cfg = Config(base_url=base_url, course_id=course_id, api_token=api_token)
 
-        click.echo(f"Course ID: {cfg.course_id}  ({cfg.base_url})", err=True)
+    click.echo(f"Course ID: {cfg.course_id}  ({cfg.base_url})", err=True)
 
-        course = get_course(cfg)
-        click.echo(f"Course:    {course.name}", err=True)
+    course = get_course(cfg)
+    click.echo(f"Course:    {course.name}", err=True)
 
-        tab_config = read_tab_configuration(course)
-        click.echo(_format_tab_configuration(tab_config))
-    except (ValueError, KeyError) as e:
-        die(str(e))
-    except requests.exceptions.ConnectionError:
-        die("could not connect to Canvas - are you offline?")
-    # unknown errors: let them traceback for debugging
+    tab_config = read_tab_configuration(course)
+    click.echo(_format_tab_configuration(tab_config))
 
 
 @main.command(name="list-titles")
@@ -552,6 +547,7 @@ def _format_concise_date(iso_date: str) -> str:
     default=False,
     help="Print messages for items that are skipped (up-to-date or newer on Canvas).",
 )
+@_handle_cli_errors
 def update(
     repo: Path,
     config: Path | None,
@@ -565,48 +561,38 @@ def update(
     _ensure_pandoc()
     if config is None:
         config = repo / "course_settings" / "canvas.toml"
-    try:
-        cfg = load_config(config)
+    cfg = load_config(config)
 
-        click.echo(f"Repo:      {repo.resolve()}")
-        click.echo(f"Course ID: {cfg.course_id}  ({cfg.base_url})")
+    click.echo(f"Repo:      {repo.resolve()}")
+    click.echo(f"Course ID: {cfg.course_id}  ({cfg.base_url})")
 
-        course = get_course(cfg)
-        click.echo(f"Course:    {course.name}")
+    course = get_course(cfg)
+    click.echo(f"Course:    {course.name}")
 
-        if target_recursively or single_target:
-            recursive_list = (
-                [p.strip() for p in target_recursively.split(",") if p.strip()]
-                if target_recursively
-                else []
-            )
-            single_list = (
-                [p.strip() for p in single_target.split(",") if p.strip()]
-                if single_target
-                else []
-            )
-            had_errors = run_targeted_sync(
-                cfg, repo, recursive_list, single_list, force_uploads, force_overwrite,
-                verbose=verbose,
-            )
-        else:
-            had_errors = run_sync(
-                cfg, repo, force_uploads=force_uploads, force_overwrite=force_overwrite,
-                verbose=verbose,
-            )
+    if target_recursively or single_target:
+        recursive_list = (
+            [p.strip() for p in target_recursively.split(",") if p.strip()]
+            if target_recursively
+            else []
+        )
+        single_list = (
+            [p.strip() for p in single_target.split(",") if p.strip()]
+            if single_target
+            else []
+        )
+        had_errors = run_targeted_sync(
+            cfg, repo, recursive_list, single_list, force_uploads, force_overwrite,
+            verbose=verbose,
+        )
+    else:
+        had_errors = run_sync(
+            cfg, repo, force_uploads=force_uploads, force_overwrite=force_overwrite,
+            verbose=verbose,
+        )
 
-        if had_errors:
-            click.secho(
-                "Update complete; please check errors listed above.", fg="yellow"
-            )
-        else:
-            click.secho("Update successful", fg="green")
-    except FileNotFoundError as e:
-        die(f"Config file not found: {e.filename}")
-    except tomllib.TOMLDecodeError as e:
-        die(f"Invalid canvas.toml: {e}")
-    except (ValueError, KeyError) as e:
-        die("KeyError or ValueError:" + str(e))
-    except requests.exceptions.ConnectionError:
-        die("could not connect to Canvas - are you offline?")
-    # unknown errors: let them traceback for debugging
+    if had_errors:
+        click.secho(
+            "Update complete; please check errors listed above.", fg="yellow"
+        )
+    else:
+        click.secho("Update successful", fg="green")
