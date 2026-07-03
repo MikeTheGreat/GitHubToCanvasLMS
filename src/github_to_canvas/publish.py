@@ -7,6 +7,7 @@ the ``mkdocs`` CLI.
 """
 from __future__ import annotations
 
+import importlib.util
 import re
 import shutil
 import subprocess
@@ -790,6 +791,14 @@ def emit_workflow(repo: Path) -> Path:
 # ---------------------------------------------------------------------------
 
 def _run_mkdocs(args: list[str], staging_dir: Path, cwd: Path) -> None:
+    # We invoke mkdocs as `python -m mkdocs`, so a missing install surfaces as a
+    # CalledProcessError ("No module named mkdocs"), not FileNotFoundError. Detect
+    # the module up front so the friendly install hint is actually reachable.
+    if importlib.util.find_spec("mkdocs") is None:
+        raise ValueError(
+            "mkdocs is not installed. Install the publish extra with "
+            "`uv tool install github-to-canvas[publish]` (or `pip install mkdocs mkdocs-material`)."
+        )
     cmd = [sys.executable, "-m", "mkdocs", *args, "-f", str(staging_dir / "mkdocs.yml")]
     print(f"Running: {' '.join(cmd)}")
     try:
@@ -814,10 +823,15 @@ def run_publish(
 
     staging_dir = Path(tempfile.mkdtemp(prefix="g2c-publish-"))
     print(f"Staging site in: {staging_dir}")
-    info = stage(repo, staging_dir)
-    print(f"Site: {info['site_name']}  ({info['module_count']} module(s), "
-          f"{len(info['staged_files'])} content file(s))")
+    try:
+        info = stage(repo, staging_dir)
+        print(f"Site: {info['site_name']}  ({info['module_count']} module(s), "
+              f"{len(info['staged_files'])} content file(s))")
 
-    out = Path(output_dir).resolve()
-    _run_mkdocs(["build", "--site-dir", str(out)], staging_dir, cwd=repo)
-    print(f"Built static site: {out}")
+        out = Path(output_dir).resolve()
+        _run_mkdocs(["build", "--site-dir", str(out)], staging_dir, cwd=repo)
+        print(f"Built static site: {out}")
+    finally:
+        # The staging tree is a throwaway scaffold for `mkdocs build`; the real
+        # output lives in `out`. Remove it so we don't leak a temp dir per run.
+        shutil.rmtree(staging_dir, ignore_errors=True)

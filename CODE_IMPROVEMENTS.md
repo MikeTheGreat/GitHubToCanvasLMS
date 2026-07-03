@@ -550,41 +550,50 @@ mechanical splits — no logic changes.
 
 ---
 
-## 7. Latent bugs found during review (report-only — ask the user before fixing)
+## 7. Latent bugs found during review — RESOLVED 2026-07-02 (user authorized all)
 
-Per CLAUDE.md, diagnose-before-fix applies. None of these break the current test
-suite; several are already tracked in TODO.md (cross-referenced).
+Per CLAUDE.md, diagnose-before-fix applies. None of these broke the test suite; the
+user explicitly authorized fixing all of them in one pass. Full suite still **831
+passed** and `uvx ruff check src/ tests/` is clean. Resolution notes inline.
 
-1. **`canvas_api.update_dates` can raise `NameError` instead of returning a
+1. **`canvas_api.update_dates` could raise `NameError` instead of returning a
    warning** (`canvas_api.py:552-572`): if `course.get_assignment/quiz/...`
-   itself raises a `BadRequest` whose text contains "due_at", the `except` block
-   evaluates `getattr(obj, ...)` before `obj` is bound. One-line fix
-   (`obj = None` before the `try`); extremely unlikely in practice.
-2. **`publish._run_mkdocs`'s friendly "mkdocs is not installed" message is mostly
+   itself raised a `BadRequest` whose text contained "due_at", the `except` block
+   evaluated `getattr(obj, ...)` before `obj` was bound.
+   — FIXED: bound `obj = None` before the `try`.
+2. **`publish._run_mkdocs`'s friendly "mkdocs is not installed" message was mostly
    unreachable** (`publish.py:799-810`): the command is
    `[sys.executable, "-m", "mkdocs", ...]`, so a missing mkdocs yields
    `CalledProcessError` ("No module named mkdocs", generic message), not
-   `FileNotFoundError`. The tests pass because they patch `subprocess.run` to raise
-   `FileNotFoundError` directly. Fix = detect the module before running, or catch
-   the CalledProcessError and sniff stderr. User-visible message change → ask.
-3. **`run_publish` never cleans up its staging dir** (`publish.py:822` —
-   `tempfile.mkdtemp` with no cleanup). Leaks one directory per publish run.
-   Wrap in `try/finally` with `shutil.rmtree`, or keep-and-print by design (it
-   currently prints the path — maybe intentional for debugging; ask).
+   `FileNotFoundError`.
+   — FIXED: added an up-front `importlib.util.find_spec("mkdocs")` check that raises
+   the friendly `ValueError` before running; kept the existing
+   `FileNotFoundError`/`CalledProcessError` handlers. `test_run_publish_build` now
+   patches `find_spec` (dev env has no mkdocs installed).
+3. **`run_publish` never cleaned up its staging dir** (`publish.py:822` —
+   `tempfile.mkdtemp` with no cleanup); leaked one directory per publish run.
+   — FIXED: wrapped the body in `try/finally` with
+   `shutil.rmtree(staging_dir, ignore_errors=True)`. `test_run_publish_build` now
+   asserts the staged `mkdocs.yml` exists at mkdocs-run time (inside the mocked
+   `subprocess.run`) and that the staging dir is gone afterward.
 4. **Question-bank upload cannot work against real Canvas** — already thoroughly
    documented in `canvas_api.sync_question_bank`'s docstring and TODO.md ("Re-sync
-   is not idempotent for question banks"). Nothing to do here except *not* build
-   new code on top of `course.create_question_bank`.
+   is not idempotent for question banks").
+   — NO CODE CHANGE: nothing to do except *not* build new code on top of
+   `course.create_question_bank`.
 5. **F811 shadowed tests** (see H2) — two test functions in
-   `tests/test_imscc_import.py` are redefinitions; the first definitions never run.
-6. **`cli.publish` catches only `ValueError`** (`cli.py:209-212`) while `mv`/
+   `tests/test_imscc_import.py` were redefinitions.
+   — ALREADY RESOLVED by H2: verified `uvx ruff check tests/` is clean (no F811) and
+   there are no duplicate `test_*` function names in the file.
+6. **`cli.publish` caught only `ValueError`** (`cli.py:209-212`) while `mv`/
    `import` also catch generic `Exception` → an unexpected error in publish
-   tracebacks. Consistent with "unknown errors traceback for debugging", so
-   arguably fine — just noting the inconsistency.
-7. **TODO.md bug entry may be stale:** "Changing module_order.toml doesn't
+   tracebacked instead of being reported via `die()`.
+   — FIXED: added `except Exception as e: die(str(e))` to `publish`, matching
+   `import`/`mv`.
+7. **TODO.md bug entry was stale:** "Changing module_order.toml doesn't
    re-arrange the modules in Canvas" — `run_sync` *does* now handle this
-   (`sync.py:887-939`: `order_changed` → `_reorder_modules`). Verify against a
-   real course, then delete the TODO entry if fixed.
+   (`sync.py:896-897` calls `_reorder_modules` on `order_changed`).
+   — FIXED: deleted the entry from TODO.md's "Bugs to Fix" section.
 
 ---
 
@@ -662,5 +671,7 @@ For a future session doing this work top-down:
 6. ~~D1–D4 (small dedups, now easier post-P1).~~ — done 2026-07-02; 831 passed each.
 7. ~~D5–D11.~~ — done 2026-07-02; 831 passed each (D9 done as a narrowed subset).
 8. S1–S5 as appetite allows.
-9. Section 8 doc fixes whenever convenient.
-10. Section 7 items: raise with the user, don't just fix.
+9. ~~Section 8 doc fixes whenever convenient.~~
+10. ~~Section 7 items: raise with the user, don't just fix.~~ — done 2026-07-02;
+    user authorized all seven; items 1/2/3/6 fixed, 5 already resolved, 4 no-op,
+    7 removed from TODO.md. 831 passed.

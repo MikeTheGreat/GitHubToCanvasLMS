@@ -233,6 +233,8 @@ def publish(
         run_publish(course_dir, output_dir)
     except ValueError as e:
         die(str(e))
+    except Exception as e:
+        die(str(e))
 
 
 @main.command(name="emit-workflow")

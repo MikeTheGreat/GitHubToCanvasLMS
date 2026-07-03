@@ -566,6 +566,7 @@ def update_dates(
     course, canvas_type: str, canvas_id: int, date_fields: dict[str, Any]
 ) -> dict[str, Any]:
     """Update only the date fields on an existing Canvas item. Returns result dict."""
+    obj = None  # bound before the try so the except handler can safely getattr it
     try:
         if canvas_type == "assignment":
             obj = course.get_assignment(canvas_id)

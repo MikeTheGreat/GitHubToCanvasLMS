@@ -378,7 +378,6 @@ Key implementation decisions that were settled:
   before the user opted for Ally's AI assistant instead.
 
 # Bugs to Fix:
-- Changing module_order.toml doesn't re-arrange the modules in Canvas
 
 - Within a module Markdown file: 'published' is connected to whether the underlying item is published (for example, an assignment) - maybe remove the <!-- published:false --> mechanism from modules & rely on the underlying content instead?
 
@@ -388,3 +387,37 @@ Review these files and re-upload manually if needed (use --force-overwrite to sk
   assignments/worksheets/01-a-unit-worksheets.md
   assignments/worksheets/01-b-unit-worksheets.md
 
+---
+# Possible future improvements:
+(Got these from Fable, probably won't do them, but didn't want to lose them)
+Do **not** "improve" these without an explicit user request:
+
+1. **`imscc_import._build_frontmatter`** (hand-rolled YAML emitter with a quoting
+   heuristic, `:2456`). Swapping to `yaml.safe_dump` would change output formatting
+   across every imported repo and break the many tests that assert exact
+   frontmatter strings. It is ugly and it is fine.
+2. **`_simplify_pandoc_attrs`** (`imscc_import.py:581`) — subtle fence-pairing
+   logic, recently worked on (commit 8ff4183), well-tested. Leave it.
+3. **Manifest flush-on-every-record** (`manifest.py:62-79`) — looks wasteful, is a
+   deliberate crash-safety property (interrupted-sync resume depends on it;
+   TESTING.md asserts it).
+4. **Regex-based HTML rewriting** in `link_rewrite.py` / `convert.py` — "parse HTML
+   with regex" is normally a smell, but the input is Pandoc-generated (predictable)
+   HTML; swapping in an HTML parser is a rewrite with new failure modes and no
+   user-visible gain.
+5. **`canvas_api._set_module_item_published`'s raw `requests.put`** — works around
+   a real canvasapi/Canvas bug (missing `module_id` on returned items; File-item
+   500s). `tests/conftest.py`'s HTTP blocker targets exactly this call.
+6. **mv.py case-only-rename path computation** (`_compute_case_rename_dest_rel`,
+   `validate_move`'s dest_rel gymnastics) — convoluted but battle-tested against
+   case-insensitive-filesystem edge cases; tidy only the dead bits (H3), don't
+   restructure.
+7. **`fill_in_blank`/`pattern_match` → `short_answer_question` mapping and
+   `patterns[0]`-only upload** (`quiz.py:174-196`) — known, documented in README
+   and TODO.md; behavior decision belongs to the user.
+8. **Broad `except Exception: pass` in prune/find-orphans support paths**
+   (`sync.py:596, 702, 990, 998`; `orphans.py:136, 158, 170`) — intentional
+   degrade-gracefully behavior for optional data. Converting to logging would be
+   fine but is cosmetic; don't convert to raises.
+9. **`_sync_quiz`'s `config_course_id: int = 0` default** — odd, but every real
+   caller passes it; goes away naturally with P1.

@@ -493,13 +493,23 @@ def test_emit_workflow(tmp_path):
 def test_run_publish_build(tmp_path, monkeypatch):
     staging = tmp_path / "staging"
     monkeypatch.setattr(publish.tempfile, "mkdtemp", lambda prefix="": str(staging))
+    # Pretend mkdocs is importable so the up-front availability check passes even
+    # when the dev env has no mkdocs installed.
+    monkeypatch.setattr(publish.importlib.util, "find_spec", lambda name: object())
     calls = []
-    monkeypatch.setattr(publish.subprocess, "run", lambda cmd, **kw: calls.append((cmd, kw)) or None)
+
+    def fake_run(cmd, **kw):
+        # run_publish cleans up the staging dir afterward, so assert the staged
+        # mkdocs.yml exists at the moment mkdocs would actually run.
+        assert (staging / "mkdocs.yml").exists()
+        calls.append((cmd, kw))
+
+    monkeypatch.setattr(publish.subprocess, "run", fake_run)
 
     out = tmp_path / "site"
     publish.run_publish(FIXTURES, out)
 
-    assert (staging / "mkdocs.yml").exists()
+    assert not staging.exists()  # staging dir is cleaned up after the run
     (cmd, kw), = calls
     assert cmd[:3] == [sys.executable, "-m", "mkdocs"]
     assert cmd[3] == "build"
