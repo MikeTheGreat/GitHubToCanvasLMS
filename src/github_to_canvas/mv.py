@@ -189,6 +189,10 @@ def _compute_case_rename_dest_rel(src: Path, dest: Path, repo_root: Path) -> str
     return src_rel_str
 
 
+# Folders whose <name>/<name>.<ext> inner file must be renamed with the folder.
+_INNER_FILE_SUFFIX = {"quizzes": ".md", "question_banks": ".toml"}
+
+
 def _add_quiz_qbank_inner_renames(
     src: Path, dest: Path,
     src_rel: str, dest_rel: str,
@@ -205,19 +209,14 @@ def _add_quiz_qbank_inner_renames(
     if len(parts) < 2:
         return
 
-    top_dir = parts[0]
+    suffix = _INNER_FILE_SUFFIX.get(parts[0])
+    if suffix is None:
+        return
 
-    if top_dir == "quizzes":
-        old_inner = f"{src_rel}/{src_name}.md"
-        new_inner = f"{dest_rel}/{dest_name}.md"
-        if old_inner in path_map:
-            path_map[old_inner] = new_inner
-
-    elif top_dir == "question_banks":
-        old_inner = f"{src_rel}/{src_name}.toml"
-        new_inner = f"{dest_rel}/{dest_name}.toml"
-        if old_inner in path_map:
-            path_map[old_inner] = new_inner
+    old_inner = f"{src_rel}/{src_name}{suffix}"
+    new_inner = f"{dest_rel}/{dest_name}{suffix}"
+    if old_inner in path_map:
+        path_map[old_inner] = new_inner
 
 
 def _split_url_title(raw: str) -> tuple[str, str]:
@@ -474,43 +473,32 @@ def _set_toml_string_value(content: str, key: str, value: str) -> str:
     return new_content
 
 
-def _do_move(
-    src: Path, dest: Path, repo_root: Path, use_git: bool,
-    inner_renames: list[tuple[Path, Path]] | None = None,
-) -> None:
-    """Execute the physical move(s)."""
-    case_rename = _is_case_only_rename(src, dest)
-
-    if case_rename:
-        temp_name = dest.parent / f".mv-tmp-{uuid.uuid4().hex[:8]}"
+def _move_one(src: Path, dest: Path, repo_root: Path, use_git: bool) -> None:
+    """Move src → dest. A case-only rename goes via a temp name first, which is
+    required on case-insensitive filesystems where src and dest are "the same"."""
+    if _is_case_only_rename(src, dest):
+        temp = dest.parent / f".mv-tmp-{uuid.uuid4().hex[:8]}"
         if use_git:
-            subprocess.run(["git", "mv", str(src), str(temp_name)], cwd=str(repo_root), check=True)
-            subprocess.run(["git", "mv", str(temp_name), str(dest)], cwd=str(repo_root), check=True)
+            subprocess.run(["git", "mv", str(src), str(temp)], cwd=str(repo_root), check=True)
+            subprocess.run(["git", "mv", str(temp), str(dest)], cwd=str(repo_root), check=True)
         else:
-            src.rename(temp_name)
-            temp_name.rename(dest)
+            src.rename(temp)
+            temp.rename(dest)
     else:
         if use_git:
             subprocess.run(["git", "mv", str(src), str(dest)], cwd=str(repo_root), check=True)
         else:
             shutil.move(str(src), str(dest))
 
-    if inner_renames:
-        for inner_src, inner_dest in inner_renames:
-            inner_case = _is_case_only_rename(inner_src, inner_dest)
-            if inner_case:
-                temp = inner_dest.parent / f".mv-tmp-{uuid.uuid4().hex[:8]}"
-                if use_git:
-                    subprocess.run(["git", "mv", str(inner_src), str(temp)], cwd=str(repo_root), check=True)
-                    subprocess.run(["git", "mv", str(temp), str(inner_dest)], cwd=str(repo_root), check=True)
-                else:
-                    inner_src.rename(temp)
-                    temp.rename(inner_dest)
-            else:
-                if use_git:
-                    subprocess.run(["git", "mv", str(inner_src), str(inner_dest)], cwd=str(repo_root), check=True)
-                else:
-                    shutil.move(str(inner_src), str(inner_dest))
+
+def _do_move(
+    src: Path, dest: Path, repo_root: Path, use_git: bool,
+    inner_renames: list[tuple[Path, Path]] | None = None,
+) -> None:
+    """Execute the physical move(s)."""
+    _move_one(src, dest, repo_root, use_git)
+    for inner_src, inner_dest in inner_renames or []:
+        _move_one(inner_src, inner_dest, repo_root, use_git)
 
 
 def _get_inner_renames(
@@ -528,17 +516,14 @@ def _get_inner_renames(
     if len(parts) < 2:
         return renames
 
-    top_dir = parts[0]
-    if top_dir == "quizzes":
-        old_inner = dest / f"{src_name}.md"
-        new_inner = dest / f"{dest_name}.md"
-        if old_inner.exists() or (not dest.exists() and (src / f"{src_name}.md").exists()):
-            renames.append((old_inner, new_inner))
-    elif top_dir == "question_banks":
-        old_inner = dest / f"{src_name}.toml"
-        new_inner = dest / f"{dest_name}.toml"
-        if old_inner.exists() or (not dest.exists() and (src / f"{src_name}.toml").exists()):
-            renames.append((old_inner, new_inner))
+    suffix = _INNER_FILE_SUFFIX.get(parts[0])
+    if suffix is None:
+        return renames
+
+    old_inner = dest / f"{src_name}{suffix}"
+    new_inner = dest / f"{dest_name}{suffix}"
+    if old_inner.exists() or (not dest.exists() and (src / f"{src_name}{suffix}").exists()):
+        renames.append((old_inner, new_inner))
 
     return renames
 

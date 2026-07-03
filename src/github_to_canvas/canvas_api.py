@@ -379,26 +379,47 @@ def read_tab_configuration(course) -> list[dict[str, Any]]:
     return result
 
 
+# canvas_type → callable(course, key) returning the canvasapi object. The key is
+# the page URL slug for pages and the canvas_id for every other type (see
+# _object_key). Shared by get_canvas_updated_at, _get_object, and unpublish_content.
+_GETTERS = {
+    "page": lambda course, key: course.get_page(key),
+    "assignment": lambda course, key: course.get_assignment(key),
+    "discussion": lambda course, key: course.get_discussion_topic(key),
+    "quiz": lambda course, key: course.get_quiz(key),
+    "module": lambda course, key: course.get_module(key),
+    "file": lambda course, key: course.get_file(key),
+}
+
+
+def _object_key(canvas_type: str, entry: dict[str, Any]):
+    """The lookup key for a manifest entry: URL slug for pages, canvas_id otherwise."""
+    return entry["canvas_url"] if canvas_type == "page" else entry["canvas_id"]
+
+
+def get_syllabus_body(course) -> str:
+    """Fetch the course syllabus_body HTML via a raw ``include[]`` request.
+
+    Returns "" if the course has no syllabus. Callers wrap this in their own
+    try/except so prune/find-orphans degrade gracefully when the request fails."""
+    response = course._requester.request(
+        "GET",
+        f"courses/{course.id}",
+        _kwargs=[("include[]", "syllabus_body")],
+    )
+    return response.json().get("syllabus_body", "") or ""
+
+
 def get_canvas_updated_at(course, canvas_type: str, identifier) -> datetime | None:
     """Return the updated_at datetime for an existing Canvas item, or None if unavailable.
 
     identifier is the page URL slug (str) for pages, canvas_id (int) for all other types.
     """
+    getter = _GETTERS.get(canvas_type)
+    if getter is None:
+        return None
     try:
-        if canvas_type == "page":
-            obj = course.get_page(identifier)
-        elif canvas_type == "assignment":
-            obj = course.get_assignment(identifier)
-        elif canvas_type == "discussion":
-            obj = course.get_discussion_topic(identifier)
-        elif canvas_type == "quiz":
-            obj = course.get_quiz(identifier)
-        elif canvas_type == "module":
-            obj = course.get_module(identifier)
-        elif canvas_type == "file":
-            obj = course.get_file(identifier)
-        else:
-            return None
+        obj = getter(course, identifier)
         val = getattr(obj, "updated_at", None)
         if val is None:
             return None
@@ -418,25 +439,26 @@ UNPUBLISHABLE_TYPES = frozenset(
     {"page", "assignment", "discussion", "quiz", "module"}
 )
 
+# canvas_type → callable(obj) that sets published=False. The edit-kwarg shape
+# differs per type, and discussions use .update() instead of .edit().
+_UNPUBLISHERS = {
+    "page": lambda obj: obj.edit(wiki_page={"published": False}),
+    "assignment": lambda obj: obj.edit(assignment={"published": False}),
+    "discussion": lambda obj: obj.update(published=False),
+    "quiz": lambda obj: obj.edit(quiz={"published": False}),
+    "module": lambda obj: obj.edit(module={"published": False}),
+}
+
 
 def _get_object(course, canvas_type: str, entry: dict[str, Any]):
     """Fetch the canvasapi object for a manifest entry, or None if unsupported.
 
     Pages are addressed by URL slug (canvas_url); everything else by canvas_id.
     """
-    if canvas_type == "page":
-        return course.get_page(entry["canvas_url"])
-    if canvas_type == "assignment":
-        return course.get_assignment(entry["canvas_id"])
-    if canvas_type == "discussion":
-        return course.get_discussion_topic(entry["canvas_id"])
-    if canvas_type == "quiz":
-        return course.get_quiz(entry["canvas_id"])
-    if canvas_type == "module":
-        return course.get_module(entry["canvas_id"])
-    if canvas_type == "file":
-        return course.get_file(entry["canvas_id"])
-    return None
+    getter = _GETTERS.get(canvas_type)
+    if getter is None:
+        return None
+    return getter(course, _object_key(canvas_type, entry))
 
 
 def delete_content(course, canvas_type: str, entry: dict[str, Any]) -> bool:
@@ -472,18 +494,10 @@ def unpublish_content(course, canvas_type: str, entry: dict[str, Any]) -> bool:
     if canvas_type not in UNPUBLISHABLE_TYPES:
         return False
     try:
-        if canvas_type == "page":
-            course.get_page(entry["canvas_url"]).edit(wiki_page={"published": False})
-        elif canvas_type == "assignment":
-            course.get_assignment(entry["canvas_id"]).edit(
-                assignment={"published": False}
-            )
-        elif canvas_type == "discussion":
-            course.get_discussion_topic(entry["canvas_id"]).update(published=False)
-        elif canvas_type == "quiz":
-            course.get_quiz(entry["canvas_id"]).edit(quiz={"published": False})
-        elif canvas_type == "module":
-            course.get_module(entry["canvas_id"]).edit(module={"published": False})
+        obj = _get_object(course, canvas_type, entry)
+        if obj is None:
+            return False
+        _UNPUBLISHERS[canvas_type](obj)
     except ResourceDoesNotExist:
         return False
     return True
@@ -571,19 +585,35 @@ def update_dates(
         return {"date_warning": str(exc), "html_url": getattr(obj, "html_url", None)}
 
 
-def create_or_update_assignment(
-    course, canvas_id: int | None, title: str, body: str, **kwargs
-) -> dict[str, Any]:
+def _strip_top_level_dates(kwargs: dict[str, Any]) -> dict[str, Any]:
+    return {k: v for k, v in kwargs.items() if k not in _DATE_KEYS}
+
+
+def _retry_without_dates(do_call, kwargs: dict[str, Any], strip_fn) -> dict[str, Any]:
+    """Run ``do_call(**kwargs)``; if Canvas rejects the availability/due dates,
+    strip them via ``strip_fn`` and retry, tagging the result with ``date_warning``.
+
+    Other ``BadRequest`` errors propagate unchanged."""
     try:
-        return _do_assignment(course, canvas_id, title, body, **kwargs)
+        return do_call(**kwargs)
     except BadRequest as exc:
         if "availability dates" not in str(exc) and "due_at" not in str(exc):
             raise
-        stripped = {k: v for k, v in kwargs.items() if k not in _DATE_KEYS}
+        stripped = strip_fn(kwargs)
         print(f"  WARNING: Canvas rejected due dates; retrying without date fields ({exc})")
-        result = _do_assignment(course, canvas_id, title, body, **stripped)
+        result = do_call(**stripped)
         result["date_warning"] = str(exc)
         return result
+
+
+def create_or_update_assignment(
+    course, canvas_id: int | None, title: str, body: str, **kwargs
+) -> dict[str, Any]:
+    return _retry_without_dates(
+        lambda **kw: _do_assignment(course, canvas_id, title, body, **kw),
+        kwargs,
+        _strip_top_level_dates,
+    )
 
 
 def _do_assignment(
@@ -612,23 +642,24 @@ def _do_assignment(
     }
 
 
+def _strip_discussion_dates(kwargs: dict[str, Any]) -> dict[str, Any]:
+    # Discussion dates live inside the nested `assignment` dict.
+    stripped = dict(kwargs)
+    if "assignment" in stripped and isinstance(stripped["assignment"], dict):
+        stripped["assignment"] = {
+            k: v for k, v in stripped["assignment"].items() if k not in _DATE_KEYS
+        }
+    return stripped
+
+
 def create_or_update_discussion(
     course, canvas_id: int | None, title: str, body: str, **kwargs
 ) -> dict[str, Any]:
-    try:
-        return _do_discussion(course, canvas_id, title, body, **kwargs)
-    except BadRequest as exc:
-        if "availability dates" not in str(exc) and "due_at" not in str(exc):
-            raise
-        stripped = dict(kwargs)
-        if "assignment" in stripped and isinstance(stripped["assignment"], dict):
-            stripped["assignment"] = {
-                k: v for k, v in stripped["assignment"].items() if k not in _DATE_KEYS
-            }
-        print(f"  WARNING: Canvas rejected due dates; retrying without date fields ({exc})")
-        result = _do_discussion(course, canvas_id, title, body, **stripped)
-        result["date_warning"] = str(exc)
-        return result
+    return _retry_without_dates(
+        lambda **kw: _do_discussion(course, canvas_id, title, body, **kw),
+        kwargs,
+        _strip_discussion_dates,
+    )
 
 
 def _do_discussion(
@@ -665,16 +696,11 @@ def create_stub(course, canvas_type: str, title: str) -> dict[str, Any]:
 def create_or_update_quiz(
     course, canvas_id: int | None, title: str, description: str, **kwargs
 ) -> dict[str, Any]:
-    try:
-        return _do_quiz(course, canvas_id, title, description, **kwargs)
-    except BadRequest as exc:
-        if "availability dates" not in str(exc) and "due_at" not in str(exc):
-            raise
-        stripped = {k: v for k, v in kwargs.items() if k not in _DATE_KEYS}
-        print(f"  WARNING: Canvas rejected due dates; retrying without date fields ({exc})")
-        result = _do_quiz(course, canvas_id, title, description, **stripped)
-        result["date_warning"] = str(exc)
-        return result
+    return _retry_without_dates(
+        lambda **kw: _do_quiz(course, canvas_id, title, description, **kw),
+        kwargs,
+        _strip_top_level_dates,
+    )
 
 
 def _do_quiz(

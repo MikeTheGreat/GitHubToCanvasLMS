@@ -28,6 +28,25 @@ _ALT_ATTR_RE = re.compile(r'\balt="([^"]*)"')
 _ROLE_ATTR_RE = re.compile(r'\brole="[^"]*"')
 
 
+def warn(msg: str, errors: list[str] | None) -> None:
+    """Print a message with the standard two-space indent and, if an error
+    accumulator is provided, record it there as well."""
+    print(f"  {msg}")
+    if errors is not None:
+        errors.append(msg)
+
+
+def parse_frontmatter(text: str) -> tuple[dict[str, Any], str]:
+    """Return (frontmatter_dict, body_text). Body excludes the frontmatter block."""
+    if not text.startswith("---\n"):
+        return {}, text
+    try:
+        end = text.index("\n---\n", 4)
+    except ValueError:
+        return {}, text
+    return yaml.safe_load(text[4:end]) or {}, text[end + 5 :]
+
+
 def preprocess_snippets(
     text: str,
     source_file: Path,
@@ -59,9 +78,7 @@ def preprocess_snippets(
         rel_source = source_file
 
     def _report_error(msg: str) -> None:
-        print(f"  {msg}")
-        if errors is not None:
-            errors.append(msg)
+        warn(msg, errors)
 
     def _load_snippet(link_target: str, snippet_ref: str, is_inline: bool) -> tuple[str, Path] | None:
         """Resolve link_target to a snippet file. Returns (content, path) or None."""
@@ -161,9 +178,7 @@ def expand_frontmatter_snippets(
         rel_source = source_file
 
     def _report_error(msg: str) -> None:
-        print(f"  {msg}")
-        if errors is not None:
-            errors.append(msg)
+        warn(msg, errors)
 
     lines = body.splitlines(keepends=True)
 

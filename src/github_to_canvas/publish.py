@@ -233,10 +233,17 @@ def _strip_pandoc_syntax(text: str) -> str:
 CONTENT_DIRS = ["assignments", "discussions", "modules", "pages"]
 
 
-def _is_published(md_path: Path, repo: Path) -> bool:
-    frontmatter, body = parse_frontmatter(md_path.read_text())
-    frontmatter, _ = expand_frontmatter_snippets(frontmatter, body, md_path, repo / "snippets")
-    return frontmatter.get("published", False) is True
+def _published_title(md_file: Path, repo: Path) -> str | None:
+    """Return the title of ``md_file`` if it is published, else None.
+
+    Reads the file once. As before, the ``published`` flag is read from the
+    snippet-expanded frontmatter while the title comes from the raw frontmatter."""
+    frontmatter, body = parse_frontmatter(md_file.read_text())
+    title = frontmatter.get("title", md_file.stem)
+    expanded, _ = expand_frontmatter_snippets(frontmatter, body, md_file, repo / "snippets")
+    if expanded.get("published", False) is not True:
+        return None
+    return title
 
 
 def discover_published(repo: Path) -> dict[str, list[tuple[str, str]]]:
@@ -245,27 +252,15 @@ def discover_published(repo: Path) -> dict[str, list[tuple[str, str]]]:
     Returns ``{type_label: [(title, repo_relative_path), ...]}`` for each
     content-type directory that contains at least one published item.
     Items within each type are sorted alphabetically by filename.
+
+    This is a test/debug helper; product code uses ``_discover_type`` per type.
     """
     result: dict[str, list[tuple[str, str]]] = {}
-
     for content_type in CONTENT_DIRS:
-        content_dir = repo / content_type
-        if not content_dir.exists():
-            continue
-
-        items: list[tuple[str, str]] = []
-        for md_file in sorted(content_dir.rglob("*.md")):
-            if not _is_published(md_file, repo):
-                continue
-            fm, _ = parse_frontmatter(md_file.read_text())
-            title = fm.get("title", md_file.stem)
-            rel = md_file.relative_to(repo).as_posix()
-            items.append((title, rel))
-
+        items = _discover_type(repo, content_type)
         if items:
             label = content_type.replace("_", " ").title()
             result[label] = items
-
     return result
 
 
@@ -280,10 +275,9 @@ def _discover_type(repo: Path, content_type: str) -> list[tuple[str, str]]:
         return []
     items: list[tuple[str, str]] = []
     for md_file in sorted(content_dir.rglob("*.md")):
-        if not _is_published(md_file, repo):
+        title = _published_title(md_file, repo)
+        if title is None:
             continue
-        fm, _ = parse_frontmatter(md_file.read_text())
-        title = fm.get("title", md_file.stem)
         rel = md_file.relative_to(repo).as_posix()
         items.append((title, rel))
     return items
@@ -309,10 +303,9 @@ def _find_syllabus(repo: Path) -> tuple[str, str] | None:
         )
 
     for md_file in candidates:
-        if not _is_published(md_file, repo):
+        title = _published_title(md_file, repo)
+        if title is None:
             continue
-        fm, _ = parse_frontmatter(md_file.read_text())
-        title = fm.get("title", md_file.stem)
         rel = md_file.relative_to(repo).as_posix()
         return (title, rel)
     return None

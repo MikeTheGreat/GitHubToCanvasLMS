@@ -271,11 +271,24 @@ This is the direct answer to "functions with 10+ parameters".
 
 ---
 
-## 5. Duplication consolidation (behavior-preserving, medium effort)
+## 5. Duplication consolidation (behavior-preserving, medium effort) — DONE 2026-07-02
 
 Ordered by value. Each is independent; run the suite between items.
 
-### D1. The `print + errors.append` idiom (~25 occurrences)
+All of D1–D11 landed, one item per change, full suite (**831 passed**) run and
+green after each. No behavior change. Notes inline under each item. **D9 was done
+as a deliberately narrowed subset** — see its note. Post-change `uvx ruff check
+src/ tests/` is still clean.
+
+### D1. The `print + errors.append` idiom (~25 occurrences) — DONE 2026-07-02
+
+- **Applied:** added `convert.warn(msg, errors)` (prints `f"  {msg}"`, appends to
+  `errors` when non-None). The two `_report_error` closures in `convert.py` now
+  delegate to it; 18 call sites in `sync.py` (14 conditional + 4 unconditional
+  `errors.append(msg)` where `errors` is known non-None — behavior-identical)
+  collapsed to `warn(msg, errors)`. The `print(f"  WARNING: {msg}")` sites where
+  the printed and stored strings differ were **left as-is** (they don't match the
+  `warn` shape). Exact message strings and the two-space indent preserved.
 
 - Pattern: `print(f"  {msg}")` followed by `if errors is not None: errors.append(msg)`
   appears throughout `sync.py`, and as *nested closures* `_report_error` in
@@ -286,7 +299,13 @@ Ordered by value. Each is independent; run the suite between items.
 - **Effort:** ~1 h. **Risk:** very low — but keep the *exact* message strings and
   the two-space indent; several tests assert on printed output.
 
-### D2. Duplicate `parse_frontmatter` implementations
+### D2. Duplicate `parse_frontmatter` implementations — DONE 2026-07-02
+
+- **Applied:** moved `parse_frontmatter` into `convert.py`; `sync.py` re-exports it
+  via `from .convert import ... parse_frontmatter` (so `github_to_canvas.sync.
+  parse_frontmatter`, used by `publish.py` and tests, still resolves). `quiz.py`
+  now imports it as `_parse_frontmatter` and its now-unused `import yaml` was
+  removed. Whole suite green.
 
 - `sync.parse_frontmatter` (`sync.py:286`) and `quiz._parse_frontmatter`
   (`quiz.py:13`) are character-for-character the same algorithm.
@@ -296,7 +315,11 @@ Ordered by value. Each is independent; run the suite between items.
   from `github_to_canvas.sync`.
 - **Effort:** ~30 min. **Risk:** very low.
 
-### D3. Duplicate stub-creator closures
+### D3. Duplicate stub-creator closures — DONE 2026-07-02
+
+- **Applied:** added module-level `_make_stub_creator(course, manifest,
+  manifest_path, note)`; both call sites build the closure with their verbatim
+  note ("referenced but not yet synced" / "referenced from quiz").
 
 - `_sync_content_file`'s `stub_creator` (`sync.py:1228`) and `_sync_quiz`'s
   `_stub_creator` (`sync.py:1714`) differ only in the print suffix
@@ -305,7 +328,14 @@ Ordered by value. Each is independent; run the suite between items.
   returning the closure. Keep both messages verbatim.
 - **Effort:** ~20 min. **Risk:** very low.
 
-### D4. Triplicated "effective mtime including snippets" logic
+### D4. Triplicated "effective mtime including snippets" logic — DONE 2026-07-02
+
+- **Applied:** added `_effective_mtime(paths, snippets_dir) -> datetime` (max over
+  each file's own mtime plus its referenced snippets); all three sites now call it
+  (content/module pass `[md_file]`, quiz passes `all_files`). Also extracted
+  `_parse_frontmatter_or_warn(md_file, local_key, errors)` for the malformed-YAML
+  handler (returns None after warning); callers preserve their own `return` vs
+  `return False`.
 
 - The `max(file mtime, all referenced-snippet mtimes)` computation appears in
   `_sync_content_file` (`sync.py:1181-1186`), `_sync_module` (`sync.py:1540-1545`),
@@ -316,7 +346,18 @@ Ordered by value. Each is independent; run the suite between items.
   extract alongside.
 - **Effort:** ~45 min. **Risk:** low.
 
-### D5. Triplicated content-enumeration walk (assignments + discussions + quizzes)
+### D5. Triplicated content-enumeration walk (assignments + discussions + quizzes) — DONE 2026-07-02
+
+- **Applied:** added `iter_gradeable_content(repo_path, matcher=None) ->
+  Iterator[(local_key, md_path, canvas_type)]` and rewrote all three call sites on
+  it (`_apply_due_dates_only`, `_check_due_dates_coverage`, `cli.list_titles`).
+  **Deviated from the report on one point:** the generator yields the *enumeration
+  only* and does **not** parse frontmatter or return a title, because the three
+  callers' malformed-YAML handling genuinely differs (skip / `fm={}` / raise) and
+  could not be unified without a behavior change. Callers parse themselves and use
+  `md_path.stem` as the default title (for a quiz that equals the folder name, so
+  it matches the old `quiz_folder.name` default exactly). `list_titles` keeps
+  `matcher=None` (does not apply ignores) as flagged.
 
 - The "walk `assignments/**/*.md` and `discussions/**/*.md`, then
   `quizzes/*/<name>.md`; parse frontmatter; get title" loop is written out three
@@ -331,7 +372,14 @@ Ordered by value. Each is independent; run the suite between items.
 - **Effort:** 1–2 h. **Risk:** low-medium; `test_due_dates.py` covers all three
   call sites including list-titles CLI output.
 
-### D6. Triplicated Canvas type-dispatch in `canvas_api.py`
+### D6. Triplicated Canvas type-dispatch in `canvas_api.py` — DONE 2026-07-02
+
+- **Applied:** added a `_GETTERS` map (`canvas_type -> lambda(course, key)`) plus
+  `_object_key` (URL slug for pages, `canvas_id` otherwise). `get_canvas_updated_at`
+  and `_get_object` both dispatch through it; `unpublish_content` now fetches via
+  `_get_object` and applies a second `_UNPUBLISHERS` map holding the per-type edit
+  kwarg shape (discussion uses `.update(published=False)`). Prune/unpublish tests
+  green.
 
 - `get_canvas_updated_at` (`:389-400`), `_get_object` (`:423-440`), and
   `unpublish_content` (`:476-487`) each hand-roll the same
@@ -342,7 +390,13 @@ Ordered by value. Each is independent; run the suite between items.
   `module=` / discussion `.update(published=False)`) — a second small map.
 - **Effort:** ~1 h. **Risk:** low; prune tests cover delete/unpublish paths.
 
-### D7. Triplicated date-rejection retry wrapper in `canvas_api.py`
+### D7. Triplicated date-rejection retry wrapper in `canvas_api.py` — DONE 2026-07-02
+
+- **Applied:** added `_retry_without_dates(do_call, kwargs, strip_fn)` (verbatim
+  warning message). The three `create_or_update_*` wrappers now pass a
+  `lambda **kw: _do_*(...)` and a strip function: `_strip_top_level_dates` for
+  assignment/quiz, `_strip_discussion_dates` (strips inside the nested `assignment`
+  dict) for discussion.
 
 - `create_or_update_assignment` (`:575`), `create_or_update_discussion` (`:616`),
   and `create_or_update_quiz` (`:666`) share the identical
@@ -354,7 +408,12 @@ Ordered by value. Each is independent; run the suite between items.
 - **Effort:** ~45 min. **Risk:** low; date-rejection paths are covered in
   `test_sync.py`/`test_due_dates.py`.
 
-### D8. Duplicated syllabus-body fetch (raw request)
+### D8. Duplicated syllabus-body fetch (raw request) — DONE 2026-07-02
+
+- **Applied:** added `canvas_api.get_syllabus_body(course) -> str`; both
+  `sync._in_use_resources` and `orphans.find_orphans` call it inside their existing
+  broad `try/except: pass`. `orphans.py` gained `from . import canvas_api as capi`
+  (no import cycle — canvas_api imports neither).
 
 - `sync._in_use_resources` (`sync.py:982-991`) and `orphans.find_orphans`
   (`orphans.py:162-171`) issue the same raw
@@ -364,7 +423,18 @@ Ordered by value. Each is independent; run the suite between items.
   prune/find-orphans must degrade gracefully).
 - **Effort:** ~30 min. **Risk:** very low.
 
-### D9. `imscc_import.py`: many local `_text` closures re-implement `_el_text`
+### D9. `imscc_import.py`: many local `_text` closures re-implement `_el_text` — DONE (narrowed) 2026-07-02
+
+- **Applied (narrowed subset):** replaced the *direct-child* closures in
+  `parse_topic_meta` (`_text` + `_atext`), `parse_quiz_meta` (`_text`), and
+  `parse_module_meta` (`_child_text`) with direct calls to the existing module-level
+  `_el_text(parent, tag, ns)` — they were exact re-implementations.
+- **Deliberately left alone:** `parse_assignment_settings` and its `_bool`/`_int`
+  helpers. Its `_text` uses `.//` *descendant* search with a no-namespace fallback,
+  which is different behavior from `_el_text`; the report itself flags not to unify
+  it. Hoisting `_bool_text`/`_int_text` onto `_el_text` would have forced that
+  parser onto direct-child semantics, so it was skipped to keep the change
+  behavior-preserving. `test_imscc_convert.py` per-parser tests green.
 
 - `parse_assignment_settings`, `parse_topic_meta`, `parse_quiz_meta`, and
   `parse_module_meta` each define nested `_text`/`_child_text`/`_atext` helpers
@@ -377,7 +447,13 @@ Ordered by value. Each is independent; run the suite between items.
 - **Effort:** 1–2 h. **Risk:** medium-low; `test_imscc_convert.py` has per-parser
   unit tests.
 
-### D10. `mv.py`: case-rename move logic duplicated; inner-rename logic duplicated
+### D10. `mv.py`: case-rename move logic duplicated; inner-rename logic duplicated — DONE 2026-07-02
+
+- **Applied:** extracted `_move_one(src, dest, repo_root, use_git)` (the case-only
+  temp-name two-step); `_do_move` is now a call to it plus a loop of `_move_one`
+  over `inner_renames`. Extracted the suffix rule as a module constant
+  `_INNER_FILE_SUFFIX = {"quizzes": ".md", "question_banks": ".toml"}`, used by both
+  `_add_quiz_qbank_inner_renames` and `_get_inner_renames`. `test_mv.py` green.
 
 - `_do_move` (`mv.py:478-516`) repeats the "git-mv/rename via temp name" two-step
   once for the main move and once inside the inner-renames loop → extract
@@ -388,7 +464,14 @@ Ordered by value. Each is independent; run the suite between items.
 - **Effort:** ~1 h. **Risk:** low; `test_mv.py` (791 lines) covers case-only
   renames, git and non-git paths, quiz/qbank folder renames.
 
-### D11. `publish.py`: `discover_published` vs `_discover_type`; double file reads
+### D11. `publish.py`: `discover_published` vs `_discover_type`; double file reads — DONE 2026-07-02
+
+- **Applied:** `discover_published` is now a thin loop over `_discover_type`
+  (documented as a test/debug helper), so its tests stay meaningful. Replaced
+  `_is_published` + re-parse with a single `_published_title(md_file, repo) ->
+  str | None` (reads the file once; `published` from the snippet-expanded
+  frontmatter, `title` captured from the raw frontmatter *before* expansion, exactly
+  as before). Used in `_discover_type` and `_find_syllabus`; `_is_published` removed.
 
 - `discover_published` (`publish.py:242`) is used **only by tests** — product code
   uses `_discover_type`. Either reimplement it as a thin loop over
@@ -568,8 +651,8 @@ For a future session doing this work top-down:
 4. ~~T2 (pathspec)~~ — done 2026-07-02; swapped to `GitIgnoreSpec`, warning gone.
 5. ~~P1 (`SyncContext`)~~ — done 2026-07-02; 831 passed. P2 (`ImportContext`)
    also done same session; 831 passed.
-6. D1–D4 (small dedups, now easier post-P1).
-7. D5–D11 in any order.
+6. ~~D1–D4 (small dedups, now easier post-P1).~~ — done 2026-07-02; 831 passed each.
+7. ~~D5–D11.~~ — done 2026-07-02; 831 passed each (D9 done as a narrowed subset).
 8. S1–S5 as appetite allows.
 9. Section 8 doc fixes whenever convenient.
 10. Section 7 items: raise with the user, don't just fix.

@@ -444,47 +444,25 @@ def list_titles(repo: Path) -> None:
     Items are sorted by due date (earliest first), then items without
     a due date are listed alphabetically by title.
     """
-    from .sync import load_due_dates, find_due_date_override, parse_frontmatter
+    from .sync import (
+        find_due_date_override,
+        iter_gradeable_content,
+        load_due_dates,
+        parse_frontmatter,
+    )
 
     repo = repo.resolve()
     due_dates = load_due_dates(repo)
 
     items: list[tuple[str | None, str, str]] = []  # (due_at, title, path)
 
-    # Assignments
-    assignments_dir = repo / "assignments"
-    if assignments_dir.exists():
-        for md_file in sorted(assignments_dir.rglob("*.md")):
-            fm, _ = parse_frontmatter(md_file.read_text())
-            title = fm.get("title", md_file.stem)
-            override = find_due_date_override(due_dates, title, "assignment")
-            due_at = (override or {}).get("due_at") or fm.get("due_at") or None
-            rel = md_file.relative_to(repo).as_posix()
-            items.append((due_at if due_at else None, title, rel))
-
-    # Discussions
-    discussions_dir = repo / "discussions"
-    if discussions_dir.exists():
-        for md_file in sorted(discussions_dir.rglob("*.md")):
-            fm, _ = parse_frontmatter(md_file.read_text())
-            title = fm.get("title", md_file.stem)
-            override = find_due_date_override(due_dates, title, "discussion")
-            due_at = (override or {}).get("due_at") or fm.get("due_at") or None
-            rel = md_file.relative_to(repo).as_posix()
-            items.append((due_at if due_at else None, title, rel))
-
-    # Quizzes
-    quizzes_dir = repo / "quizzes"
-    if quizzes_dir.exists():
-        for quiz_folder in sorted(d for d in quizzes_dir.iterdir() if d.is_dir()):
-            quiz_md = quiz_folder / f"{quiz_folder.name}.md"
-            if quiz_md.exists():
-                fm, _ = parse_frontmatter(quiz_md.read_text())
-                title = fm.get("title", quiz_folder.name)
-                override = find_due_date_override(due_dates, title, "quiz")
-                due_at = (override or {}).get("due_at") or fm.get("due_at") or None
-                rel = quiz_md.relative_to(repo).as_posix()
-                items.append((due_at if due_at else None, title, rel))
+    # list-titles deliberately does not apply the ignore matcher (matcher=None).
+    for local_key, md_path, ctype in iter_gradeable_content(repo, matcher=None):
+        fm, _ = parse_frontmatter(md_path.read_text())
+        title = fm.get("title", md_path.stem)
+        override = find_due_date_override(due_dates, title, ctype)
+        due_at = (override or {}).get("due_at") or fm.get("due_at") or None
+        items.append((due_at if due_at else None, title, local_key))
 
     if not items:
         click.echo("No assignments, discussions, or quizzes found.")

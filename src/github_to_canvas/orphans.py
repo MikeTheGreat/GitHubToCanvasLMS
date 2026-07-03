@@ -8,6 +8,8 @@ from urllib.parse import unquote
 
 import click
 
+from . import canvas_api as capi
+
 
 @dataclass(frozen=True)
 class ResourceKey:
@@ -160,12 +162,7 @@ def find_orphans(course) -> list[ResourceInfo]:
 
     click.echo("Checking syllabus...")
     try:
-        response = course._requester.request(
-            "GET",
-            f"courses/{course.id}",
-            _kwargs=[("include[]", "syllabus_body")],
-        )
-        syllabus_body = response.json().get("syllabus_body", "") or ""
+        syllabus_body = capi.get_syllabus_body(course)
         _scan_html(syllabus_body, referenced)
     except Exception:
         pass

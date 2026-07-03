@@ -5,20 +5,12 @@ import re
 from pathlib import Path
 from typing import Any
 
-import yaml
-
-from .convert import expand_frontmatter_snippets, markdown_to_html, preprocess_snippets
-
-
-def _parse_frontmatter(text: str) -> tuple[dict[str, Any], str]:
-    if not text.startswith("---\n"):
-        return {}, text
-    try:
-        end = text.index("\n---\n", 4)
-    except ValueError:
-        return {}, text
-    return yaml.safe_load(text[4:end]) or {}, text[end + 5:]
-
+from .convert import (
+    expand_frontmatter_snippets,
+    markdown_to_html,
+    parse_frontmatter as _parse_frontmatter,
+    preprocess_snippets,
+)
 
 _QUIZ_LINK_RE = re.compile(r"^\s*\d+\.\s+\[([^\]]+)\]\(([^)]+\.md)\)")
 _ANSWERS_HEADING_RE = re.compile(r"^##\s+Answers\s*$", re.MULTILINE)

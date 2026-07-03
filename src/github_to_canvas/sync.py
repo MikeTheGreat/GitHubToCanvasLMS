@@ -5,6 +5,7 @@ import json
 import re
 import tomllib
 from collections import defaultdict, deque
+from collections.abc import Iterable, Iterator
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -19,7 +20,9 @@ from .convert import (
     expand_frontmatter_snippets,
     find_referenced_snippets,
     markdown_to_html,
+    parse_frontmatter,
     preprocess_snippets,
+    warn,
 )
 from .ignore import IgnoreMatcher, load_ignore_matcher
 from .link_rewrite import extract_local_refs, infer_canvas_type, rewrite_links
@@ -69,14 +72,17 @@ def load_due_dates(repo_path: Path) -> list[dict[str, Any]]:
     return settings.get("due_dates", [])
 
 
-def _apply_due_dates_only(ctx: SyncContext) -> None:
-    """Apply due_dates overrides via dates-only API calls for items not already synced this run."""
-    course = ctx.course
-    repo_path = ctx.repo_path
-    manifest = ctx.manifest
-    matcher = ctx.matcher
-    errors = ctx.errors
-    print("Applying due_dates...")
+def iter_gradeable_content(
+    repo_path: Path, matcher: IgnoreMatcher | None = None
+) -> Iterator[tuple[str, Path, str]]:
+    """Yield ``(local_key, md_path, canvas_type)`` for every assignment,
+    discussion, and quiz in the repo, honoring ``matcher`` when given.
+
+    Assignments and discussions are found by recursive glob; a quiz is the
+    ``<name>.md`` file inside each ``quizzes/<name>/`` folder. Callers parse
+    frontmatter themselves — their malformed-YAML handling differs — and can use
+    ``md_path.stem`` as the default title (for quizzes that equals the folder
+    name)."""
     for folder, ctype in (("assignments", "assignment"), ("discussions", "discussion")):
         content_dir = repo_path / folder
         if not content_dir.exists():
@@ -84,32 +90,7 @@ def _apply_due_dates_only(ctx: SyncContext) -> None:
         for md_file in sorted(content_dir.rglob("*.md")):
             if matcher is not None and matcher.is_ignored(md_file, repo_path):
                 continue
-            local_key = md_file.relative_to(repo_path).as_posix()
-            if local_key in ctx.synced_keys:
-                continue
-            existing = manifest.get(local_key)
-            if not existing or "canvas_id" not in existing:
-                continue
-            try:
-                fm, _ = parse_frontmatter(md_file.read_text())
-            except Exception:
-                continue
-            title = fm.get("title", md_file.stem)
-            override = find_due_date_override(ctx.due_dates, title, ctype)
-            if override is None:
-                continue
-            canvas_id = existing["canvas_id"]
-            date_fields = _resolve_date_overrides(override, canvas_id, local_key, errors)
-            if not date_fields:
-                continue
-            print(f"  Updating dates: {local_key}")
-            result = capi.update_dates(course, ctype, canvas_id, date_fields)
-            if result.get("date_warning"):
-                msg = _date_rejection_message(
-                    local_key, title, date_fields.get("due_at"), result.get("html_url")
-                )
-                print(f"  {msg}")
-                errors.append(msg)
+            yield md_file.relative_to(repo_path).as_posix(), md_file, ctype
 
     quizzes_dir = repo_path / "quizzes"
     if quizzes_dir.exists():
@@ -119,32 +100,42 @@ def _apply_due_dates_only(ctx: SyncContext) -> None:
             quiz_md = quiz_folder / f"{quiz_folder.name}.md"
             if not quiz_md.exists():
                 continue
-            local_key = quiz_md.relative_to(repo_path).as_posix()
-            if local_key in ctx.synced_keys:
-                continue
-            existing = manifest.get(local_key)
-            if not existing or "canvas_id" not in existing:
-                continue
-            try:
-                fm, _ = parse_frontmatter(quiz_md.read_text())
-            except Exception:
-                continue
-            title = fm.get("title", quiz_folder.name)
-            override = find_due_date_override(ctx.due_dates, title, "quiz")
-            if override is None:
-                continue
-            canvas_id = existing["canvas_id"]
-            date_fields = _resolve_date_overrides(override, canvas_id, local_key, errors)
-            if not date_fields:
-                continue
-            print(f"  Updating dates: {local_key}")
-            result = capi.update_dates(course, "quiz", canvas_id, date_fields)
-            if result.get("date_warning"):
-                msg = _date_rejection_message(
-                    local_key, title, date_fields.get("due_at"), result.get("html_url")
-                )
-                print(f"  {msg}")
-                errors.append(msg)
+            yield quiz_md.relative_to(repo_path).as_posix(), quiz_md, "quiz"
+
+
+def _apply_due_dates_only(ctx: SyncContext) -> None:
+    """Apply due_dates overrides via dates-only API calls for items not already synced this run."""
+    course = ctx.course
+    repo_path = ctx.repo_path
+    manifest = ctx.manifest
+    matcher = ctx.matcher
+    errors = ctx.errors
+    print("Applying due_dates...")
+    for local_key, md_path, ctype in iter_gradeable_content(repo_path, matcher):
+        if local_key in ctx.synced_keys:
+            continue
+        existing = manifest.get(local_key)
+        if not existing or "canvas_id" not in existing:
+            continue
+        try:
+            fm, _ = parse_frontmatter(md_path.read_text())
+        except Exception:
+            continue
+        title = fm.get("title", md_path.stem)
+        override = find_due_date_override(ctx.due_dates, title, ctype)
+        if override is None:
+            continue
+        canvas_id = existing["canvas_id"]
+        date_fields = _resolve_date_overrides(override, canvas_id, local_key, errors)
+        if not date_fields:
+            continue
+        print(f"  Updating dates: {local_key}")
+        result = capi.update_dates(course, ctype, canvas_id, date_fields)
+        if result.get("date_warning"):
+            msg = _date_rejection_message(
+                local_key, title, date_fields.get("due_at"), result.get("html_url")
+            )
+            warn(msg, errors)
 
 
 def _check_due_dates_coverage(
@@ -160,31 +151,12 @@ def _check_due_dates_coverage(
     print("Checking due_dates coverage...")
     all_content: list[tuple[str, str]] = []  # (title, canvas_type)
 
-    for folder, ctype in (("assignments", "assignment"), ("discussions", "discussion")):
-        content_dir = repo_path / folder
-        if not content_dir.exists():
-            continue
-        for md_file in sorted(content_dir.rglob("*.md")):
-            if matcher is not None and matcher.is_ignored(md_file, repo_path):
-                continue
-            try:
-                fm, _ = parse_frontmatter(md_file.read_text())
-            except Exception:
-                fm = {}
-            all_content.append((fm.get("title", md_file.stem), ctype))
-
-    quizzes_dir = repo_path / "quizzes"
-    if quizzes_dir.exists():
-        for quiz_folder in sorted(d for d in quizzes_dir.iterdir() if d.is_dir()):
-            if matcher is not None and matcher.is_ignored(quiz_folder, repo_path):
-                continue
-            quiz_md = quiz_folder / f"{quiz_folder.name}.md"
-            if quiz_md.exists():
-                try:
-                    fm, _ = parse_frontmatter(quiz_md.read_text())
-                except Exception:
-                    fm = {}
-                all_content.append((fm.get("title", quiz_folder.name), "quiz"))
+    for _local_key, md_path, ctype in iter_gradeable_content(repo_path, matcher):
+        try:
+            fm, _ = parse_frontmatter(md_path.read_text())
+        except Exception:
+            fm = {}
+        all_content.append((fm.get("title", md_path.stem), ctype))
 
     # Check each due_dates entry against all content
     for entry in due_dates:
@@ -246,9 +218,7 @@ def _resolve_assignment_group_id(
             f"WARNING: {local_key}: assignment group '{value}' not found on Canvas "
             f"(known: {known}); skipping assignment_group_id"
         )
-        print(f"  {msg}")
-        if errors is not None:
-            errors.append(msg)
+        warn(msg, errors)
         return None
     return resolved
 
@@ -286,9 +256,7 @@ def _resolve_date_overrides(
             f"WARNING: {local_key}: due_dates entry has empty value for {fields_str} "
             f"— treating as KEEP (use 'KEEP', 'NONE', 'CREATE_NONE_THEN_KEEP', or a date value to suppress this warning)"
         )
-        print(f"  {msg}")
-        if errors is not None:
-            errors.append(msg)
+        warn(msg, errors)
     return result
 
 
@@ -309,17 +277,6 @@ def _date_rejection_message(
         " or from the file's frontmatter)"
     )
     return "".join(parts)
-
-
-def parse_frontmatter(text: str) -> tuple[dict[str, Any], str]:
-    """Return (frontmatter_dict, body_text). Body excludes the frontmatter block."""
-    if not text.startswith("---\n"):
-        return {}, text
-    try:
-        end = text.index("\n---\n", 4)
-    except ValueError:
-        return {}, text
-    return yaml.safe_load(text[4:end]) or {}, text[end + 5 :]
 
 
 def _file_referenced_snippets(path: Path, snippets_dir: Path) -> set[Path]:
@@ -343,6 +300,63 @@ def _question_files_referenced_snippets(questions_dir: Path, snippets_dir: Path)
     for q_path in questions_dir.glob("*.md"):
         found |= _file_referenced_snippets(q_path, snippets_dir)
     return found
+
+
+def _make_stub_creator(course, manifest, manifest_path, note: str):
+    """Build a stub-creator closure for rewrite_links.
+
+    When a link references content that has not been synced yet, Canvas needs a
+    placeholder object to point at; this records it in the manifest. ``note`` is
+    the parenthetical shown in the "Stub-creating" line (it differs between the
+    content and quiz call sites)."""
+
+    def stub_creator(ref_local_path: str, ref_canvas_type: str) -> dict[str, Any]:
+        title = Path(ref_local_path).stem.replace("-", " ").replace("_", " ").title()
+        print(f"  Stub-creating: {ref_local_path} ({note})")
+        entry = capi.create_stub(course, ref_canvas_type, title)
+        extra = {
+            k: v for k, v in entry.items() if k not in ("canvas_id", "canvas_type")
+        }
+        manifest_lib.record(
+            manifest,
+            manifest_path,
+            ref_local_path,
+            entry["canvas_id"],
+            ref_canvas_type,
+            extra=extra or None,
+        )
+        return entry
+
+    return stub_creator
+
+
+def _effective_mtime(paths: Iterable[Path], snippets_dir: Path) -> datetime:
+    """Latest mtime among the given files and every snippet they reference.
+
+    Editing an included snippet counts as changing each file that includes it,
+    so the "is Canvas newer than local?" comparison uses this combined mtime."""
+    result: datetime | None = None
+    for path in paths:
+        for p in (path, *_file_referenced_snippets(path, snippets_dir)):
+            mtime = datetime.fromtimestamp(p.stat().st_mtime, tz=timezone.utc)
+            if result is None or mtime > result:
+                result = mtime
+    assert result is not None  # callers always pass at least one path
+    return result
+
+
+def _parse_frontmatter_or_warn(
+    md_file: Path, local_key: str, errors: list[str] | None
+) -> tuple[dict[str, Any], str] | None:
+    """Parse a file's frontmatter, or warn and return None on malformed YAML."""
+    try:
+        return parse_frontmatter(md_file.read_text())
+    except yaml.YAMLError as exc:
+        hint = ""
+        if "mapping values are not allowed here" in str(exc):
+            hint = " (hint: values containing colons must be quoted, e.g. title: \"Unit 01: Intro\")"
+        warn(f"WARNING: {local_key}: malformed frontmatter{hint}: {exc}", errors)
+        return None
 
 
 _MODULE_LINK_RE = re.compile(r"^(\s*)-\s+\[([^\]]+)\]\(([^)]+)\)")
@@ -565,8 +579,7 @@ def sync_syllabus(ctx: SyncContext) -> None:
         frontmatter, body = parse_frontmatter(syllabus_md.read_text())
     except yaml.YAMLError as exc:
         msg = f"WARNING: course_settings/syllabus.md: malformed frontmatter: {exc}"
-        print(f"  {msg}")
-        errors.append(msg)
+        warn(msg, errors)
         return
     body = preprocess_snippets(body, syllabus_md, ctx.snippets_dir, errors)
     html = markdown_to_html(body.strip()) if body.strip() else ""
@@ -817,8 +830,7 @@ def run_sync(
     collision_errors = check_title_collisions(all_content_files, repo_path)
     if collision_errors:
         for msg in collision_errors:
-            print(f"  {msg}")
-            errors.append(msg)
+            warn(msg, errors)
         print("\nAborting: resolve title collisions before syncing.")
         _print_errors_summary(errors)
         return True
@@ -948,12 +960,7 @@ def _in_use_resources(course) -> dict[ResourceKey, str]:
 
     # Syllabus first so the front page reason takes precedence on overlap.
     try:
-        response = course._requester.request(
-            "GET",
-            f"courses/{course.id}",
-            _kwargs=[("include[]", "syllabus_body")],
-        )
-        syllabus_body = response.json().get("syllabus_body", "") or ""
+        syllabus_body = capi.get_syllabus_body(course)
         for ref in extract_canvas_refs(syllabus_body):
             in_use[ref] = "syllabus"
     except Exception:
@@ -1122,27 +1129,16 @@ def _sync_content_file(ctx: SyncContext, md_file: Path) -> None:
         return
 
     if not force_overwrite:
-        local_mtime = datetime.fromtimestamp(md_file.stat().st_mtime, tz=timezone.utc)
-        for snippet_path in _file_referenced_snippets(md_file, snippets_dir):
-            snippet_mtime = datetime.fromtimestamp(snippet_path.stat().st_mtime, tz=timezone.utc)
-            if snippet_mtime > local_mtime:
-                local_mtime = snippet_mtime
+        local_mtime = _effective_mtime([md_file], snippets_dir)
         if _canvas_is_newer(course, local_key, local_mtime, manifest, newer_on_canvas):
             return
 
     print(f"Processing: {local_key}")
 
-    try:
-        frontmatter, body = parse_frontmatter(md_file.read_text())
-    except yaml.YAMLError as exc:
-        hint = ""
-        if "mapping values are not allowed here" in str(exc):
-            hint = " (hint: values containing colons must be quoted, e.g. title: \"Unit 01: Intro\")"
-        msg = f"WARNING: {local_key}: malformed frontmatter{hint}: {exc}"
-        print(f"  {msg}")
-        if errors is not None:
-            errors.append(msg)
+    parsed = _parse_frontmatter_or_warn(md_file, local_key, errors)
+    if parsed is None:
         return
+    frontmatter, body = parsed
     error_count_before_frontmatter_snippets = len(errors) if errors is not None else 0
     frontmatter, body = expand_frontmatter_snippets(frontmatter, body, md_file, snippets_dir, errors)
     if errors is not None and len(errors) > error_count_before_frontmatter_snippets:
@@ -1161,29 +1157,14 @@ def _sync_content_file(ctx: SyncContext, md_file: Path) -> None:
             f"Canvas silently converts H1 to a styled paragraph; "
             f"use H2 or deeper instead"
         )
-        print(f"  {msg}")
-        if errors is not None:
-            errors.append(msg)
+        warn(msg, errors)
         return
 
     canvas_type = infer_canvas_type(local_key)
 
-    def stub_creator(ref_local_path: str, ref_canvas_type: str) -> dict[str, Any]:
-        title = Path(ref_local_path).stem.replace("-", " ").replace("_", " ").title()
-        print(f"  Stub-creating: {ref_local_path} (referenced but not yet synced)")
-        entry = capi.create_stub(course, ref_canvas_type, title)
-        extra = {
-            k: v for k, v in entry.items() if k not in ("canvas_id", "canvas_type")
-        }
-        manifest_lib.record(
-            manifest,
-            manifest_path,
-            ref_local_path,
-            entry["canvas_id"],
-            ref_canvas_type,
-            extra=extra or None,
-        )
-        return entry
+    stub_creator = _make_stub_creator(
+        course, manifest, manifest_path, "referenced but not yet synced"
+    )
 
     error_count_before = len(errors) if errors is not None else 0
     html = rewrite_links(
@@ -1276,9 +1257,7 @@ def _sync_content_file(ctx: SyncContext, md_file: Path) -> None:
                 f"WARNING: {local_key}: submission_types includes student_annotation "
                 f"but annotatable_attachment is not set"
             )
-            print(f"  {msg}")
-            if errors is not None:
-                errors.append(msg)
+            warn(msg, errors)
         elif "annotatable_attachment" in frontmatter:
             asset_path = frontmatter["annotatable_attachment"]
             if not (repo_root / asset_path).exists():
@@ -1286,9 +1265,7 @@ def _sync_content_file(ctx: SyncContext, md_file: Path) -> None:
                     f"WARNING: {local_key}: annotatable_attachment '{asset_path}' "
                     f"does not exist on disk"
                 )
-                print(f"  {msg}")
-                if errors is not None:
-                    errors.append(msg)
+                warn(msg, errors)
             else:
                 asset_entry = manifest.get(asset_path)
                 if asset_entry is None or asset_entry.get("canvas_type") != "file":
@@ -1296,9 +1273,7 @@ def _sync_content_file(ctx: SyncContext, md_file: Path) -> None:
                         f"WARNING: {local_key}: annotatable_attachment '{asset_path}' not found "
                         f"in manifest — sync assets/ first, then re-run"
                     )
-                    print(f"  {msg}")
-                    if errors is not None:
-                        errors.append(msg)
+                    warn(msg, errors)
                 else:
                     extra["annotatable_attachment_id"] = asset_entry["canvas_id"]
         entry = capi.create_or_update_assignment(
@@ -1308,9 +1283,7 @@ def _sync_content_file(ctx: SyncContext, md_file: Path) -> None:
             msg = _date_rejection_message(
                 local_key, title, extra.get("due_at"), entry.get("html_url")
             )
-            print(f"  {msg}")
-            if errors is not None:
-                errors.append(msg)
+            warn(msg, errors)
         print(f"  Link: {entry['html_url']}")
         manifest_lib.record(
             manifest, manifest_path, local_key, entry["canvas_id"], "assignment"
@@ -1326,9 +1299,7 @@ def _sync_content_file(ctx: SyncContext, md_file: Path) -> None:
                         f"WARNING: {local_key}: rubric '{rubric_ref}' not found on Canvas "
                         f"(known: {known}); skipping rubric association"
                     )
-                    print(f"  {msg}")
-                    if errors is not None:
-                        errors.append(msg)
+                    warn(msg, errors)
                 else:
                     rubric_canvas_id = resolved
             else:
@@ -1341,9 +1312,7 @@ def _sync_content_file(ctx: SyncContext, md_file: Path) -> None:
                     )
                 except Exception as exc:
                     msg = f"WARNING: {local_key}: rubric association failed: {exc}"
-                    print(f"  {msg}")
-                    if errors is not None:
-                        errors.append(msg)
+                    warn(msg, errors)
         elif entry.get("rubric_settings") is not None:
             rubric_settings = entry["rubric_settings"]
             rubric_id = (
@@ -1359,9 +1328,7 @@ def _sync_content_file(ctx: SyncContext, md_file: Path) -> None:
                     print(f"  Removed rubric association: {local_key}")
             except Exception as exc:
                 msg = f"WARNING: {local_key}: rubric removal failed: {exc}"
-                print(f"  {msg}")
-                if errors is not None:
-                    errors.append(msg)
+                warn(msg, errors)
         if synced_keys is not None:
             synced_keys.add(local_key)
     elif canvas_type == "discussion":
@@ -1403,9 +1370,7 @@ def _sync_content_file(ctx: SyncContext, md_file: Path) -> None:
             msg = _date_rejection_message(
                 local_key, title, grading_params.get("due_at"), entry.get("html_url")
             )
-            print(f"  {msg}")
-            if errors is not None:
-                errors.append(msg)
+            warn(msg, errors)
         print(f"  Link: {entry['html_url']}")
         manifest_lib.record(
             manifest, manifest_path, local_key, entry["canvas_id"], "discussion"
@@ -1483,27 +1448,16 @@ def _sync_module(
         return False
 
     if not force_overwrite:
-        local_mtime = datetime.fromtimestamp(md_file.stat().st_mtime, tz=timezone.utc)
-        for snippet_path in _file_referenced_snippets(md_file, snippets_dir):
-            snippet_mtime = datetime.fromtimestamp(snippet_path.stat().st_mtime, tz=timezone.utc)
-            if snippet_mtime > local_mtime:
-                local_mtime = snippet_mtime
+        local_mtime = _effective_mtime([md_file], snippets_dir)
         if _canvas_is_newer(course, local_key, local_mtime, manifest, newer_on_canvas):
             return False
 
     print(f"Syncing module: {local_key}")
 
-    try:
-        frontmatter, body = parse_frontmatter(md_file.read_text())
-    except yaml.YAMLError as exc:
-        hint = ""
-        if "mapping values are not allowed here" in str(exc):
-            hint = " (hint: values containing colons must be quoted, e.g. title: \"Unit 01: Intro\")"
-        msg = f"WARNING: {local_key}: malformed frontmatter{hint}: {exc}"
-        print(f"  {msg}")
-        if errors is not None:
-            errors.append(msg)
+    parsed = _parse_frontmatter_or_warn(md_file, local_key, errors)
+    if parsed is None:
         return False
+    frontmatter, body = parsed
     frontmatter, body = expand_frontmatter_snippets(frontmatter, body, md_file, snippets_dir, errors)
     body = preprocess_snippets(body, md_file, snippets_dir)
     items = parse_module_body(body, md_file, repo_root)
@@ -1607,15 +1561,7 @@ def _sync_quiz(ctx: SyncContext, quiz_folder: Path, quiz_md: Path) -> None:
         all_files: list[Path] = [quiz_md]
         if questions_dir.exists():
             all_files.extend(questions_dir.glob("*.md"))
-        local_max_mtime = max(
-            datetime.fromtimestamp(f.stat().st_mtime, tz=timezone.utc)
-            for f in all_files
-        )
-        for f in all_files:
-            for snippet_path in _file_referenced_snippets(f, snippets_dir):
-                snippet_mtime = datetime.fromtimestamp(snippet_path.stat().st_mtime, tz=timezone.utc)
-                if snippet_mtime > local_max_mtime:
-                    local_max_mtime = snippet_mtime
+        local_max_mtime = _effective_mtime(all_files, snippets_dir)
         if _canvas_is_newer(
             course, local_key, local_max_mtime, manifest, newer_on_canvas
         ):
@@ -1651,24 +1597,9 @@ def _sync_quiz(ctx: SyncContext, quiz_folder: Path, quiz_md: Path) -> None:
             del quiz_kwargs["assignment_group_id"]
         else:
             quiz_kwargs["assignment_group_id"] = resolved
-    def _stub_creator(ref_local_path: str, ref_canvas_type: str) -> dict[str, Any]:
-        title_stub = (
-            Path(ref_local_path).stem.replace("-", " ").replace("_", " ").title()
-        )
-        print(f"  Stub-creating: {ref_local_path} (referenced from quiz)")
-        entry = capi.create_stub(course, ref_canvas_type, title_stub)
-        extra = {
-            k: v for k, v in entry.items() if k not in ("canvas_id", "canvas_type")
-        }
-        manifest_lib.record(
-            manifest,
-            manifest_path,
-            ref_local_path,
-            entry["canvas_id"],
-            ref_canvas_type,
-            extra=extra or None,
-        )
-        return entry
+    _stub_creator = _make_stub_creator(
+        course, manifest, manifest_path, "referenced from quiz"
+    )
 
     error_count_before = len(errors) if errors is not None else 0
 
@@ -1726,9 +1657,7 @@ def _sync_quiz(ctx: SyncContext, quiz_folder: Path, quiz_md: Path) -> None:
         msg = _date_rejection_message(
             local_key, title, quiz_kwargs.get("due_at"), result.get("html_url")
         )
-        print(f"  {msg}")
-        if errors is not None:
-            errors.append(msg)
+        warn(msg, errors)
     print(f"  Link: {result['html_url']}")
     quiz_obj = course.get_quiz(result["canvas_id"])
     q_id_map = capi.sync_quiz_questions(course, quiz_obj, questions)

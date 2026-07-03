@@ -935,14 +935,10 @@ def parse_topic_meta(xml_path: Path) -> dict[str, Any]:
     root = tree.getroot()
     ns = _xml_ns(root)
 
-    def _text(tag: str) -> str:
-        el = root.find(f"{{{ns}}}{tag}") if ns else root.find(tag)
-        return (el.text or "").strip() if el is not None else ""
-
-    title = _text("title")
-    workflow = _text("workflow_state")
-    topic_type = _text("type")
-    require_initial = _text("require_initial_post")
+    title = _el_text(root, "title", ns)
+    workflow = _el_text(root, "workflow_state", ns)
+    topic_type = _el_text(root, "type", ns)
+    require_initial = _el_text(root, "require_initial_post", ns)
 
     result: dict[str, Any] = {
         "title": title,
@@ -956,15 +952,11 @@ def parse_topic_meta(xml_path: Path) -> dict[str, Any]:
         root.find(f"{{{ns}}}assignment") if ns else root.find("assignment")
     )
     if assignment_el is not None:
-        def _atext(tag: str) -> str:
-            el = assignment_el.find(f"{{{ns}}}{tag}") if ns else assignment_el.find(tag)
-            return (el.text or "").strip() if el is not None else ""
-
-        pts_raw = _atext("points_possible")
+        pts_raw = _el_text(assignment_el, "points_possible", ns)
         result["points_possible"] = float(pts_raw) if pts_raw else None
-        result["due_at"] = _atext("due_at") or None
-        result["lock_at"] = _atext("lock_at") or None
-        result["unlock_at"] = _atext("unlock_at") or None
+        result["due_at"] = _el_text(assignment_el, "due_at", ns) or None
+        result["lock_at"] = _el_text(assignment_el, "lock_at", ns) or None
+        result["unlock_at"] = _el_text(assignment_el, "unlock_at", ns) or None
 
     return result
 
@@ -1049,19 +1041,15 @@ def parse_quiz_meta(meta_path: Path) -> tuple[dict[str, Any], str]:
         root = tree.getroot()
         ns = _xml_ns(root)
 
-        def _text(tag: str) -> str:
-            el = root.find(f"{{{ns}}}{tag}") if ns else root.find(tag)
-            return (el.text or "").strip() if el is not None else ""
-
-        title = _text("title")
-        workflow = _text("workflow_state")
-        quiz_type = _text("quiz_type") or "assignment"
-        pts_raw = _text("points_possible")
-        time_raw = _text("time_limit")
-        attempts_raw = _text("allowed_attempts")
-        shuffle_raw = _text("shuffle_answers")
-        show_correct_raw = _text("show_correct_answers")
-        desc_raw = _text("description")
+        title = _el_text(root, "title", ns)
+        workflow = _el_text(root, "workflow_state", ns)
+        quiz_type = _el_text(root, "quiz_type", ns) or "assignment"
+        pts_raw = _el_text(root, "points_possible", ns)
+        time_raw = _el_text(root, "time_limit", ns)
+        attempts_raw = _el_text(root, "allowed_attempts", ns)
+        shuffle_raw = _el_text(root, "shuffle_answers", ns)
+        show_correct_raw = _el_text(root, "show_correct_answers", ns)
+        desc_raw = _el_text(root, "description", ns)
 
         result: dict[str, Any] = {
             "title": title,
@@ -1088,7 +1076,7 @@ def parse_quiz_meta(meta_path: Path) -> tuple[dict[str, Any], str]:
         if show_correct_raw:
             result["show_correct_answers"] = show_correct_raw.lower() == "true"
         for date_key in _DATE_KEYS:
-            val = _text(date_key)
+            val = _el_text(root, date_key, ns)
             if val:
                 result[date_key] = val
         return result, (desc_raw or "")
@@ -1545,34 +1533,30 @@ def parse_module_meta(imscc_dir: Path) -> list[ModuleData]:
     root = tree.getroot()
     ns = _xml_ns(root)
 
-    def _child_text(parent: ET.Element, tag: str) -> str:
-        el = parent.find(f"{{{ns}}}{tag}") if ns else parent.find(tag)
-        return (el.text or "").strip() if el is not None else ""
-
     modules: list[ModuleData] = []
     mod_tag = f"{{{ns}}}module" if ns else "module"
     item_tag = f"{{{ns}}}item" if ns else "item"
 
     for mod_el in root.findall(mod_tag):
         identifier = mod_el.get("identifier", "")
-        title = _child_text(mod_el, "title")
-        workflow = _child_text(mod_el, "workflow_state")
-        position_raw = _child_text(mod_el, "position")
-        seq_raw = _child_text(mod_el, "require_sequential_progress")
-        unlock_at = _child_text(mod_el, "unlock_at") or None
+        title = _el_text(mod_el, "title", ns)
+        workflow = _el_text(mod_el, "workflow_state", ns)
+        position_raw = _el_text(mod_el, "position", ns)
+        seq_raw = _el_text(mod_el, "require_sequential_progress", ns)
+        unlock_at = _el_text(mod_el, "unlock_at", ns) or None
 
         items_el = mod_el.find(f"{{{ns}}}items") if ns else mod_el.find("items")
         items: list[ModuleItem] = []
         if items_el is not None:
             for item_el in items_el.findall(item_tag):
                 i_id = item_el.get("identifier", "")
-                i_type = _child_text(item_el, "content_type")
-                i_title = _child_text(item_el, "title")
-                i_ref = _child_text(item_el, "identifierref")
-                i_url = _child_text(item_el, "url")
-                i_pos_raw = _child_text(item_el, "position")
-                i_indent_raw = _child_text(item_el, "indent")
-                i_workflow = _child_text(item_el, "workflow_state")
+                i_type = _el_text(item_el, "content_type", ns)
+                i_title = _el_text(item_el, "title", ns)
+                i_ref = _el_text(item_el, "identifierref", ns)
+                i_url = _el_text(item_el, "url", ns)
+                i_pos_raw = _el_text(item_el, "position", ns)
+                i_indent_raw = _el_text(item_el, "indent", ns)
+                i_workflow = _el_text(item_el, "workflow_state", ns)
                 items.append(ModuleItem(
                     content_type=i_type,
                     title=i_title,
