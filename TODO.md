@@ -291,6 +291,92 @@ loudly instead of hitting a real Canvas.
 
 Effort: ~30 min. Risk: none in principle; skip if it fights with pypandoc.
 
+## Centralized alt-text (`alt_text.toml`) — DECIDED AGAINST (see note)
+
+> **Decision (2026-07-02):** The user chose **not** to build this. Instead they
+> will use **Ally's built-in AI Alt Text Assistant** (admin-enabled) to populate
+> file-level image descriptions. Kept here only so the design work and the Ally
+> research aren't lost. **Do not start implementing without re-confirming with the
+> user first.**
+
+### The original goal
+
+Canvas/Ally nags for alt text in two independent places, backed by two different
+stores:
+
+1. **Alt on the `<img>` embed** (inside a page/assignment/discussion RCE) — written
+   into that item's HTML and stored in Canvas. **The tool already handles this**
+   via `convert.mark_decorative_images` and the `<img alt="...">` it emits.
+2. **Alt on the standalone image *file*** (Canvas Files tool / Ally checker) — this
+   is what the user was being nagged about and wanted to automate.
+
+### Why file-level alt CANNOT be set programmatically (the blocker)
+
+- **The Canvas Files API has no alt/description field.** `PUT /api/v1/files/:id`
+  (what `canvasapi`'s `File.update()` calls) accepts only `name`,
+  `parent_folder_id`, `lock_at`, `unlock_at`, `locked`, `hidden`,
+  `visibility_level`. There is nothing on the Canvas file object to write alt text to.
+- **Ally stores Files-tool descriptions in Ally's own system, not Canvas.** Per
+  Anthology's docs: *"Ally will store the description so that your students can
+  access it when they encounter the image in your course. However, when a
+  description is added from the Files tool, it will not be stored by Canvas."*
+- **No public instructor-facing Ally write API.** The only Ally API is the
+  admin-level, read-oriented reporting/REST integration — it cannot push per-file
+  descriptions. So there is no back door either.
+
+Citations:
+
+- [Anthology Ally — Add Image Descriptions](https://help.anthology.com/ally-lms/en/instructors/improve-content-accessibility/add-image-descriptions.html)
+  (storage-location quote above)
+- [Anthology Ally — AI Alt Text Assistant](https://help.anthology.com/ally-lms/en/administrators/ai-alt-text-assistant.html)
+  (the tool the user is going with)
+- [Canvas LMS REST API — Files](https://canvas.instructure.com/doc/api/files.html)
+  (update params)
+
+### The design that was worked out (if ever revisited)
+
+A separate `course_settings/alt_text.toml` (kept as its own file, not a table in
+`course_settings.toml`, because the list can get verbose) holding an array of
+`[[files]]` entries, each with a repo-root-relative `path` and an `alt_text`
+string:
+
+```toml
+[[files]]
+path = "assets/homeworks/a1-banner.png"
+alt_text = 'Banner for Assignment 1, with the text "Ask your instructor if you''d like help!"'
+```
+
+Three ways a Markdown image reference would resolve:
+
+1. **Decorative** — `![](path.png)` → `alt=""` + `role="presentation"` (already the
+   current behavior via `mark_decorative_images`).
+2. **Centralized default** — `![USE_ALT_TEXT_TOML](path.png)` → look the image up in
+   `alt_text.toml` and substitute its `alt_text`.
+3. **Inline override** — `![Some specific description](path.png)` → use the inline
+   text verbatim (per-use text wins; correct because the same image often needs
+   different alt in different contexts).
+
+Key implementation decisions that were settled:
+
+- **Key on repo-root-relative paths, not `../`-relative.** A Markdown image path is
+  relative to *its* `.md` file, so the same shared image referenced from two files
+  has two different raw strings. Canonicalize both sides the way
+  `link_rewrite._to_local_key` already does
+  (`(source_file.parent / href).resolve().relative_to(course_root)`) before matching.
+- **Resolve the sentinel as Markdown preprocessing, before Pandoc** — i.e. rewrite
+  `![USE_ALT_TEXT_TOML](path)` into `![<looked-up text>](path)` in the same spirit
+  as `convert.preprocess_snippets`, so link rewriting and decorative marking
+  downstream work unchanged.
+- **A missing lookup is a HARD ERROR** (user confirmed). If a file uses
+  `USE_ALT_TEXT_TOML` but there is no matching `alt_text.toml` entry — or the
+  `alt_text.toml` file itself is absent — fail loudly (like the snippet loader on a
+  missing snippet). A silent fallback to `alt=""` would ship inaccessible content
+  images while hiding the mistake.
+- **Companion `list`/`print` subcommand** — print all alt strings sorted by file
+  path, as a paste-ready crib sheet for the manual Ally Files-tool entry (the only
+  part that can't be automated). This was the realistic ceiling on automation
+  before the user opted for Ally's AI assistant instead.
+
 # Bugs to Fix:
 - Changing module_order.toml doesn't re-arrange the modules in Canvas
 
