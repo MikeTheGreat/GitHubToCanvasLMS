@@ -60,9 +60,12 @@ course-repo/           ← the user's course content repo (separate from this to
 
 github-to-canvas/      ← this tool repo
 ├── CLAUDE.md
-├── INTERNAL_DOCUMENTATION.md
+├── ARCHITECTURE.md
+├── TESTING.md
 ├── TODO.md
 ├── pyproject.toml
+├── scripts/
+│   └── check_imscc_coverage.py  # dev tool: report IMSCC features not yet imported
 ├── src/
 │   └── github_to_canvas/
 │       ├── __init__.py
@@ -71,7 +74,11 @@ github-to-canvas/      ← this tool repo
 │       ├── canvas_api.py    # Canvas upload logic via canvasapi library
 │       ├── config.py        # config file handling (API token, base URL, course ID)
 │       ├── quiz.py          # quiz/question file parsing
-│       ├── sync.py          # main sync pipeline
+│       ├── sync.py          # main sync pipeline (update subcommand)
+│       ├── publish.py       # publish subcommand: stage content → MkDocs site
+│       ├── mv.py            # mv subcommand: rename/move content + manifest
+│       ├── orphans.py       # find-orphans / prune support
+│       ├── ignore.py        # .gitignore/.canvasignore matching
 │       ├── manifest.py      # .canvas-manifest.toml read/write
 │       ├── link_rewrite.py  # post-Pandoc HTML link rewriting
 │       └── imscc_import.py  # import subcommand: .imscc → local Markdown repo
@@ -91,9 +98,16 @@ github-to-canvas/      ← this tool repo
     ├── test_link_rewrite.py # unit tests: HTML link/img rewriting logic
     ├── test_manifest.py     # unit tests: manifest read/write/flush
     ├── test_quiz.py         # unit tests: quiz/question file parsing
+    ├── test_config.py       # unit tests: config file / env var handling
+    ├── test_ignore.py       # unit tests: .gitignore/.canvasignore matching
+    ├── test_publish.py      # unit tests: publish staging + MkDocs helpers
+    ├── test_mv.py           # unit + integration tests: mv subcommand
+    ├── test_orphans.py      # unit + integration tests: find-orphans / prune
     ├── test_sync.py         # integration tests: full pipeline with mocked canvasapi
     ├── test_imscc_import.py # integration tests: full import pipeline
     ├── test_imscc_convert.py # unit tests: IMSCC XML parsing, link rewriting, slugification
+    ├── test_imscc_link_rewrite.py # unit tests: IMSCC-specific link rewriting
+    ├── test_imscc_temp_manifest.py # integration tests: import temp-manifest handling
     └── test_due_dates.py    # unit + integration tests: centralized due dates, list-titles CLI
 ```
 
@@ -103,7 +117,7 @@ github-to-canvas/      ← this tool repo
 - **Package manager**: `uv` (tool distribution via `uvx` / `uv tool install`)
 - **Markdown conversion**: Pandoc (system install) via `pypandoc`
 - **Canvas API client**: `canvasapi` (ucfopen/canvasapi) — Python wrapper around the Canvas REST API
-- **CLI**: `click` or `argparse`
+- **CLI**: `click`
 - **Config**: `tomllib` (stdlib) for `.toml` config files
 
 ## Key Design Decisions

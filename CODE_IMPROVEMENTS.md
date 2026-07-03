@@ -588,7 +588,7 @@ suite; several are already tracked in TODO.md (cross-referenced).
 
 ---
 
-## 8. Documentation drift (safe to fix anytime)
+## 8. Documentation drift (safe to fix anytime) — DONE 2026-07-02
 
 1. **CLAUDE.md repo-structure tree is stale:** lists `INTERNAL_DOCUMENTATION.md`
    (doesn't exist — superseded by `ARCHITECTURE.md`); omits `publish.py`, `mv.py`,
@@ -596,12 +596,20 @@ suite; several are already tracked in TODO.md (cross-referenced).
    `test_publish.py`, `test_mv.py`, `test_orphans.py`, `test_config.py`,
    `test_ignore.py`, `test_imscc_temp_manifest.py`, `test_imscc_link_rewrite.py`.
    Tech-stack section says "CLI: `click` or `argparse`" — it's click.
+   — FIXED: tree now lists `ARCHITECTURE.md`/`TESTING.md`, the `scripts/` dir, all
+   src modules, and the missing test files; CLI line now reads just `click`.
 2. **TODO.md references `UPLOADER_CHANGES.md §3` and `§16`** (lines 77–78) — that
    file does not exist. Find where that content went (likely ARCHITECTURE.md) or
    drop the references.
+   — FIXED: both references now point to the course-settings upload table in
+   ARCHITECTURE.md (which documents the not-yet-uploaded events/files_meta state).
 3. **TESTING.md has no "how to run" line.** Add the invocation (`uv run pytest`,
    once E1 is fixed) near the top, since that's where people (and Claude) look.
+   — ALREADY DONE: TESTING.md has a "Running the tests" section (`uv run pytest -q`)
+   at the top.
 4. After T1 lands, note the fast-suite expectation in TESTING.md.
+   — ALREADY DONE: TESTING.md notes the full suite runs in well under a minute
+   (~40s) via the module-scoped `imported_dir` fixture.
 
 ---
 
