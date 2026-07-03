@@ -5,6 +5,7 @@ import json
 import re
 import tomllib
 from collections import defaultdict, deque
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -28,6 +29,36 @@ from .quiz import parse_question_file, parse_quiz_file
 _DATE_KEYS = ("unlock_at", "due_at", "lock_at")
 
 
+@dataclass
+class SyncContext:
+    """Values threaded through every internal sync function.
+
+    The public entry points (`run_sync`, `run_targeted_sync`) build one of these
+    and pass it down instead of the previous 10-to-16 positional parameters. The
+    mutable accumulators (`newer_on_canvas`, `errors`, `synced_keys`,
+    `unpublishable_items`) live here as plain lists/sets; the entry points read
+    them back after the run to print the summaries.
+    """
+
+    course: Any
+    repo_path: Path
+    snippets_dir: Path
+    manifest: manifest_lib.ManifestDict
+    manifest_path: Path
+    course_id: int
+    force_uploads: bool = False
+    force_overwrite: bool = False
+    verbose: bool = False
+    matcher: IgnoreMatcher | None = None
+    newer_on_canvas: list[str] = field(default_factory=list)
+    errors: list[str] = field(default_factory=list)
+    due_dates: list[dict[str, Any]] = field(default_factory=list)
+    assignment_group_ids: dict[str, int] = field(default_factory=dict)
+    rubric_ids: dict[str, int] = field(default_factory=dict)
+    synced_keys: set[str] = field(default_factory=set)
+    unpublishable_items: list[tuple[str, str]] = field(default_factory=list)
+
+
 def load_due_dates(repo_path: Path) -> list[dict[str, Any]]:
     """Load centralized due_dates from course_settings/course_settings.toml."""
     settings_path = repo_path / "course_settings" / "course_settings.toml"
@@ -38,16 +69,13 @@ def load_due_dates(repo_path: Path) -> list[dict[str, Any]]:
     return settings.get("due_dates", [])
 
 
-def _apply_due_dates_only(
-    course,
-    due_dates: list[dict[str, Any]],
-    repo_path: Path,
-    manifest: manifest_lib.ManifestDict,
-    synced_keys: set[str],
-    errors: list[str],
-    matcher: IgnoreMatcher | None = None,
-) -> None:
+def _apply_due_dates_only(ctx: SyncContext) -> None:
     """Apply due_dates overrides via dates-only API calls for items not already synced this run."""
+    course = ctx.course
+    repo_path = ctx.repo_path
+    manifest = ctx.manifest
+    matcher = ctx.matcher
+    errors = ctx.errors
     print("Applying due_dates...")
     for folder, ctype in (("assignments", "assignment"), ("discussions", "discussion")):
         content_dir = repo_path / folder
@@ -57,7 +85,7 @@ def _apply_due_dates_only(
             if matcher is not None and matcher.is_ignored(md_file, repo_path):
                 continue
             local_key = md_file.relative_to(repo_path).as_posix()
-            if local_key in synced_keys:
+            if local_key in ctx.synced_keys:
                 continue
             existing = manifest.get(local_key)
             if not existing or "canvas_id" not in existing:
@@ -67,7 +95,7 @@ def _apply_due_dates_only(
             except Exception:
                 continue
             title = fm.get("title", md_file.stem)
-            override = find_due_date_override(due_dates, title, ctype)
+            override = find_due_date_override(ctx.due_dates, title, ctype)
             if override is None:
                 continue
             canvas_id = existing["canvas_id"]
@@ -92,7 +120,7 @@ def _apply_due_dates_only(
             if not quiz_md.exists():
                 continue
             local_key = quiz_md.relative_to(repo_path).as_posix()
-            if local_key in synced_keys:
+            if local_key in ctx.synced_keys:
                 continue
             existing = manifest.get(local_key)
             if not existing or "canvas_id" not in existing:
@@ -102,7 +130,7 @@ def _apply_due_dates_only(
             except Exception:
                 continue
             title = fm.get("title", quiz_folder.name)
-            override = find_due_date_override(due_dates, title, "quiz")
+            override = find_due_date_override(ctx.due_dates, title, "quiz")
             if override is None:
                 continue
             canvas_id = existing["canvas_id"]
@@ -518,23 +546,18 @@ def _canvas_is_newer(
     return False
 
 
-def sync_syllabus(
-    course,
-    repo_path: Path,
-    manifest: dict,
-    manifest_path: Path,
-    course_id: int,
-    errors: list[str] | None = None,
-    force_uploads: bool = False,
-    verbose: bool = False,
-) -> None:
+def sync_syllabus(ctx: SyncContext) -> None:
     """Upload course_settings/syllabus.md as the Canvas course syllabus body."""
+    repo_path = ctx.repo_path
+    manifest = ctx.manifest
+    errors = ctx.errors
+    course_id = ctx.course_id
     syllabus_md = repo_path / "course_settings" / "syllabus.md"
     if not syllabus_md.exists():
         return
     local_key = "course_settings/syllabus.md"
-    if not manifest_lib.needs_sync(manifest, local_key, syllabus_md, force_uploads):
-        if verbose:
+    if not manifest_lib.needs_sync(manifest, local_key, syllabus_md, ctx.force_uploads):
+        if ctx.verbose:
             print(f"Skipping (up-to-date): {local_key}")
         return
     print("Syncing syllabus...")
@@ -543,22 +566,20 @@ def sync_syllabus(
     except yaml.YAMLError as exc:
         msg = f"WARNING: course_settings/syllabus.md: malformed frontmatter: {exc}"
         print(f"  {msg}")
-        if errors is not None:
-            errors.append(msg)
+        errors.append(msg)
         return
-    snippets_dir = repo_path / "snippets"
-    body = preprocess_snippets(body, syllabus_md, snippets_dir, errors)
+    body = preprocess_snippets(body, syllabus_md, ctx.snippets_dir, errors)
     html = markdown_to_html(body.strip()) if body.strip() else ""
-    error_count_before = len(errors) if errors is not None else 0
+    error_count_before = len(errors)
     # Stub creator is not needed for the syllabus; pass a no-op
     html = rewrite_links(
         html, syllabus_md, repo_path, manifest, course_id, lambda *_: {}, errors
     )
-    if errors is not None and len(errors) > error_count_before:
+    if len(errors) > error_count_before:
         print(f"  Skipping upload due to errors: {local_key}")
         return
-    course.update(course={"syllabus_body": html})
-    manifest_lib.record(manifest, manifest_path, local_key, course_id, "syllabus")
+    ctx.course.update(course={"syllabus_body": html})
+    manifest_lib.record(manifest, ctx.manifest_path, local_key, course_id, "syllabus")
 
 
 def sync_course_settings(
@@ -718,6 +739,8 @@ def run_sync(
     snippets_dir = repo_path / "snippets"
     newer_on_canvas: list[str] = []
     errors: list[str] = []
+    synced_content_keys: set[str] = set()
+    unpublishable_items: list[tuple[str, str]] = []
 
     # Read front_page setting up front so we can apply it after pages are synced.
     _cs_path = repo_path / "course_settings" / "course_settings.toml"
@@ -735,37 +758,35 @@ def run_sync(
     # Load centralized due dates for override
     due_dates = load_due_dates(repo_path)
 
-    # 0.5. Syllabus
-    sync_syllabus(
-        course,
-        repo_path,
-        manifest,
-        manifest_path,
-        config.course_id,
-        errors,
-        force_uploads,
+    ctx = SyncContext(
+        course=course,
+        repo_path=repo_path,
+        snippets_dir=snippets_dir,
+        manifest=manifest,
+        manifest_path=manifest_path,
+        course_id=config.course_id,
+        force_uploads=force_uploads,
+        force_overwrite=force_overwrite,
         verbose=verbose,
+        matcher=matcher,
+        newer_on_canvas=newer_on_canvas,
+        errors=errors,
+        due_dates=due_dates,
+        assignment_group_ids=assignment_group_ids,
+        rubric_ids=rubric_ids,
+        synced_keys=synced_content_keys,
+        unpublishable_items=unpublishable_items,
     )
+
+    # 0.5. Syllabus
+    sync_syllabus(ctx)
 
     # 1. Assets (depth-first, files before subdirs, alphabetical)
     assets_dir = repo_path / "assets"
     if assets_dir.exists():
-        _walk_assets(
-            course,
-            assets_dir,
-            assets_dir,
-            repo_path,
-            manifest,
-            manifest_path,
-            force_uploads,
-            force_overwrite,
-            newer_on_canvas,
-            matcher=matcher,
-            verbose=verbose,
-        )
+        _walk_assets(ctx, assets_dir, assets_dir)
 
     # 2. Content folders (alphabetical, excl. assets, modules, quizzes, snippets, course_settings, hidden)
-    synced_content_keys: set[str] = set()
     skip = {
         "assets",
         "modules",
@@ -803,24 +824,7 @@ def run_sync(
         return True
 
     for md_file in all_content_files:
-        _sync_content_file(
-            course,
-            md_file,
-            repo_path,
-            snippets_dir,
-            manifest,
-            manifest_path,
-            config.course_id,
-            force_uploads,
-            force_overwrite,
-            newer_on_canvas,
-            errors,
-            assignment_group_ids=assignment_group_ids,
-            rubric_ids=rubric_ids,
-            synced_keys=synced_content_keys,
-            verbose=verbose,
-            due_dates=due_dates,
-        )
+        _sync_content_file(ctx, md_file)
 
     # 2.5. Quizzes (each quiz lives in its own sub-folder)
     quizzes_dir = repo_path / "quizzes"
@@ -832,28 +836,10 @@ def run_sync(
                 continue
             quiz_md = quiz_folder / f"{quiz_folder.name}.md"
             if quiz_md.exists():
-                _sync_quiz(
-                    course,
-                    quiz_folder,
-                    quiz_md,
-                    repo_path,
-                    manifest,
-                    manifest_path,
-                    config.course_id,
-                    force_uploads,
-                    force_overwrite,
-                    newer_on_canvas,
-                    errors,
-                    synced_keys=synced_content_keys,
-                    verbose=verbose,
-                    due_dates=due_dates,
-                    assignment_group_ids=assignment_group_ids,
-                )
+                _sync_quiz(ctx, quiz_folder, quiz_md)
 
     # 2.6. Question banks
-    _sync_question_banks(
-        course, repo_path, manifest, manifest_path, force_uploads, matcher=matcher, verbose=verbose
-    )
+    _sync_question_banks(ctx)
 
     # 2.7. Front page (only when course_settings.toml or the target page was re-synced)
     if _front_page_path and (
@@ -881,7 +867,6 @@ def run_sync(
             errors.append(msg)
 
     # 3. Modules (alphabetical, with optional explicit position from module_order.toml)
-    unpublishable_items: list[tuple[str, str]] = []
     _order_key = "course_settings/module_order.toml"
     _order_path = repo_path / _order_key
     position_map = _load_module_order(repo_path)
@@ -917,18 +902,7 @@ def run_sync(
                 or md_file in modules_with_updated_refs
             )
             had_module_warnings = _sync_module(
-                course,
-                md_file,
-                repo_path,
-                manifest,
-                manifest_path,
-                force_this,
-                force_overwrite,
-                newer_on_canvas,
-                position=position,
-                verbose=verbose,
-                unpublishable_items=unpublishable_items,
-                errors=errors,
+                ctx, md_file, position=position, force_this=force_this
             )
             if had_module_warnings:
                 errors.append(f"module {md_file.name}: some items could not be added")
@@ -937,10 +911,7 @@ def run_sync(
         manifest_lib.record(manifest, manifest_path, _order_key, 0, "module_order")
 
     if due_dates and settings_synced:
-        _apply_due_dates_only(
-            course, due_dates, repo_path, manifest, synced_content_keys,
-            errors, matcher,
-        )
+        _apply_due_dates_only(ctx)
 
     if due_dates:
         _check_due_dates_coverage(due_dates, repo_path, matcher)
@@ -1087,85 +1058,59 @@ def run_prune(config: Config, repo_path: Path, mode: str) -> bool:
     return bool(errors)
 
 
-def _walk_assets(
-    course,
-    dir_path: Path,
-    assets_root: Path,
-    repo_root: Path,
-    manifest,
-    manifest_path,
-    force_uploads: bool = False,
-    force_overwrite: bool = False,
-    newer_on_canvas: list[str] | None = None,
-    matcher: IgnoreMatcher | None = None,
-    verbose: bool = False,
-) -> None:
-    if newer_on_canvas is None:
-        newer_on_canvas = []
+def _walk_assets(ctx: SyncContext, dir_path: Path, assets_root: Path) -> None:
+    course = ctx.course
+    repo_root = ctx.repo_path
+    manifest = ctx.manifest
+    matcher = ctx.matcher
     entries = sorted(dir_path.iterdir(), key=lambda p: (p.is_dir(), p.name))
     for entry in entries:
         if matcher is not None and matcher.is_ignored(entry, repo_root):
-            if verbose:
+            if ctx.verbose:
                 print(f"Ignoring: {entry.relative_to(repo_root).as_posix()}")
             continue
         if entry.is_file():
             local_key = entry.relative_to(repo_root).as_posix()
-            if not manifest_lib.needs_sync(manifest, local_key, entry, force_uploads):
+            if not manifest_lib.needs_sync(manifest, local_key, entry, ctx.force_uploads):
                 continue
-            if not force_overwrite:
+            if not ctx.force_overwrite:
                 local_mtime = datetime.fromtimestamp(
                     entry.stat().st_mtime, tz=timezone.utc
                 )
                 if _canvas_is_newer(
-                    course, local_key, local_mtime, manifest, newer_on_canvas
+                    course, local_key, local_mtime, manifest, ctx.newer_on_canvas
                 ):
                     continue
             print(f"Uploading asset: {local_key}")
             canvas_entry = capi.upload_asset(course, entry, assets_root)
             manifest_lib.record(
                 manifest,
-                manifest_path,
+                ctx.manifest_path,
                 local_key,
                 canvas_entry["canvas_id"],
                 "file",
                 extra={"canvas_url": canvas_entry["canvas_url"]},
             )
         elif entry.is_dir():
-            _walk_assets(
-                course,
-                entry,
-                assets_root,
-                repo_root,
-                manifest,
-                manifest_path,
-                force_uploads,
-                force_overwrite,
-                newer_on_canvas,
-                matcher=matcher,
-                verbose=verbose,
-            )
+            _walk_assets(ctx, entry, assets_root)
 
 
-def _sync_content_file(
-    course,
-    md_file: Path,
-    repo_root: Path,
-    snippets_dir: Path,
-    manifest,
-    manifest_path,
-    course_id: int,
-    force_uploads: bool = False,
-    force_overwrite: bool = False,
-    newer_on_canvas: list[str] | None = None,
-    errors: list[str] | None = None,
-    assignment_group_ids: dict[str, int] | None = None,
-    rubric_ids: dict[str, int] | None = None,
-    synced_keys: set[str] | None = None,
-    verbose: bool = False,
-    due_dates: list[dict[str, Any]] | None = None,
-) -> None:
-    if newer_on_canvas is None:
-        newer_on_canvas = []
+def _sync_content_file(ctx: SyncContext, md_file: Path) -> None:
+    course = ctx.course
+    repo_root = ctx.repo_path
+    snippets_dir = ctx.snippets_dir
+    manifest = ctx.manifest
+    manifest_path = ctx.manifest_path
+    course_id = ctx.course_id
+    force_uploads = ctx.force_uploads
+    force_overwrite = ctx.force_overwrite
+    newer_on_canvas = ctx.newer_on_canvas
+    errors = ctx.errors
+    assignment_group_ids = ctx.assignment_group_ids
+    rubric_ids = ctx.rubric_ids
+    synced_keys = ctx.synced_keys
+    verbose = ctx.verbose
+    due_dates = ctx.due_dates
     local_key = md_file.relative_to(repo_root).as_posix()
 
     if not manifest_lib.needs_sync(
@@ -1509,26 +1454,28 @@ def _reorder_modules(
 
 
 def _sync_module(
-    course,
+    ctx: SyncContext,
     md_file: Path,
-    repo_root: Path,
-    manifest,
-    manifest_path,
-    force_uploads: bool = False,
-    force_overwrite: bool = False,
-    newer_on_canvas: list[str] | None = None,
     position: int | None = None,
-    verbose: bool = False,
-    unpublishable_items: list[tuple[str, str]] | None = None,
-    errors: list[str] | None = None,
+    force_this: bool = False,
 ) -> bool:
-    if newer_on_canvas is None:
-        newer_on_canvas = []
+    # `force_this` (not ctx.force_uploads) drives the staleness check: run_sync
+    # additionally forces a re-sync when a module references content synced this
+    # run, so it varies per call.
+    course = ctx.course
+    repo_root = ctx.repo_path
+    manifest = ctx.manifest
+    manifest_path = ctx.manifest_path
+    snippets_dir = ctx.snippets_dir
+    force_overwrite = ctx.force_overwrite
+    newer_on_canvas = ctx.newer_on_canvas
+    verbose = ctx.verbose
+    unpublishable_items = ctx.unpublishable_items
+    errors = ctx.errors
     local_key = md_file.relative_to(repo_root).as_posix()
-    snippets_dir = repo_root / "snippets"
 
     if not manifest_lib.needs_sync(
-        manifest, local_key, md_file, force_uploads,
+        manifest, local_key, md_file, force_this,
         extra_mtime_paths=lambda: _file_referenced_snippets(md_file, snippets_dir),
     ):
         if verbose:
@@ -1633,28 +1580,23 @@ def _quiz_needs_sync(
     return False
 
 
-def _sync_quiz(
-    course,
-    quiz_folder: Path,
-    quiz_md: Path,
-    repo_root: Path,
-    manifest: manifest_lib.ManifestDict,
-    manifest_path: Path,
-    config_course_id: int = 0,
-    force_uploads: bool = False,
-    force_overwrite: bool = False,
-    newer_on_canvas: list[str] | None = None,
-    errors: list[str] | None = None,
-    synced_keys: set[str] | None = None,
-    verbose: bool = False,
-    due_dates: list[dict[str, Any]] | None = None,
-    assignment_group_ids: dict[str, int] | None = None,
-) -> None:
-    if newer_on_canvas is None:
-        newer_on_canvas = []
+def _sync_quiz(ctx: SyncContext, quiz_folder: Path, quiz_md: Path) -> None:
+    course = ctx.course
+    repo_root = ctx.repo_path
+    manifest = ctx.manifest
+    manifest_path = ctx.manifest_path
+    config_course_id = ctx.course_id
+    force_uploads = ctx.force_uploads
+    force_overwrite = ctx.force_overwrite
+    newer_on_canvas = ctx.newer_on_canvas
+    errors = ctx.errors
+    synced_keys = ctx.synced_keys
+    verbose = ctx.verbose
+    due_dates = ctx.due_dates
+    assignment_group_ids = ctx.assignment_group_ids
+    snippets_dir = ctx.snippets_dir
     local_key = quiz_md.relative_to(repo_root).as_posix()
     questions_dir = quiz_folder / "questions"
-    snippets_dir = repo_root / "snippets"
 
     if not _quiz_needs_sync(quiz_md, questions_dir, local_key, manifest, force_uploads, snippets_dir):
         if verbose:
@@ -1803,16 +1745,16 @@ def _sync_quiz(
         synced_keys.add(local_key)
 
 
-def _sync_question_banks(
-    course,
-    repo_root: Path,
-    manifest: manifest_lib.ManifestDict,
-    manifest_path: Path,
-    force_uploads: bool = False,
-    matcher: IgnoreMatcher | None = None,
-    verbose: bool = False,
-) -> None:
+def _sync_question_banks(ctx: SyncContext) -> None:
     """Sync all question banks from question_banks/ to Canvas."""
+    course = ctx.course
+    repo_root = ctx.repo_path
+    manifest = ctx.manifest
+    manifest_path = ctx.manifest_path
+    force_uploads = ctx.force_uploads
+    matcher = ctx.matcher
+    verbose = ctx.verbose
+    snippets_dir = ctx.snippets_dir
     banks_dir = repo_root / "question_banks"
     if not banks_dir.exists():
         return
@@ -1825,7 +1767,6 @@ def _sync_question_banks(
         if not toml_path.exists():
             continue
         local_key = toml_path.relative_to(repo_root).as_posix()
-        snippets_dir = repo_root / "snippets"
         questions_dir = bank_folder / "questions"
         if not force_uploads and not manifest_lib.needs_sync(
             manifest, local_key, toml_path, False,
@@ -1952,6 +1893,24 @@ def run_targeted_sync(
     _targeted_position_map = _load_module_order(repo_path)
     due_dates = load_due_dates(repo_path)
 
+    ctx = SyncContext(
+        course=course,
+        repo_path=repo_path,
+        snippets_dir=snippets_dir,
+        manifest=manifest,
+        manifest_path=manifest_path,
+        course_id=config.course_id,
+        force_uploads=force_uploads,
+        force_overwrite=force_overwrite,
+        verbose=verbose,
+        newer_on_canvas=newer_on_canvas,
+        errors=errors,
+        due_dates=due_dates,
+        assignment_group_ids=assignment_group_ids,
+        rubric_ids=rubric_ids,
+        unpublishable_items=unpublishable_items,
+    )
+
     visited: set[str] = set()
 
     def _process(local_key: str) -> None:
@@ -1982,57 +1941,18 @@ def run_targeted_sync(
                     print(f"Skipping (up-to-date): {local_key}")
         elif folder == "modules":
             had_module_warnings = _sync_module(
-                course,
+                ctx,
                 file_path,
-                repo_path,
-                manifest,
-                manifest_path,
-                force_uploads,
-                force_overwrite,
-                newer_on_canvas,
                 position=_targeted_position_map.get(file_path.name),
-                verbose=verbose,
-                unpublishable_items=unpublishable_items,
-                errors=errors,
+                force_this=force_uploads,
             )
             if had_module_warnings:
                 errors.append(f"module {file_path.name}: some items could not be added")
         elif folder == "quizzes":
             quiz_folder = file_path.parent
-            _sync_quiz(
-                course,
-                quiz_folder,
-                file_path,
-                repo_path,
-                manifest,
-                manifest_path,
-                config.course_id,
-                force_uploads,
-                force_overwrite,
-                newer_on_canvas,
-                errors,
-                verbose=verbose,
-                due_dates=due_dates,
-                assignment_group_ids=assignment_group_ids,
-            )
+            _sync_quiz(ctx, quiz_folder, file_path)
         else:
-            _sync_content_file(
-                course,
-                file_path,
-                repo_path,
-                snippets_dir,
-                manifest,
-                manifest_path,
-                config.course_id,
-                force_uploads,
-                force_overwrite,
-                newer_on_canvas,
-                errors,
-                assignment_group_ids=assignment_group_ids,
-                rubric_ids=rubric_ids,
-                verbose=verbose,
-                due_dates=due_dates,
-            )
+            _sync_content_file(ctx, file_path)
 
     def _warn_missing(target: str) -> None:
         print(f"  WARNING: target not found or outside repo: {target}")

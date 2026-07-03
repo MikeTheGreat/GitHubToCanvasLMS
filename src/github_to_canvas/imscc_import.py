@@ -33,6 +33,22 @@ class TempEntry:
     metadata: dict[str, Any] = field(default_factory=dict)
 
 
+@dataclass
+class ImportContext:
+    """Values shared by every content converter, built once in `run_import`.
+
+    Replaces the repeated `(entry, imscc_dir, temp_manifest, output_dir,
+    course_id, base_url[, due_dates_collector])` parameter list — each converter
+    now takes just `(ctx, entry)`.
+    """
+    imscc_dir: Path
+    temp_manifest: dict[str, TempEntry]
+    output_dir: Path
+    course_id: int | str | None = None
+    base_url: str | None = None
+    due_dates_collector: list[dict[str, Any]] | None = None
+
+
 # ---------------------------------------------------------------------------
 # Group 0: Input normalization
 # ---------------------------------------------------------------------------
@@ -733,24 +749,17 @@ def _shift_headings_down(markdown: str, context: str = "") -> str:
     return result
 
 
-def convert_page(
-    entry: TempEntry,
-    imscc_dir: Path,
-    temp_manifest: dict[str, TempEntry],
-    output_dir: Path,
-    course_id: int | str | None = None,
-    base_url: str | None = None,
-) -> None:
+def convert_page(ctx: ImportContext, entry: TempEntry) -> None:
     """Convert a wiki_content page HTML file to pages/{stem}.md."""
-    html_path = imscc_dir / entry.imscc_path
+    html_path = ctx.imscc_dir / entry.imscc_path
     raw_html = html_path.read_text(encoding="utf-8", errors="replace")
     body_html = _extract_html_body(raw_html)
-    body_html = rewrite_imscc_links(body_html, temp_manifest, entry.local_path, course_id, base_url)
+    body_html = rewrite_imscc_links(body_html, ctx.temp_manifest, entry.local_path, ctx.course_id, ctx.base_url)
     markdown = _html_to_markdown(body_html)
     markdown = _shift_headings_down(markdown, entry.local_path)
 
     frontmatter = _build_frontmatter({"title": entry.title, "published": True})
-    out_path = output_dir / entry.local_path
+    out_path = ctx.output_dir / entry.local_path
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(frontmatter + "\n" + markdown + "\n", encoding="utf-8")
     print(f"Converting page: {entry.local_path}")
@@ -890,26 +899,18 @@ def _collect_due_date(
     collector.append(entry)
 
 
-def convert_assignment(
-    entry: TempEntry,
-    imscc_dir: Path,
-    temp_manifest: dict[str, TempEntry],
-    output_dir: Path,
-    course_id: int | str | None = None,
-    base_url: str | None = None,
-    due_dates_collector: list[dict[str, Any]] | None = None,
-) -> None:
+def convert_assignment(ctx: ImportContext, entry: TempEntry) -> None:
     """Convert an assignment HTML + settings XML to assignments/{stem}.md."""
-    settings_path = imscc_dir / entry.metadata["settings_path"]
+    settings_path = ctx.imscc_dir / entry.metadata["settings_path"]
     fm_fields = parse_assignment_settings(settings_path)
 
     date_fields = _extract_date_fields(fm_fields)
-    _collect_due_date(due_dates_collector, fm_fields.get("title", ""), "assignment", date_fields)
+    _collect_due_date(ctx.due_dates_collector, fm_fields.get("title", ""), "assignment", date_fields)
 
-    html_path = imscc_dir / entry.imscc_path
+    html_path = ctx.imscc_dir / entry.imscc_path
     raw_html = html_path.read_text(encoding="utf-8", errors="replace")
     body_html = _extract_html_body(raw_html)
-    body_html = rewrite_imscc_links(body_html, temp_manifest, entry.local_path, course_id, base_url)
+    body_html = rewrite_imscc_links(body_html, ctx.temp_manifest, entry.local_path, ctx.course_id, ctx.base_url)
     markdown = _html_to_markdown(body_html)
     markdown = _shift_headings_down(markdown, entry.local_path)
 
@@ -918,7 +919,7 @@ def convert_assignment(
         commented_fields=date_fields if date_fields else None,
         comment_note="Due dates are managed centrally in course_settings/course_settings.toml",
     )
-    out_path = output_dir / entry.local_path
+    out_path = ctx.output_dir / entry.local_path
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(frontmatter + "\n" + markdown + "\n", encoding="utf-8")
     print(f"Converting assignment: {entry.local_path}")
@@ -975,32 +976,24 @@ def _xml_ns(element: ET.Element) -> str:
     return ""
 
 
-def convert_discussion(
-    entry: TempEntry,
-    imscc_dir: Path,
-    temp_manifest: dict[str, TempEntry],
-    output_dir: Path,
-    course_id: int | str | None = None,
-    base_url: str | None = None,
-    due_dates_collector: list[dict[str, Any]] | None = None,
-) -> None:
+def convert_discussion(ctx: ImportContext, entry: TempEntry) -> None:
     """Convert a discussion topic + topicMeta to discussions/{slug}.md."""
     meta_path_str = entry.metadata.get("meta_path", "")
     if not meta_path_str:
         print(f"  WARNING: No topicMeta found for discussion {entry.imscc_id!r} — skipping")
         return
 
-    fm_fields = parse_topic_meta(imscc_dir / meta_path_str)
+    fm_fields = parse_topic_meta(ctx.imscc_dir / meta_path_str)
 
     if fm_fields.pop("is_announcement", False):
         print(f"  WARNING: Skipping announcement: {entry.title!r}")
         return
 
     date_fields = _extract_date_fields(fm_fields)
-    _collect_due_date(due_dates_collector, fm_fields.get("title", ""), "discussion", date_fields)
+    _collect_due_date(ctx.due_dates_collector, fm_fields.get("title", ""), "discussion", date_fields)
 
     # read and decode the HTML body from the imsdt XML
-    topic_tree = ET.parse(imscc_dir / entry.imscc_path)
+    topic_tree = ET.parse(ctx.imscc_dir / entry.imscc_path)
     topic_root = topic_tree.getroot()
     ns = _xml_ns(topic_root)
     text_el = (
@@ -1008,7 +1001,7 @@ def convert_discussion(
     )
     body_html = (text_el.text or "") if text_el is not None else ""
 
-    body_html = rewrite_imscc_links(body_html, temp_manifest, entry.local_path, course_id, base_url)
+    body_html = rewrite_imscc_links(body_html, ctx.temp_manifest, entry.local_path, ctx.course_id, ctx.base_url)
     markdown = _html_to_markdown(body_html)
     markdown = _shift_headings_down(markdown, entry.local_path)
 
@@ -1033,7 +1026,7 @@ def convert_discussion(
         commented_fields=date_fields if date_fields else None,
         comment_note="Due dates are managed centrally in course_settings/course_settings.toml",
     )
-    out_path = output_dir / entry.local_path
+    out_path = ctx.output_dir / entry.local_path
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(frontmatter + "\n" + markdown + "\n", encoding="utf-8")
     print(f"Converting discussion: {entry.local_path}")
@@ -1403,28 +1396,20 @@ def _write_question_file(q: dict[str, Any], q_path: Path) -> None:
     q_path.write_text(fm + "\n\n" + body + "\n", encoding="utf-8")
 
 
-def convert_quiz(
-    entry: TempEntry,
-    imscc_dir: Path,
-    temp_manifest: dict[str, TempEntry],
-    output_dir: Path,
-    course_id: int | str | None = None,
-    base_url: str | None = None,
-    due_dates_collector: list[dict[str, Any]] | None = None,
-) -> None:
+def convert_quiz(ctx: ImportContext, entry: TempEntry) -> None:
     """Convert assessment_meta.xml + QTI questions file to quizzes/{slug}/ folder."""
     meta_path_str = entry.metadata.get("meta_path", "")
     qti_path_str = entry.metadata.get("qti_path", "")
 
-    meta_path = imscc_dir / meta_path_str if meta_path_str else None
-    qti_path = imscc_dir / qti_path_str if qti_path_str else None
+    meta_path = ctx.imscc_dir / meta_path_str if meta_path_str else None
+    qti_path = ctx.imscc_dir / qti_path_str if qti_path_str else None
 
     fm_fields, description = parse_quiz_meta(meta_path) if meta_path else ({}, "")
     if not fm_fields:
         fm_fields = {"title": entry.title, "published": False, "quiz_type": "assignment"}
 
     date_fields = _extract_date_fields(fm_fields)
-    _collect_due_date(due_dates_collector, fm_fields.get("title", ""), "quiz", date_fields)
+    _collect_due_date(ctx.due_dates_collector, fm_fields.get("title", ""), "quiz", date_fields)
 
     questions = parse_qti_questions(qti_path) if qti_path else []
     _dedup_question_slugs(questions)
@@ -1432,7 +1417,7 @@ def convert_quiz(
     # Derive slug from the local_path (e.g. "quizzes/a-quiz/a-quiz.md" → "a-quiz")
     slug = Path(entry.local_path).stem
 
-    quiz_dir = output_dir / "quizzes" / slug
+    quiz_dir = ctx.output_dir / "quizzes" / slug
     quiz_dir.mkdir(parents=True, exist_ok=True)
 
     # Write question files
@@ -1447,7 +1432,7 @@ def convert_quiz(
     # Rewrite Canvas placeholder links and convert description to Markdown
     if description.strip():
         description = rewrite_imscc_links(
-            description, temp_manifest, entry.local_path, course_id, base_url,
+            description, ctx.temp_manifest, entry.local_path, ctx.course_id, ctx.base_url,
         )
         description = _html_to_markdown(description).strip()
 
@@ -2532,25 +2517,34 @@ def run_import(imscc_path: Path, output_dir: Path) -> None:
 
         due_dates: list[dict[str, Any]] = []
 
+        ctx = ImportContext(
+            imscc_dir=imscc_dir,
+            temp_manifest=temp_manifest,
+            output_dir=output_dir,
+            course_id=course_id,
+            base_url=base_url,
+            due_dates_collector=due_dates,
+        )
+
         # Phase 3: pages
         for entry in temp_manifest.values():
             if entry.category == "page":
-                convert_page(entry, imscc_dir, temp_manifest, output_dir, course_id, base_url)
+                convert_page(ctx, entry)
 
         # Phase 4: assignments
         for entry in temp_manifest.values():
             if entry.category == "assignment":
-                convert_assignment(entry, imscc_dir, temp_manifest, output_dir, course_id, base_url, due_dates_collector=due_dates)
+                convert_assignment(ctx, entry)
 
         # Phase 5: discussions
         for entry in temp_manifest.values():
             if entry.category == "discussion":
-                convert_discussion(entry, imscc_dir, temp_manifest, output_dir, course_id, base_url, due_dates_collector=due_dates)
+                convert_discussion(ctx, entry)
 
         # Phase 5b: quizzes
         for entry in temp_manifest.values():
             if entry.category == "quiz":
-                convert_quiz(entry, imscc_dir, temp_manifest, output_dir, course_id, base_url, due_dates_collector=due_dates)
+                convert_quiz(ctx, entry)
 
         # Phase 5c: question banks
         for entry in temp_manifest.values():

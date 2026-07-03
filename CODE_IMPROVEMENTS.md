@@ -203,9 +203,31 @@ change. Notes on what actually landed are inline under each item below.
 
 ---
 
-## 4. The parameter-bloat fix (flagship refactor)
+## 4. The parameter-bloat fix (flagship refactor) — DONE 2026-07-02
 
-### P1. Introduce a `SyncContext` dataclass in `sync.py`
+Both P1 and P2 landed in one focused session (each with its own full-suite run:
+**831 passed** after each, no behavior change). Notes inline under each item.
+
+### P1. Introduce a `SyncContext` dataclass in `sync.py` — DONE 2026-07-02
+
+- **Applied:** added a `@dataclass SyncContext` (16 fields, mutable accumulators as
+  `field(default_factory=...)`) that `run_sync`/`run_targeted_sync` build once and
+  thread down. Converted `_sync_content_file` (16→2 params: `ctx, md_file`),
+  `_sync_quiz` (15→3: `ctx, quiz_folder, quiz_md`), `_sync_module`
+  (12→4: `ctx, md_file, position=None, force_this=False` — `force_this` kept
+  explicit because run_sync forces a re-sync when a module references
+  content synced this run), `_walk_assets` (→3: `ctx, dir_path, assets_root`),
+  `_apply_due_dates_only`/`_sync_question_banks`/`sync_syllabus` (all →`ctx`).
+  Inside the big functions, ctx fields are bound to locals at the top so the
+  (long, well-tested) bodies stayed verbatim — lowest-risk. Public surface
+  (`run_sync`, `run_targeted_sync`, `run_prune`) unchanged.
+- **Test call sites updated:** the 7 direct `_sync_content_file(...)` calls in
+  `tests/test_due_dates.py` now build a `SyncContext` and call
+  `_sync_content_file(ctx, md_file)`. No other tests call these internals;
+  `publish.py` imports only the pure functions (`_content_default_published`,
+  `parse_frontmatter`, `parse_module_body`), left standalone as noted.
+- **`config_course_id: int = 0` default on `_sync_quiz` went away** as predicted
+  in §9.9 — it's now `ctx.course_id`.
 
 This is the direct answer to "functions with 10+ parameters".
 
@@ -237,12 +259,14 @@ This is the direct answer to "functions with 10+ parameters".
   mechanical; the 166 sync tests + 731 others are a strong net. Do it as one
   focused change with no other edits mixed in.
 
-### P2. Same treatment for `imscc_import.py` converters (smaller)
+### P2. Same treatment for `imscc_import.py` converters (smaller) — DONE 2026-07-02
 
-- `convert_page/assignment/discussion/quiz` all take
-  `(entry, imscc_dir, temp_manifest, output_dir, course_id, base_url[,
-  due_dates_collector])`. An `ImportContext` dataclass with those six fields
-  reduces each to `(ctx, entry)`. `run_import` builds it once.
+- **Applied:** added a `@dataclass ImportContext`
+  (`imscc_dir, temp_manifest, output_dir, course_id, base_url,
+  due_dates_collector`) built once in `run_import`. `convert_page`,
+  `convert_assignment`, `convert_discussion`, `convert_quiz` each reduced to
+  `(ctx, entry)`. No external callers (only `run_import`), so no test call-site
+  changes were needed; integration tests cover every content type.
 - **Effort:** ~1 h. **Risk:** low; integration tests cover every content type.
 
 ---
@@ -542,7 +566,8 @@ For a future session doing this work top-down:
 2. ~~H1–H6 (one pass, ~1 h total).~~ — done 2026-07-02; tree is ruff-clean, 831 passed.
 3. ~~T1 (test speed)~~ — done 2026-07-02, 226 s → ~39 s.
 4. ~~T2 (pathspec)~~ — done 2026-07-02; swapped to `GitIgnoreSpec`, warning gone.
-5. P1 (`SyncContext`) — the flagship; do alone, full suite after.
+5. ~~P1 (`SyncContext`)~~ — done 2026-07-02; 831 passed. P2 (`ImportContext`)
+   also done same session; 831 passed.
 6. D1–D4 (small dedups, now easier post-P1).
 7. D5–D11 in any order.
 8. S1–S5 as appetite allows.

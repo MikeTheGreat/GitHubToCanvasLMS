@@ -298,7 +298,7 @@ def mock_course(mocker) -> MagicMock:
 
 def test_due_dates_override_assignment(course_root: Path) -> None:
     """Centralized due_dates should override assignment frontmatter dates in _sync_content_file."""
-    from github_to_canvas.sync import _sync_content_file
+    from github_to_canvas.sync import _sync_content_file, SyncContext
     from github_to_canvas import manifest as manifest_lib
 
     # Write centralized due_dates
@@ -320,12 +320,12 @@ def test_due_dates_override_assignment(course_root: Path) -> None:
     manifest = manifest_lib.load(manifest_path)
     md_file = course_root / "assignments" / "week1.md"
     snippets_dir = course_root / "snippets"
-    _sync_content_file(
-        course, md_file, course_root, snippets_dir,
-        manifest, manifest_path, 999,
-        force_uploads=True, force_overwrite=True,
-        due_dates=due_dates,
+    ctx = SyncContext(
+        course=course, repo_path=course_root, snippets_dir=snippets_dir,
+        manifest=manifest, manifest_path=manifest_path, course_id=999,
+        force_uploads=True, force_overwrite=True, due_dates=due_dates,
     )
+    _sync_content_file(ctx, md_file)
 
     _, kwargs = course.create_assignment.call_args
     assignment_params = kwargs.get("assignment", {})
@@ -337,7 +337,7 @@ def test_due_dates_override_assignment(course_root: Path) -> None:
 
 def test_due_dates_override_discussion(course_root: Path) -> None:
     """Centralized due_dates should override discussion frontmatter dates."""
-    from github_to_canvas.sync import _sync_content_file
+    from github_to_canvas.sync import _sync_content_file, SyncContext
     from github_to_canvas import manifest as manifest_lib
 
     due_dates = [
@@ -352,12 +352,12 @@ def test_due_dates_override_discussion(course_root: Path) -> None:
     manifest = manifest_lib.load(manifest_path)
     md_file = course_root / "discussions" / "week1-intro.md"
     snippets_dir = course_root / "snippets"
-    _sync_content_file(
-        course, md_file, course_root, snippets_dir,
-        manifest, manifest_path, 999,
-        force_uploads=True, force_overwrite=True,
-        due_dates=due_dates,
+    ctx = SyncContext(
+        course=course, repo_path=course_root, snippets_dir=snippets_dir,
+        manifest=manifest, manifest_path=manifest_path, course_id=999,
+        force_uploads=True, force_overwrite=True, due_dates=due_dates,
     )
+    _sync_content_file(ctx, md_file)
 
     _, kwargs = course.create_discussion_topic.call_args
     # Discussion dates are wrapped in assignment={...}
@@ -369,7 +369,7 @@ def test_due_dates_override_discussion(course_root: Path) -> None:
 
 def test_none_sentinel_clears_dates_on_canvas(course_root: Path) -> None:
     """NONE sentinel should send empty string to Canvas to clear the date."""
-    from github_to_canvas.sync import _sync_content_file
+    from github_to_canvas.sync import _sync_content_file, SyncContext
     from github_to_canvas import manifest as manifest_lib
 
     due_dates = [
@@ -387,12 +387,12 @@ def test_none_sentinel_clears_dates_on_canvas(course_root: Path) -> None:
     manifest = manifest_lib.load(manifest_path)
     md_file = course_root / "assignments" / "week1.md"
     snippets_dir = course_root / "snippets"
-    _sync_content_file(
-        course, md_file, course_root, snippets_dir,
-        manifest, manifest_path, 999,
-        force_uploads=True, force_overwrite=True,
-        due_dates=due_dates,
+    ctx = SyncContext(
+        course=course, repo_path=course_root, snippets_dir=snippets_dir,
+        manifest=manifest, manifest_path=manifest_path, course_id=999,
+        force_uploads=True, force_overwrite=True, due_dates=due_dates,
     )
+    _sync_content_file(ctx, md_file)
 
     _, kwargs = course.create_assignment.call_args
     assignment_params = kwargs.get("assignment", {})
@@ -403,7 +403,7 @@ def test_none_sentinel_clears_dates_on_canvas(course_root: Path) -> None:
 
 def test_create_none_then_keep_on_create(course_root: Path) -> None:
     """CREATE_NONE_THEN_KEEP should clear dates on first create (no canvas_id)."""
-    from github_to_canvas.sync import _sync_content_file
+    from github_to_canvas.sync import _sync_content_file, SyncContext
     from github_to_canvas import manifest as manifest_lib
 
     due_dates = [
@@ -422,12 +422,12 @@ def test_create_none_then_keep_on_create(course_root: Path) -> None:
     manifest = manifest_lib.load(manifest_path)
     md_file = course_root / "assignments" / "week1.md"
     snippets_dir = course_root / "snippets"
-    _sync_content_file(
-        course, md_file, course_root, snippets_dir,
-        manifest, manifest_path, 999,
-        force_uploads=True, force_overwrite=True,
-        due_dates=due_dates,
+    ctx = SyncContext(
+        course=course, repo_path=course_root, snippets_dir=snippets_dir,
+        manifest=manifest, manifest_path=manifest_path, course_id=999,
+        force_uploads=True, force_overwrite=True, due_dates=due_dates,
     )
+    _sync_content_file(ctx, md_file)
 
     _, kwargs = course.create_assignment.call_args
     assignment_params = kwargs.get("assignment", {})
@@ -439,7 +439,7 @@ def test_create_none_then_keep_on_create(course_root: Path) -> None:
 
 def test_create_none_then_keep_on_update(course_root: Path) -> None:
     """CREATE_NONE_THEN_KEEP should act as KEEP on update (canvas_id exists)."""
-    from github_to_canvas.sync import _sync_content_file
+    from github_to_canvas.sync import _sync_content_file, SyncContext
     from github_to_canvas import manifest as manifest_lib
 
     due_dates = [
@@ -463,12 +463,12 @@ def test_create_none_then_keep_on_update(course_root: Path) -> None:
 
     md_file = course_root / "assignments" / "week1.md"
     snippets_dir = course_root / "snippets"
-    _sync_content_file(
-        course, md_file, course_root, snippets_dir,
-        manifest, manifest_path, 999,
-        force_uploads=True, force_overwrite=True,
-        due_dates=due_dates,
+    ctx = SyncContext(
+        course=course, repo_path=course_root, snippets_dir=snippets_dir,
+        manifest=manifest, manifest_path=manifest_path, course_id=999,
+        force_uploads=True, force_overwrite=True, due_dates=due_dates,
     )
+    _sync_content_file(ctx, md_file)
 
     _, kwargs = course.get_assignment.return_value.edit.call_args
     assignment_params = kwargs.get("assignment", {})
@@ -481,7 +481,7 @@ def test_create_none_then_keep_on_update(course_root: Path) -> None:
 def test_bad_request_retries_without_dates(course_root: Path) -> None:
     """When Canvas rejects due dates, retry without them and add a warning."""
     from canvasapi.exceptions import BadRequest
-    from github_to_canvas.sync import _sync_content_file
+    from github_to_canvas.sync import _sync_content_file, SyncContext
     from github_to_canvas import manifest as manifest_lib
 
     due_dates = [
@@ -510,13 +510,13 @@ def test_bad_request_retries_without_dates(course_root: Path) -> None:
     md_file = course_root / "assignments" / "week1.md"
     snippets_dir = course_root / "snippets"
     errors: list[str] = []
-    _sync_content_file(
-        course, md_file, course_root, snippets_dir,
-        manifest, manifest_path, 999,
-        force_uploads=True, force_overwrite=True,
-        due_dates=due_dates,
+    ctx = SyncContext(
+        course=course, repo_path=course_root, snippets_dir=snippets_dir,
+        manifest=manifest, manifest_path=manifest_path, course_id=999,
+        force_uploads=True, force_overwrite=True, due_dates=due_dates,
         errors=errors,
     )
+    _sync_content_file(ctx, md_file)
 
     # Should have been called twice: first with dates (fails), then without (succeeds)
     assert call_count == 2
@@ -527,7 +527,7 @@ def test_bad_request_retries_without_dates(course_root: Path) -> None:
 
 def test_empty_string_warning_in_errors(course_root: Path) -> None:
     """Empty string date values should produce a warning in the errors list."""
-    from github_to_canvas.sync import _sync_content_file
+    from github_to_canvas.sync import _sync_content_file, SyncContext
     from github_to_canvas import manifest as manifest_lib
 
     due_dates = [
@@ -546,13 +546,13 @@ def test_empty_string_warning_in_errors(course_root: Path) -> None:
     md_file = course_root / "assignments" / "week1.md"
     snippets_dir = course_root / "snippets"
     errors: list[str] = []
-    _sync_content_file(
-        course, md_file, course_root, snippets_dir,
-        manifest, manifest_path, 999,
-        force_uploads=True, force_overwrite=True,
-        due_dates=due_dates,
+    ctx = SyncContext(
+        course=course, repo_path=course_root, snippets_dir=snippets_dir,
+        manifest=manifest, manifest_path=manifest_path, course_id=999,
+        force_uploads=True, force_overwrite=True, due_dates=due_dates,
         errors=errors,
     )
+    _sync_content_file(ctx, md_file)
 
     assert any("empty value" in e and "KEEP" in e for e in errors)
 
