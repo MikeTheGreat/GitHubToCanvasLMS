@@ -5,7 +5,7 @@ Verify that content from an IMSCC file survived conversion to a Markdown repo.
 Two complementary sampling modes are available:
 
 Per-resource mode (default)
-    For each converted resource (pages, assignments, discussions) picks a random
+    For each converted resource (pages, assignments, discussions, announcements) picks a random
     plain-text fragment from the IMSCC source and checks whether that text appears
     anywhere in the output Markdown directory.  Quizzes and assets are skipped
     because their content transforms too differently to compare directly.
@@ -29,7 +29,7 @@ Options
                         Shorter fragments risk matching coincidentally.
     --seed N            Random seed so runs are reproducible (default: 42).
     --categories LIST   Comma-separated resource types to check.
-                        Default: page,assignment,discussion,syllabus
+                        Default: announcement,assignment,discussion,page,syllabus
                         Omit "syllabus" if the syllabus is just a file link.
     --pool-samples N    Draw N random fragments from the entire IMSCC text pool
                         (all HTML/XML files combined) and check each against the
@@ -94,7 +94,7 @@ from github_to_canvas.imscc_import import (  # noqa: E402
 # ---------------------------------------------------------------------------
 # Categories that carry readable prose we can meaningfully sample.
 # ---------------------------------------------------------------------------
-DEFAULT_CATEGORIES = {"page", "assignment", "discussion", "syllabus"}
+DEFAULT_CATEGORIES = {"page", "assignment", "discussion", "announcement", "syllabus"}
 
 
 # ---------------------------------------------------------------------------
@@ -191,7 +191,8 @@ def _get_imscc_text(entry: TempEntry, imscc_dir: Path) -> str:
         raw = src.read_text(encoding="utf-8", errors="replace")
         return _normalize(_strip_html(_extract_html_body(raw)))
 
-    if entry.category == "discussion":
+    if entry.category in ("discussion", "announcement"):
+        # Announcements share the imsdt topic structure with discussions.
         src = imscc_dir / entry.imscc_path
         if not src.exists():
             return ""

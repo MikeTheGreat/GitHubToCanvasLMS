@@ -15,7 +15,7 @@ import tomli_w
 from . import manifest as manifest_lib
 
 _CONTENT_TYPE_DIRS = {
-    "pages", "assignments", "discussions", "quizzes",
+    "pages", "assignments", "discussions", "announcements", "quizzes",
     "assets", "snippets", "modules", "question_banks",
     "course_settings",
 }

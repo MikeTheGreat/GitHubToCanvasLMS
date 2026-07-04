@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<topic xmlns="http://www.imsglobal.org/xsd/imsccv1p1/imsdt_v1p1"
+       xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+  <title>Midterm Reminder</title>
+  <text texttype="text/html">&lt;p&gt;The midterm is &lt;strong&gt;next week&lt;/strong&gt;.&lt;/p&gt;
+&lt;p&gt;Review the study guide and come prepared.&lt;/p&gt;</text>
+</topic>

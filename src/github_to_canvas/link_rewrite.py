@@ -18,6 +18,7 @@ _FOLDER_TO_TYPE = {
     "pages": "page",
     "assignments": "assignment",
     "discussions": "discussion",
+    "announcements": "announcement",
     "assets": "file",
     "quizzes": "quiz",
 }
@@ -36,7 +37,8 @@ def canvas_content_url(entry: dict[str, Any], course_id: int) -> str:
         return f"/courses/{course_id}/pages/{entry['canvas_url']}"
     if t == "assignment":
         return f"/courses/{course_id}/assignments/{entry['canvas_id']}"
-    if t == "discussion":
+    if t in ("discussion", "announcement"):
+        # Announcements are discussion topics in Canvas (is_announcement=true).
         return f"/courses/{course_id}/discussion_topics/{entry['canvas_id']}"
     if t == "quiz":
         return f"/courses/{course_id}/quizzes/{entry['canvas_id']}"

@@ -45,6 +45,7 @@ Write your course content as Markdown files in a Git repository. Run this tool t
     - [Page (`pages/`)](#page-pages)
     - [Assignment (`assignments/`)](#assignment-assignments)
     - [Discussion (`discussions/`)](#discussion-discussions)
+    - [Announcement (`announcements/`)](#announcement-announcements)
     - [Module (`modules/`)](#module-modules)
     - [Quiz (`quizzes/`)](#quiz-quizzes)
     - [Question banks (`question_banks/`)](#question-banks-question_banks)
@@ -73,6 +74,8 @@ course-repo/
 │   └── week1.md
 ├── discussions/            ← subfolders OK
 │   └── week1-intro.md
+├── announcements/           ← posted only when published: true
+│   └── midterm-reminder.md
 ├── modules/
 │   └── week-1.md
 ├── snippets/               ← reusable Markdown fragments
@@ -87,7 +90,7 @@ On each run the tool:
 1. Applies `course_settings.toml` (name, dates, grading standards, assignment groups, policies)
 2. Uploads `course_settings/syllabus.md` as the course syllabus body
 3. Uploads everything in `assets/` to Canvas Files
-4. Converts each `.md` in `pages/`, `assignments/`, `discussions/` (including subfolders) to HTML via Pandoc and uploads
+4. Converts each `.md` in `pages/`, `assignments/`, `discussions/`, `announcements/` (including subfolders) to HTML via Pandoc and uploads
 5. Syncs `quizzes/` (Classic Quizzes API) and `question_banks/`
 6. Rewrites cross-links between files to correct Canvas URLs
 7. Syncs `modules/` last (after all content has Canvas IDs)
@@ -1024,6 +1027,55 @@ assignment_group_id: "Labs"  # name of an assignment group defined in
 Post your initial response by Wednesday, then reply to two classmates.
 ```
 
+### Announcement (`announcements/`)
+
+Files in `announcements/` become Canvas **announcements** (internally a discussion
+topic with `is_announcement=true`). They are updated in place on Canvas when
+re-synced.
+
+The key difference from other content: **Canvas has no "draft" state for
+announcements** — creating one posts it immediately. So `published` controls
+whether the announcement is sent to Canvas *at all*:
+
+- `published: false` → **not posted.** `update` skips the file (with a warning)
+  and it stays staged in your repo. This lets you keep a set of announcements
+  ready and release each one when the time is right (e.g. the midterm reminder).
+- `published: true` → **posted now** (or scheduled, if you set `delayed_post_at`).
+
+To release a staged announcement, change its `published` to `true` and run
+`update`. Announcements cannot be graded, so grading/due-date fields do not apply.
+
+```markdown
+---
+title: "Midterm Reminder"    # defaults to the filename if omitted
+published: false             # false = staged, not posted (default); true = post it now
+
+# Optional Canvas announcement settings (all omittable):
+delayed_post_at: "2025-10-13T08:00:00-07:00"  # schedule automatic posting at this time
+lock_at: "2025-10-20T23:59:00-07:00"          # stop accepting comments at this time
+locked: true                 # lock the announcement (no comments)
+discussion_type: threaded    # "threaded" or "side_comment"
+require_initial_post: true   # readers must comment before seeing others' comments
+allow_rating: true           # let users "like" comments
+---
+
+The midterm is **next week** — review the study guide and come prepared.
+```
+
+The optional settings above are forwarded to Canvas only when present. (There is
+no ordering field: Canvas always lists announcements newest-first by post date,
+so `position` has no effect and is not used.)
+
+Any *other* frontmatter field — a typo, or a Canvas setting the tool doesn't
+support — is **not** sent silently: `update` prints a `WARNING: … ignoring
+frontmatter field '…'` when it processes the file and repeats the full list in a
+summary at the end of the run, so you always know exactly what was skipped.
+
+When you import a Canvas export, announcements are written here automatically with
+`published: false`, and the original export metadata is preserved as commented-out
+frontmatter — uncomment any of the supported settings above to apply it on the
+next `update` (see [IMSCC import](#imscc-import)).
+
 ### Module (`modules/`)
 
 Module files don't have a body that becomes HTML. The body lists content items and text headers (SubHeaders). Links to local `.md` files become Canvas content items; absolute URLs become ExternalUrl items.
@@ -1494,7 +1546,9 @@ Import an existing Canvas course export (`.imscc` file) into a local Markdown re
 github-to-canvas import course-export.imscc ./my-course-repo
 ```
 
-This converts pages, assignments, discussions, quizzes, question banks, modules, and course settings to local files ready for use with this tool. A `canvas.toml` skeleton is written with the Canvas domain and course ID pre-filled from the export metadata.
+This converts pages, assignments, discussions, announcements, quizzes, question banks, modules, and course settings to local files ready for use with this tool. A `canvas.toml` skeleton is written with the Canvas domain and course ID pre-filled from the export metadata.
+
+**Announcements** are imported into an `announcements/` folder, one Markdown file per announcement. Only the announcement itself is imported — any student replies, likes, or comments are not part of a Canvas export, so there is nothing to import. Each file gets `published: false`, which means `update` leaves it **staged (not posted)** until you set `published: true` — handy for re-posting announcements when the time is right (e.g. a midterm reminder the week before the midterm). The frontmatter keeps `title` and `published` as active fields; the original export's other metadata (post date, workflow state, etc.) is preserved as commented-out lines you can uncomment to apply (see [Announcement](#announcement-announcements)).
 
 > **Heading levels:** Canvas already strips H1s from the content it exports, so imported headings normally keep their original levels — an H2 stays an H2. As a safety net, if a converted file *does* still contain an H1 (which Canvas would silently turn into an inaccessible styled paragraph; see the H1 warning above), the import shifts every heading in that file down one level so the H1 becomes an H2. Files without an H1 are left untouched.
 >
@@ -1511,11 +1565,11 @@ python scripts/check_imscc_coverage.py course-export.imscc ./my-course-repo
 Options:
 
 
-| Flag                | Default                               | Description                                                      |
-| ------------------- | ------------------------------------- | ---------------------------------------------------------------- |
-| `--min-words N`     | 10                                    | Minimum fragment length; increase to reduce coincidental matches |
-| `--seed N`          | 42                                    | Random seed — change to sample different fragments              |
-| `--categories LIST` | `assignment,discussion,page,syllabus` | Comma-separated types to check                                   |
+| Flag                | Default                                            | Description                                                      |
+| ------------------- | -------------------------------------------------- | ---------------------------------------------------------------- |
+| `--min-words N`     | 10                                                 | Minimum fragment length; increase to reduce coincidental matches |
+| `--seed N`          | 42                                                 | Random seed — change to sample different fragments               |
+| `--categories LIST` | `announcement,assignment,discussion,page,syllabus` | Comma-separated types to check                                   |
 
 Example output:
 

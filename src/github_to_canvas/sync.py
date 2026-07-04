@@ -39,8 +39,8 @@ class SyncContext:
     The public entry points (`run_sync`, `run_targeted_sync`) build one of these
     and pass it down instead of the previous 10-to-16 positional parameters. The
     mutable accumulators (`newer_on_canvas`, `errors`, `synced_keys`,
-    `unpublishable_items`) live here as plain lists/sets; the entry points read
-    them back after the run to print the summaries.
+    `unpublishable_items`, `ignored_fields`) live here as plain lists/sets; the
+    entry points read them back after the run to print the summaries.
     """
 
     course: Any
@@ -60,6 +60,9 @@ class SyncContext:
     rubric_ids: dict[str, int] = field(default_factory=dict)
     synced_keys: set[str] = field(default_factory=set)
     unpublishable_items: list[tuple[str, str]] = field(default_factory=list)
+    # (local_key, field_name) for announcement frontmatter fields that were
+    # dropped because Canvas has no matching announcement setting.
+    ignored_fields: list[tuple[str, str]] = field(default_factory=list)
 
 
 def load_due_dates(repo_path: Path, settings: dict | None = None) -> list[dict[str, Any]]:
@@ -606,16 +609,19 @@ def sync_course_settings(
     manifest_path: Path,
     force_uploads: bool = False,
     verbose: bool = False,
-) -> tuple[dict[str, int], bool]:
+) -> tuple[dict[str, int], bool, list[str]]:
     """Sync course_settings.toml: metadata, grading standards, assignment groups, policies, rubrics.
 
-    Returns ({rubric_title: canvas_id}, settings_synced) where settings_synced is
-    True when course_settings.toml was actually re-uploaded this run.
+    Returns ({rubric_title: canvas_id}, settings_synced, deferred_ag_rules) where
+    settings_synced is True when course_settings.toml was actually re-uploaded
+    this run, and deferred_ag_rules lists assignment-group names whose drop rules
+    Canvas rejected (too few assignments) and must be re-applied after content.
     """
     settings_path = repo_path / "course_settings" / "course_settings.toml"
     rubrics_path = repo_path / "course_settings" / "rubrics.toml"
     settings_key = "course_settings/course_settings.toml"
     rubrics_key = "course_settings/rubrics.toml"
+    deferred_ag_rules: list[str] = []
 
     settings_stale = settings_path.exists() and manifest_lib.needs_sync(
         manifest, settings_key, settings_path, force_uploads
@@ -628,9 +634,9 @@ def sync_course_settings(
         if verbose and settings_path.exists():
             print(f"Skipping (up-to-date): {settings_key}")
         try:
-            return capi.get_rubric_ids(course), False
+            return capi.get_rubric_ids(course), False, deferred_ag_rules
         except Exception:
-            return {}, False
+            return {}, False, deferred_ag_rules
 
     if settings_stale:
         print("Syncing course settings...")
@@ -661,8 +667,10 @@ def sync_course_settings(
             else:
                 print(f"  WARNING: dashboard_image file not found: {dashboard_image}")
 
-        # §1d: assignment groups
-        capi.sync_assignment_groups(course, assignment_groups)
+        # §1d: assignment groups. Drop rules that Canvas rejects because the
+        # group has no assignments yet (always so on a fresh course) are deferred
+        # and re-applied after the content phase by run_sync.
+        deferred_ag_rules[:] = capi.sync_assignment_groups(course, assignment_groups)
 
         # §1e: late policy
         if late_policy:
@@ -738,7 +746,7 @@ def sync_course_settings(
         except Exception:
             pass
 
-    return rubric_ids, settings_stale
+    return rubric_ids, settings_stale, deferred_ag_rules
 
 
 def _phase_assets(ctx: SyncContext) -> None:
@@ -923,6 +931,7 @@ def run_sync(
     errors: list[str] = []
     synced_content_keys: set[str] = set()
     unpublishable_items: list[tuple[str, str]] = []
+    ignored_fields: list[tuple[str, str]] = []
 
     _cs_path = repo_path / "course_settings" / "course_settings.toml"
     _front_page_path: str | None = None
@@ -933,7 +942,7 @@ def run_sync(
             _front_page_path = _settings_dict.get("front_page")
 
     # 0. Course settings (metadata, grading standards, assignment groups, policies, rubrics)
-    rubric_ids, settings_synced = sync_course_settings(course, repo_path, manifest, manifest_path, force_uploads, verbose=verbose)
+    rubric_ids, settings_synced, deferred_ag_rules = sync_course_settings(course, repo_path, manifest, manifest_path, force_uploads, verbose=verbose)
 
     assignment_group_ids = capi.get_assignment_group_ids(course)
 
@@ -957,6 +966,7 @@ def run_sync(
         rubric_ids=rubric_ids,
         synced_keys=synced_content_keys,
         unpublishable_items=unpublishable_items,
+        ignored_fields=ignored_fields,
     )
 
     # 0.5. Syllabus
@@ -976,6 +986,13 @@ def run_sync(
     # 2.6. Question banks
     _phase_question_banks(ctx)
 
+    # 2.65. Assignment-group drop rules deferred from course-settings sync
+    # (the groups now have their assignments, so Canvas accepts the rules).
+    if deferred_ag_rules and _settings_dict:
+        capi.apply_assignment_group_rules(
+            course, _settings_dict.get("assignment_groups", []), deferred_ag_rules
+        )
+
     # 2.7. Front page
     _phase_front_page(ctx, _front_page_path, settings_synced)
 
@@ -987,6 +1004,7 @@ def run_sync(
 
     _print_newer_on_canvas_summary(newer_on_canvas)
     _print_unpublishable_summary(unpublishable_items)
+    _print_ignored_fields_summary(ignored_fields)
     _print_errors_summary(errors)
     return bool(errors)
 
@@ -1000,9 +1018,15 @@ def _entry_resource_key(canvas_type: str, entry: dict[str, Any]) -> ResourceKey 
     if canvas_type == "page":
         url = entry.get("canvas_url")
         return ResourceKey("page", url) if url else None
-    if canvas_type in ("assignment", "discussion", "quiz", "file", "module"):
+    if canvas_type in ("assignment", "discussion", "announcement", "quiz", "file", "module"):
         cid = entry.get("canvas_id")
-        return ResourceKey(canvas_type, int(cid)) if cid is not None else None
+        if cid is None:
+            return None
+        # Announcements are discussion topics in Canvas; a syllabus/front-page
+        # link to one is a /discussion_topics/:id URL, so key it as "discussion"
+        # to match the refs extracted from those bodies.
+        key_type = "discussion" if canvas_type == "announcement" else canvas_type
+        return ResourceKey(key_type, int(cid))
     return None
 
 
@@ -1413,6 +1437,62 @@ def _upload_discussion(
         synced_keys.add(local_key)
 
 
+# Announcement frontmatter keys handled outside the Canvas-settings pass-through:
+# title/published drive the create call, canvas_type is the directory override.
+# Anything not here and not in capi.ANNOUNCEMENT_SETTABLE_FIELDS is dropped with
+# a warning (see _upload_announcement).
+_ANNOUNCEMENT_HANDLED_KEYS = frozenset({"title", "published", "canvas_type"})
+
+
+def _upload_announcement(
+    ctx: SyncContext, existing: dict | None, frontmatter: dict, html: str, title: str,
+    published: bool, local_key: str
+) -> None:
+    """Upload (post) an announcement to Canvas.
+
+    An announcement is a discussion topic created with ``is_announcement=True``.
+    Canvas has **no** unpublished/draft state for announcements — creating one
+    posts it — so this is only ever reached for ``published: true`` files
+    (unpublished ones are skipped upstream in ``_sync_content_file``). ``published``
+    is therefore not sent to Canvas: posting is implicit. Announcements cannot be
+    graded, so (unlike discussions) there are no due-date or assignment-group
+    parameters; any supported discussion-topic settings present in the frontmatter
+    (``capi.ANNOUNCEMENT_SETTABLE_FIELDS`` — e.g. ``delayed_post_at``, ``locked``,
+    ``discussion_type``) are forwarded as-is. A ``delayed_post_at`` in the future
+    schedules the post rather than publishing immediately.
+    """
+    course = ctx.course
+    manifest = ctx.manifest
+    manifest_path = ctx.manifest_path
+    synced_keys = ctx.synced_keys
+    canvas_id = existing["canvas_id"] if existing else None
+    extra = {
+        k: frontmatter[k]
+        for k in capi.ANNOUNCEMENT_SETTABLE_FIELDS
+        if k in frontmatter
+    }
+    # Warn (now and in the end-of-run summary) about any frontmatter field that
+    # is neither handled here nor a supported Canvas announcement setting, so a
+    # typo or an unsupported field is never dropped silently.
+    for key in frontmatter:
+        if key in _ANNOUNCEMENT_HANDLED_KEYS or key in capi.ANNOUNCEMENT_SETTABLE_FIELDS:
+            continue
+        print(
+            f"  WARNING: {local_key}: ignoring frontmatter field '{key}' — "
+            "not a supported announcement setting, so it was not sent to Canvas"
+        )
+        ctx.ignored_fields.append((local_key, key))
+    entry = capi.create_or_update_announcement(
+        course, canvas_id, title, html, **extra
+    )
+    print(f"  Link: {entry['html_url']}")
+    manifest_lib.record(
+        manifest, manifest_path, local_key, entry["canvas_id"], "announcement"
+    )
+    if synced_keys is not None:
+        synced_keys.add(local_key)
+
+
 def _sync_content_file(ctx: SyncContext, md_file: Path) -> None:
     course = ctx.course
     repo_root = ctx.repo_path
@@ -1469,6 +1549,27 @@ def _sync_content_file(ctx: SyncContext, md_file: Path) -> None:
 
     canvas_type = infer_canvas_type(local_key)
 
+    # Canvas has no unpublished/draft state for announcements — an announcement
+    # is posted the moment it is created. So an announcement marked
+    # `published: false` is intentionally NOT sent to Canvas: it stays staged in
+    # the repo until you set `published: true` (then it posts). Skip it here,
+    # before link rewriting could stub-create content it merely references.
+    if canvas_type == "announcement" and not frontmatter.get("published", False):
+        if manifest.get(local_key) is not None:
+            print(
+                f"  WARNING: {local_key}: published is false, but this announcement "
+                "is already posted on Canvas from an earlier run. Canvas cannot "
+                "un-post an announcement, so it is left as-is — delete it in Canvas "
+                "or via `prune` if you want it removed."
+            )
+        else:
+            print(
+                f"  Skipping (unpublished announcement, not sent to Canvas): {local_key}\n"
+                "    Canvas has no draft state for announcements; set 'published: true' "
+                "to post it (optionally with a 'delayed_post_at' date to schedule it)."
+            )
+        return
+
     stub_creator = _make_stub_creator(
         course, manifest, manifest_path, "referenced but not yet synced"
     )
@@ -1492,6 +1593,8 @@ def _sync_content_file(ctx: SyncContext, md_file: Path) -> None:
         _upload_assignment(ctx, existing, frontmatter, html, title, published, local_key)
     elif canvas_type == "discussion":
         _upload_discussion(ctx, existing, frontmatter, html, title, published, local_key)
+    elif canvas_type == "announcement":
+        _upload_announcement(ctx, existing, frontmatter, html, title, published, local_key)
 
 
 def _load_module_order(repo_path: Path) -> dict[str, int]:
@@ -1901,6 +2004,17 @@ def _print_unpublishable_summary(items: list[tuple[str, str]]) -> None:
         print(f"  In module \"{module_title}\": \"{item_title}\"")
 
 
+def _print_ignored_fields_summary(items: list[tuple[str, str]]) -> None:
+    if not items:
+        return
+    print(
+        "\nThe following announcement frontmatter fields were ignored (not a"
+        " supported Canvas announcement setting, so not sent):"
+    )
+    for local_key, field_name in items:
+        print(f"  {local_key}: {field_name}")
+
+
 def _print_errors_summary(errors: list[str]) -> None:
     if not errors:
         return
@@ -1932,6 +2046,7 @@ def run_targeted_sync(
     newer_on_canvas: list[str] = []
     errors: list[str] = []
     unpublishable_items: list[tuple[str, str]] = []
+    ignored_fields: list[tuple[str, str]] = []
     assignment_group_ids = capi.get_assignment_group_ids(course)
     rubric_ids = capi.get_rubric_ids(course)
     _targeted_position_map = _load_module_order(repo_path)
@@ -1953,6 +2068,7 @@ def run_targeted_sync(
         assignment_group_ids=assignment_group_ids,
         rubric_ids=rubric_ids,
         unpublishable_items=unpublishable_items,
+        ignored_fields=ignored_fields,
     )
 
     visited: set[str] = set()
@@ -2049,5 +2165,6 @@ def run_targeted_sync(
 
     _print_newer_on_canvas_summary(newer_on_canvas)
     _print_unpublishable_summary(unpublishable_items)
+    _print_ignored_fields_summary(ignored_fields)
     _print_errors_summary(errors)
     return bool(errors)

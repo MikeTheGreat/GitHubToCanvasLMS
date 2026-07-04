@@ -26,7 +26,7 @@ from .canvas_api import NUMERIC_TAB_IDS, TOOL_TAB_PREFIX
 class TempEntry:
     """One item from the IMSCC, classified and mapped to its output path."""
     imscc_id: str
-    category: str          # page | assignment | discussion | asset | quiz | external_url | lti | course_settings | syllabus
+    category: str          # page | assignment | discussion | announcement | asset | quiz | external_url | lti | course_settings | syllabus
     imscc_path: str        # path within the imscc directory
     local_path: str        # output path relative to output_dir
     title: str = ""
@@ -149,6 +149,20 @@ def _strip_ns(tag: str) -> str:
     if tag.startswith("{"):
         return tag.split("}", 1)[1]
     return tag
+
+
+def _topic_type(meta_path: Path) -> str:
+    """Return the <type> element text of a discussion/announcement topicMeta.
+
+    Canvas marks announcements with ``<type>announcement</type>`` (regular
+    discussions use ``<type>topic</type>``).  Returns '' if the file is missing
+    or unreadable, in which case the caller treats the topic as a discussion.
+    """
+    try:
+        root = ET.parse(meta_path).getroot()
+        return _el_text(root, "type", _xml_ns(root))
+    except (OSError, ET.ParseError):
+        return ""
 
 
 def _classify_syllabus(
@@ -288,11 +302,18 @@ def _classify_discussion(
     if not title:
         title = identifier
 
+    # Announcements are discussion topics flagged with <type>announcement</type>
+    # in their topicMeta; route them to announcements/ instead of discussions/.
+    if meta_path and _topic_type(imscc_dir / meta_path) == "announcement":
+        category, folder = "announcement", "announcements"
+    else:
+        category, folder = "discussion", "discussions"
+
     return TempEntry(
         imscc_id=identifier,
-        category="discussion",
+        category=category,
         imscc_path=href,
-        local_path=f"discussions/{_slugify(title)}.md",
+        local_path=f"{folder}/{_slugify(title)}.md",
         title=title,
         metadata={"meta_path": meta_path or ""},
     )
@@ -1067,25 +1088,14 @@ def _xml_ns(element: ET.Element) -> str:
     return ""
 
 
-def convert_discussion(ctx: ImportContext, entry: TempEntry) -> None:
-    """Convert a discussion topic + topicMeta to discussions/{slug}.md."""
-    meta_path_str = entry.metadata.get("meta_path", "")
-    if not meta_path_str:
-        print(f"  WARNING: No topicMeta found for discussion {entry.imscc_id!r} — skipping")
-        return
+def _read_topic_body(ctx: ImportContext, entry: TempEntry) -> str:
+    """Read an imsdt topic <text> body → Markdown, appending any attachments.
 
-    fm_fields = parse_topic_meta(ctx.imscc_dir / meta_path_str)
-
-    if fm_fields.pop("is_announcement", False):
-        print(f"  WARNING: Skipping announcement: {entry.title!r}")
-        return
-
-    _resolve_assignment_group_and_rubric(ctx, fm_fields, entry.local_path)
-
-    date_fields = _extract_date_fields(fm_fields)
-    _collect_due_date(ctx.due_dates_collector, fm_fields.get("title", ""), "discussion", date_fields)
-
-    # read and decode the HTML body from the imsdt XML
+    Shared by discussions and announcements: decodes the HTML body, rewrites
+    internal IMSCC links, converts to Markdown, shifts headings, and — if the
+    topic carries an ``<attachments>`` block (spec §4.7) — appends a
+    ``## Attachments`` section linking each file under ``assets/``.
+    """
     topic_tree = ET.parse(ctx.imscc_dir / entry.imscc_path)
     topic_root = topic_tree.getroot()
     ns = _xml_ns(topic_root)
@@ -1114,6 +1124,29 @@ def convert_discussion(ctx: ImportContext, entry: TempEntry) -> None:
                 lines.append(f"- [{filename}]({rel_prefix}assets/{href})")
             markdown = "\n".join(lines)
 
+    return markdown
+
+
+def convert_discussion(ctx: ImportContext, entry: TempEntry) -> None:
+    """Convert a discussion topic + topicMeta to discussions/{slug}.md."""
+    meta_path_str = entry.metadata.get("meta_path", "")
+    if not meta_path_str:
+        print(f"  WARNING: No topicMeta found for discussion {entry.imscc_id!r} — skipping")
+        return
+
+    fm_fields = parse_topic_meta(ctx.imscc_dir / meta_path_str)
+
+    if fm_fields.pop("is_announcement", False):
+        print(f"  WARNING: Skipping announcement: {entry.title!r}")
+        return
+
+    _resolve_assignment_group_and_rubric(ctx, fm_fields, entry.local_path)
+
+    date_fields = _extract_date_fields(fm_fields)
+    _collect_due_date(ctx.due_dates_collector, fm_fields.get("title", ""), "discussion", date_fields)
+
+    markdown = _read_topic_body(ctx, entry)
+
     frontmatter = _build_frontmatter(
         fm_fields,
         commented_fields=date_fields if date_fields else None,
@@ -1123,6 +1156,78 @@ def convert_discussion(ctx: ImportContext, entry: TempEntry) -> None:
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(frontmatter + "\n" + markdown + "\n", encoding="utf-8")
     print(f"Converting discussion: {entry.local_path}")
+
+
+# ---------------------------------------------------------------------------
+# Group 6a: Announcement converter
+# ---------------------------------------------------------------------------
+
+# topicMeta tags that never appear in the generated frontmatter: `title` is
+# promoted to an active field, and `position` is dropped entirely — Canvas orders
+# announcements by post date, not position, so surfacing it would falsely imply
+# announcement ordering is controllable from the repo.  `published` is
+# intentionally not sourced from workflow_state — imported announcements are
+# always created unpublished so they can be published by hand when the time is right.
+_ANNOUNCEMENT_OMIT_TAGS = ("title", "position")
+
+
+def parse_announcement_meta(xml_path: Path) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Parse an announcement topicMeta into (active, commented) frontmatter dicts.
+
+    Active fields: ``title`` and ``published`` (forced to ``False`` on import).
+    Every other leaf element in the topicMeta (``type``, ``workflow_state``,
+    ``discussion_type``, ``delayed_post_at``, ``posted_at``, …) is returned as a
+    commented field: the original export values are preserved for reference, and
+    the ones Canvas actually accepts (see ``ANNOUNCEMENT_SETTABLE_FIELDS``) take
+    effect if the user uncomments them.  ``position`` is dropped entirely.
+    """
+    root = ET.parse(xml_path).getroot()
+    ns = _xml_ns(root)
+
+    active: dict[str, Any] = {"title": _el_text(root, "title", ns), "published": False}
+
+    commented: dict[str, Any] = {}
+    for child in root:
+        tag = _strip_ns(child.tag)
+        # Skip omitted tags and non-leaf containers (e.g. a nested <assignment>).
+        if tag in _ANNOUNCEMENT_OMIT_TAGS or len(child) > 0:
+            continue
+        text = (child.text or "").strip()
+        if text:
+            commented[tag] = text
+    return active, commented
+
+
+def convert_announcement(ctx: ImportContext, entry: TempEntry) -> None:
+    """Convert an announcement topic + topicMeta to announcements/{slug}.md.
+
+    Only the announcement body itself is imported — any student replies, likes,
+    or comments are never part of an IMSCC export, so there is nothing to drop.
+    The announcement is written with ``published: false`` so `update` creates it
+    in Canvas unpublished until it is manually published later.
+    """
+    meta_path_str = entry.metadata.get("meta_path", "")
+    if not meta_path_str:
+        print(f"  WARNING: No topicMeta found for announcement {entry.imscc_id!r} — skipping")
+        return
+
+    active, commented = parse_announcement_meta(ctx.imscc_dir / meta_path_str)
+    markdown = _read_topic_body(ctx, entry)
+
+    frontmatter = _build_frontmatter(
+        active,
+        commented_fields=commented or None,
+        comment_note=(
+            "Original Canvas export metadata (commented out). Uncomment a supported "
+            "announcement setting — delayed_post_at, lock_at, locked, discussion_type, "
+            "require_initial_post, allow_rating, only_graders_can_rate, sort_by_rating, "
+            "podcast_enabled, pinned — to apply it on upload; the rest are reference-only."
+        ),
+    )
+    out_path = ctx.output_dir / entry.local_path
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_text(frontmatter + "\n" + markdown + "\n", encoding="utf-8")
+    print(f"Converting announcement: {entry.local_path}")
 
 
 # ---------------------------------------------------------------------------
@@ -2728,6 +2833,11 @@ def run_import(imscc_path: Path, output_dir: Path) -> None:
         for entry in temp_manifest.values():
             if entry.category == "discussion":
                 convert_discussion(ctx, entry)
+
+        # Phase 5a: announcements
+        for entry in temp_manifest.values():
+            if entry.category == "announcement":
+                convert_announcement(ctx, entry)
 
         # Phase 5b: quizzes
         for entry in temp_manifest.values():

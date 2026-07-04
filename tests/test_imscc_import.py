@@ -206,6 +206,40 @@ def test_discussion_group_and_rubric_association_imported(imported_dir: Path) ->
     assert "identifierref" not in text
 
 
+# --- Announcements ---
+
+def test_announcement_md_created(imported_dir: Path) -> None:
+    assert (imported_dir / "announcements" / "midterm-reminder.md").exists()
+    # An announcement must not also land in discussions/.
+    assert not (imported_dir / "discussions" / "midterm-reminder.md").exists()
+
+
+def test_announcement_active_frontmatter(imported_dir: Path) -> None:
+    text = (imported_dir / "announcements" / "midterm-reminder.md").read_text()
+    assert 'title: "Midterm Reminder"' in text
+    assert "published: false" in text  # always unpublished on import
+
+
+def test_announcement_position_dropped_entirely(imported_dir: Path) -> None:
+    """position appears nowhere (not active, not commented) — Canvas date-orders
+    announcements, so exposing position would be misleading."""
+    text = (imported_dir / "announcements" / "midterm-reminder.md").read_text()
+    assert "position" not in text
+
+
+def test_announcement_metadata_kept_as_comments(imported_dir: Path) -> None:
+    text = (imported_dir / "announcements" / "midterm-reminder.md").read_text()
+    # Original export metadata preserved as commented lines for optional fidelity.
+    assert "# type: \"announcement\"" in text
+    assert "# delayed_post_at: \"2025-10-13T08:00:00\"" in text
+    assert "# posted_at: \"2025-10-06T08:00:00\"" in text
+
+
+def test_announcement_body_imported(imported_dir: Path) -> None:
+    text = (imported_dir / "announcements" / "midterm-reminder.md").read_text()
+    assert "The midterm is **next week**." in text
+
+
 # --- Modules ---
 
 def test_module_md_created(imported_dir: Path) -> None:

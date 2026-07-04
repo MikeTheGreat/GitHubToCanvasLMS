@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<topicMeta identifier="g_announcement_1_meta"
+           xmlns="http://canvas.instructure.com/xsd/cccv1p0"
+           xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+  <topic_id>g_announcement_1</topic_id>
+  <title>Midterm Reminder</title>
+  <position>2</position>
+  <type>announcement</type>
+  <discussion_type>side_comment</discussion_type>
+  <workflow_state>active</workflow_state>
+  <delayed_post_at>2025-10-13T08:00:00</delayed_post_at>
+  <posted_at>2025-10-06T08:00:00</posted_at>
+  <has_group_category>false</has_group_category>
+  <allow_rating>false</allow_rating>
+</topicMeta>

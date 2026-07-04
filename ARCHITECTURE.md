@@ -67,7 +67,7 @@ git clone (local)
 
 **Processing order:**
 
-Course settings and syllabus are applied first. Then `assets/`. Then regular content folders alphabetically. Then `quizzes/`. Then `question_banks/`. Finally `modules/`. All other content folders (`assignments/`, `discussions/`, `pages/`, etc.) are processed in alphabetical order, with files within each folder also sorted alphabetically. `course_settings/`, `question_banks/`, `quizzes/`, `snippets/`, and `assets/` are excluded from the regular content pass — each has its own dedicated phase.
+Course settings and syllabus are applied first. Then `assets/`. Then regular content folders alphabetically. Then `quizzes/`. Then `question_banks/`. Finally `modules/`. All other content folders (`announcements/`, `assignments/`, `discussions/`, `pages/`, etc.) are processed in alphabetical order, with files within each folder also sorted alphabetically. `course_settings/`, `question_banks/`, `quizzes/`, `snippets/`, and `assets/` are excluded from the regular content pass — each has its own dedicated phase.
 
 **Content subfolder support:**
 
@@ -105,6 +105,7 @@ The `assets/` folder hierarchy is mirrored into Canvas Files. `assets/images/fig
 - `<a href="../pages/foo.md">` → look up or stub-create → rewrite to `/courses/:id/pages/slug`
 - `<a href="../assignments/bar.md">` → look up or stub-create → rewrite to `/courses/:id/assignments/:id`
 - `<a href="../discussions/baz.md">` → look up or stub-create → rewrite to `/courses/:id/discussion_topics/:id`
+- `<a href="../announcements/qux.md">` → look up or stub-create → rewrite to `/courses/:id/discussion_topics/:id` (announcements are discussion topics)
 - `<a href="../quizzes/foo/foo.md">` → look up → rewrite to `/courses/:id/quizzes/:id`
 - `<a href="https://...">` → leave unchanged
 - `<a href="#anchor">` → leave unchanged
@@ -243,7 +244,7 @@ run — that entry keeps its manifest key so it can be retried.
 
 | `canvas_type` | `--delete` | `--unpublish` |
 | --- | --- | --- |
-| `page`, `assignment`, `discussion`, `quiz`, `module` | ✅ deleted | ✅ unpublished |
+| `page`, `assignment`, `discussion`, `announcement`, `quiz`, `module` | ✅ deleted | ✅ unpublished |
 | `file` | ✅ deleted | ⏭️ skipped (Canvas files use a hidden/locked state, not a `published` boolean) |
 | `question_bank` | ⏭️ skipped (no reliable delete via `canvasapi`) | ⏭️ skipped (no unpublish concept) |
 | `syllabus`, `course_settings`, `module_order` | ⏭️ skipped (bookkeeping / course fields, no standalone object) | ⏭️ skipped |
@@ -270,7 +271,8 @@ github-to-canvas import <imscc_path> <output_dir>
 | --- | --- | --- |
 | `webcontent` | `wiki_content/` | `page` |
 | `webcontent` | `web_resources/` | `asset` |
-| `imsdt_xmlv1p1` | `gXXX.xml` | `discussion` |
+| `imsdt_xmlv1p1` | `gXXX.xml` (topicMeta `<type>` = `topic`) | `discussion` |
+| `imsdt_xmlv1p1` | `gXXX.xml` (topicMeta `<type>` = `announcement`) | `announcement` |
 | `associatedcontent/...` | `gXXX/*.html` | `assignment` |
 | `imswl_xmlv1p1` | `gXXX.xml` | `external_url` |
 | `imsqti_xmlv1p2/...` | `gXXX/assessment_meta.xml` (standard) or via `<dependency>` (Canvas export) | `quiz` |
@@ -299,7 +301,8 @@ The `_syllabus` resource (`course_settings/syllabus.html`) → `course_settings/
 3. Copy `web_resources/` → `assets/`, preserving subdirectory structure
 4. **Pages:** strip `<html>/<head>/<body>` wrapper, rewrite internal links, Pandoc HTML→Markdown, write `pages/{stem}.md` with `title` and `published: true` frontmatter
 5. **Assignments:** read `gXXX/assignment_settings.xml` for title, points_possible, due_at, lock_at, unlock_at, submission_types, grading_type, workflow_state; convert HTML body; write `assignments/{stem}.md`
-6. **Discussions:** parse topic XML body and paired topicMeta for title, published, require_initial_post; skip announcements with warning; if `<attachments>` block present, append a `## Attachments` section with `../assets/{href}` links; write `discussions/{slugify(title)}.md`
+6. **Discussions:** parse topic XML body and paired topicMeta for title, published, require_initial_post; if `<attachments>` block present, append a `## Attachments` section with `../assets/{href}` links; write `discussions/{slugify(title)}.md`. (Announcements — topicMeta `<type>` = `announcement` — are routed to phase 6a instead.)
+6a. **Announcements:** a discussion topic whose topicMeta `<type>` is `announcement`. Only the announcement body itself is imported — student replies/likes/comments are never present in an IMSCC export, so there is nothing to drop. The body is read exactly like a discussion (shared `_read_topic_body()`, including any `## Attachments`). Frontmatter carries only two active fields: `title` and `published: false` (**always** false on import, regardless of the export's `workflow_state`). Because Canvas has no draft state for announcements, `published: false` means `update` **does not post it yet** — it stays staged in the repo until you set `published: true` (e.g. post the midterm reminder when the midterm is near); see the "Content mapping" announcements entry. Every other topicMeta leaf element (`type`, `workflow_state`, `discussion_type`, `delayed_post_at`, `posted_at`, …) is written as a **commented** frontmatter line (`# key: value`) — the settings Canvas actually accepts (`canvas_api.ANNOUNCEMENT_SETTABLE_FIELDS`) take effect if the user uncomments them, and the rest are reference-only. The topicMeta `<position>` element is **dropped entirely** (not active, not commented): Canvas orders announcements by post date, not position, so exposing it would falsely imply announcement ordering is controllable from the repo. Written to `announcements/{slugify(title)}.md`. See `parse_announcement_meta()` / `convert_announcement()`. On `update`, a `published: false` announcement is skipped (not posted); see the announcements entry under "Content mapping" and `_upload_announcement()` in the sync pipeline.
 6b. **Quizzes:** read `gXXX/assessment_meta.xml` for quiz settings; parse QTI 1.2 XML (`gXXX/gXXX.xml`) for questions; write `quizzes/{slug}/{slug}.md` and one file per question under `quizzes/{slug}/questions/`; unsupported question types emit a warning and are skipped
 
 **Assignment group / rubric association:** Assignments, graded discussions, and quizzes each carry an `assignment_group_identifierref` (top-level for assignments/quizzes, nested under `<assignment>` for discussions); assignments and discussions additionally carry `rubric_identifierref` + `rubric_use_for_grading`. `_resolve_assignment_group_and_rubric()` resolves these IMSCC identifiers against identifier→title maps built once in `run_import()` from `assignment_groups.xml`/`rubrics.xml`, writing `assignment_group_id`/`rubric` frontmatter fields by title (matching how `sync.py` resolves them) and `rubric_use_for_grading` → `use_for_grading` (only when a rubric is present). Refs that don't resolve print a warning and are dropped rather than written as unresolvable raw identifiers.
@@ -400,7 +403,7 @@ Copying asset: assets/Images/logo.png
 Converting page: pages/syllabus.md
 Converting assignment: assignments/week-1-problem-set.md
 Converting discussion: discussions/week-01-forum.md
-  WARNING: Skipping announcement: "Coding Exercises 07 has been graded"
+Converting announcement: announcements/midterm-reminder.md
   Converting question: quizzes/week-1-quiz/questions/what-is-2-plus-2.md
   Converting question: quizzes/week-1-quiz/questions/explain-gravity.md
 Converting quiz: quizzes/week-1-quiz/week-1-quiz.md
@@ -551,11 +554,14 @@ Content type is determined by **directory convention** — no explicit config ne
 pages/          → Canvas Pages
 assignments/    → Canvas Assignments
 discussions/    → Canvas Discussion Topics
+announcements/  → Canvas Announcements (discussion topics with is_announcement)
 quizzes/        → Canvas Quizzes (Classic) — nested structure, see below
 modules/        → Canvas Modules (special — see below)
 ```
 
 The directory name maps directly to the Canvas content type. A frontmatter `canvas_type` field can override the default if a file lives outside these directories.
+
+**Announcements** (`_upload_announcement()` → `capi.create_or_update_announcement()`): a Canvas announcement is a discussion topic created with `is_announcement=True`, so it reuses the discussion-topic API, manifest addressing (`discussion_topics/:id`), timestamp check, prune, and link-rewriting — the only differences are the `is_announcement` flag and a distinct `canvas_type = "announcement"` recorded in the manifest. **Canvas has no unpublished/draft state for announcements** — creating one posts it immediately (`create_discussion_topic(..., published=False)` is rejected with *"This topic cannot be set to draft state because it is an announcement"*). So `published` acts as an on/off switch for whether the announcement is sent at all: a `published: false` announcement is **skipped** in `_sync_content_file()` (with a printed warning) — it stays staged in the repo until you set `published: true`, at which point it posts. The skip happens *before* link rewriting, so a not-yet-posted announcement never stub-creates the content it links to. If a `published: false` file already has a manifest entry (it was posted on a previous run), the tool warns that Canvas cannot un-post an announcement and leaves it (use `prune` or delete it in Canvas). Because posting is implicit, `published` itself is never sent to Canvas; a future `delayed_post_at` schedules the post instead of publishing immediately. Announcements cannot be graded, so — unlike discussions — no due-date, assignment-group, or rubric parameters are sent; but any discussion-topic settings in `capi.ANNOUNCEMENT_SETTABLE_FIELDS` (`delayed_post_at`, `lock_at`, `locked`, `discussion_type`, `require_initial_post`, `allow_rating`, `only_graders_can_rate`, `sort_by_rating`, `podcast_enabled`, `pinned`) that appear as active frontmatter are forwarded verbatim. Any other active frontmatter key (other than the handled `title`/`published`/`canvas_type`) is **not** silently dropped: `_upload_announcement()` prints a `WARNING: … ignoring frontmatter field '…'` as it happens and appends `(local_key, field)` to `ctx.ignored_fields`, which `_print_ignored_fields_summary()` lists at the end of the run (alongside the newer-on-Canvas and unpublishable-items summaries). There is no `position` handling — Canvas orders announcements by post date, so it is neither imported nor sent (and an explicit `position:` in a file is reported as ignored). Announcements are **not** valid Canvas module items; if one is referenced from a module the item is skipped with a warning. The `publish` (MkDocs) subcommand does not stage announcements (they are not module content).
 
 ### Per-file metadata (YAML frontmatter)
 
@@ -860,7 +866,7 @@ These files are never uploaded as Canvas Pages. Each has a dedicated upload path
 The following sections are handled separately from the flat `course.update()` call:
 
 - `[[grading_standards]]` — each entry created via `course.create_grading_standard()` if title not already present; first standard's ID passed as `grading_standard_id` in the course update
-- `[[assignment_groups]]` — each entry created or updated via `course.create_assignment_group()` / `ag.edit()`, matched by name; processed in `position` order. Both calls must pass **flat top-level params** (`name`, `position`, `group_weight`, `rules`): Canvas's assignment-group endpoints `params.permit` only those names and silently drop anything nested under `assignment_group[...]` (unlike most other Canvas endpoints, which expect the nested form). Per-group `group_weight` values only take effect (and only display on the Assignments page) when the course-level `apply_assignment_group_weights` flag is on, so `update_course_metadata()` sets that flag in the `course.update()` call: `group_weighting_scheme = "percent"` (the Canvas IMSCC export name, round-tripped by the importer) maps to `true`, any other value to `false`, and when the key is absent the flag is inferred as `true` if any group has a `group_weight`. When neither the key nor any weight is present the flag is not sent, leaving the course's existing setting alone.
+- `[[assignment_groups]]` — each entry created or updated via `course.create_assignment_group()` / `ag.edit()`, matched by name; processed in `position` order. Both calls must pass **flat top-level params** (`name`, `position`, `group_weight`, `rules`): Canvas's assignment-group endpoints `params.permit` only those names and silently drop anything nested under `assignment_group[...]` (unlike most other Canvas endpoints, which expect the nested form). Per-group `group_weight` values only take effect (and only display on the Assignments page) when the course-level `apply_assignment_group_weights` flag is on, so `update_course_metadata()` sets that flag in the `course.update()` call: `group_weighting_scheme = "percent"` (the Canvas IMSCC export name, round-tripped by the importer) maps to `true`, any other value to `false`, and when the key is absent the flag is inferred as `true` if any group has a `group_weight`. When neither the key nor any weight is present the flag is not sent, leaving the course's existing setting alone. **Drop rules deferral:** a group's `rules` (`drop_lowest`/`drop_highest`) are validated by Canvas against the *current* number of assignments in the group ("Drop rules cannot be higher than the number of assignments"). Because course settings are applied in phase 0 — before any assignments exist — a fresh course would reject every drop rule. So `sync_assignment_groups()` catches that specific `BadRequest`, creates/updates the group **without** the rules (warning `Deferring drop rules for assignment group …`), and returns the affected group names; `run_sync()` then re-applies them via `capi.apply_assignment_group_rules()` after the content and quiz phases (phase 2.65), once the groups contain their assignments. A group that still lacks enough assignments at that point is warned about, not fatal.
 - `[late_policy]` — applied via `PATCH /api/v1/courses/:id/late_policy` (raw requester call, not wrapped in `canvasapi`). This genuinely is a REST resource, so it stays REST.
 - `[default_post_policy]` — applied via the **GraphQL** `setCoursePostPolicy` mutation (`POST /api/graphql`), issued through the shared requester (`canvas_api.graphql()` / `update_post_policy()`). Post policies are GraphQL-only in Canvas; the former `PUT /api/v1/courses/:id/post_policies` REST route does not exist and returned 404.
 - `tab_configuration` — controls the **course-navigation sidebar** (the left-hand "Assignments", "Modules", … links). An inline array, one entry per tab, in display order. Each entry is applied via `tab.update(position=…, hidden=…)` against `course.get_tabs()`; `hidden` defaults to false. Positions are assigned in list order **starting at 2**, because Canvas pins **Home** at position 1 and rejects any other tab placed there (`"That tab location is invalid"`).

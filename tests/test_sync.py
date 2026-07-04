@@ -230,6 +230,189 @@ def test_first_sync_assignment_frontmatter_passed_to_canvas(mock_course, course_
 
 
 # ---------------------------------------------------------------------------
+# Scenario 1b: Announcements — created as unpublished discussion topics
+# ---------------------------------------------------------------------------
+
+
+def _write_announcement(
+    course_root: Path, *, published: bool, extra: dict[str, str] | None = None
+) -> None:
+    """Add an announcements/midterm-reminder.md file to an isolated course_root.
+
+    ``extra`` maps frontmatter keys to raw YAML values (rendered verbatim).
+    """
+    d = course_root / "announcements"
+    d.mkdir(exist_ok=True)
+    lines = [
+        "---",
+        'title: "Midterm Reminder"',
+        f"published: {'true' if published else 'false'}",
+    ]
+    lines += [f"{k}: {v}" for k, v in (extra or {}).items()]
+    lines += ["---", "", "The midterm is next week.", ""]
+    (d / "midterm-reminder.md").write_text("\n".join(lines), encoding="utf-8")
+
+
+def _announcement_create_call(mock_course):
+    """Return the create_discussion_topic call flagged is_announcement, or None."""
+    for c in mock_course.create_discussion_topic.call_args_list:
+        if c.kwargs.get("is_announcement"):
+            return c
+    return None
+
+
+def test_unpublished_announcement_is_skipped_not_posted(mock_course, course_root, mocker, capsys) -> None:
+    """Canvas has no draft announcements, so published:false is skipped (not created)."""
+    mocker.patch("github_to_canvas.manifest.flush")
+    _setup_first_sync_mocks(mock_course)
+    _write_announcement(course_root, published=False)
+
+    run_sync(_config(), course_root)
+
+    # Nothing announcement-shaped was sent to Canvas.
+    assert _announcement_create_call(mock_course) is None
+    out = capsys.readouterr().out
+    assert "Skipping (unpublished announcement, not sent to Canvas)" in out
+    assert "set 'published: true' to post it" in out
+
+
+def test_unpublished_announcement_skipped_before_link_rewriting(
+    mock_course, course_root, mocker, capsys
+) -> None:
+    """The skip happens before link rewriting, so a broken link in an unpublished
+    announcement is never validated (no error, no stub-creation)."""
+    mocker.patch("github_to_canvas.manifest.flush")
+    _setup_first_sync_mocks(mock_course)
+    (course_root / "announcements").mkdir(exist_ok=True)
+    (course_root / "announcements" / "midterm-reminder.md").write_text(
+        '---\ntitle: "Midterm Reminder"\npublished: false\n---\n\n'
+        "See [missing](../pages/does-not-exist.md).\n",
+        encoding="utf-8",
+    )
+
+    run_sync(_config(), course_root)
+
+    out = capsys.readouterr().out
+    # The dead link was never touched (it would otherwise log "local file not found").
+    assert "does-not-exist.md" not in out
+
+
+def test_published_announcement_is_posted_without_published_kwarg(mock_course, course_root, mocker) -> None:
+    """published:true posts the announcement; `published` is not sent (Canvas posts by default)."""
+    mocker.patch("github_to_canvas.manifest.flush")
+    _setup_first_sync_mocks(mock_course)
+    _write_announcement(course_root, published=True)
+
+    run_sync(_config(), course_root)
+
+    call = _announcement_create_call(mock_course)
+    assert call is not None
+    assert call.kwargs["is_announcement"] is True
+    assert call.kwargs["title"] == "Midterm Reminder"
+    assert "published" not in call.kwargs  # posting is implicit for announcements
+
+
+def test_announcement_forwards_supported_fields_and_ignores_others(
+    mock_course, course_root, mocker
+) -> None:
+    """Supported discussion-topic settings pass through; unsupported/internal keys don't."""
+    mocker.patch("github_to_canvas.manifest.flush")
+    _setup_first_sync_mocks(mock_course)
+    _write_announcement(
+        course_root,
+        published=True,
+        extra={
+            "delayed_post_at": '"2025-10-13T08:00:00-07:00"',
+            "discussion_type": '"threaded"',
+            "allow_rating": "true",
+            "locked": "true",
+            "type": '"announcement"',   # internal — not forwarded
+            "position": "2",            # removed from the model — not forwarded
+        },
+    )
+
+    run_sync(_config(), course_root)
+
+    call = _announcement_create_call(mock_course)
+    assert call is not None
+    # Supported fields reach Canvas...
+    assert call.kwargs["delayed_post_at"] == "2025-10-13T08:00:00-07:00"
+    assert call.kwargs["discussion_type"] == "threaded"
+    assert call.kwargs["allow_rating"] is True
+    assert call.kwargs["locked"] is True
+    # ...internal/removed fields do not.
+    assert "type" not in call.kwargs
+    assert "position" not in call.kwargs
+
+
+def test_announcement_ignored_fields_warn_inline_and_in_summary(
+    mock_course, course_root, mocker, capsys
+) -> None:
+    """Unsupported fields are warned about as they happen and listed in the summary;
+    handled/supported fields (canvas_type, allow_rating) are not."""
+    mocker.patch("github_to_canvas.manifest.flush")
+    _setup_first_sync_mocks(mock_course)
+    _write_announcement(
+        course_root,
+        published=True,
+        extra={
+            "canvas_type": "announcement",  # handled → no warning
+            "allow_rating": "true",         # supported → no warning
+            "type": '"announcement"',       # unsupported → warn
+            "bogus_field": "true",          # unsupported → warn
+        },
+    )
+
+    run_sync(_config(), course_root)
+
+    out = capsys.readouterr().out
+    # Inline warnings as it happens
+    assert "ignoring frontmatter field 'type'" in out
+    assert "ignoring frontmatter field 'bogus_field'" in out
+    # End-of-run summary lists them
+    assert "announcement frontmatter fields were ignored" in out
+    assert "announcements/midterm-reminder.md: type" in out
+    assert "announcements/midterm-reminder.md: bogus_field" in out
+    # Handled / supported fields are never flagged
+    assert "field 'canvas_type'" not in out
+    assert "field 'allow_rating'" not in out
+
+
+def test_announcement_no_ignored_summary_when_all_fields_supported(
+    mock_course, course_root, mocker, capsys
+) -> None:
+    """A clean announcement prints no 'ignored fields' summary."""
+    mocker.patch("github_to_canvas.manifest.flush")
+    _setup_first_sync_mocks(mock_course)
+    _write_announcement(course_root, published=True, extra={"allow_rating": "true"})
+
+    run_sync(_config(), course_root)
+
+    out = capsys.readouterr().out
+    assert "were ignored" not in out
+
+
+def test_announcement_recorded_with_announcement_type(mock_course, course_root, mocker) -> None:
+    """The manifest records the item as canvas_type='announcement' (not 'discussion')."""
+    from github_to_canvas import manifest as manifest_mod
+
+    mocker.patch("github_to_canvas.manifest.flush")
+    record_spy = mocker.spy(manifest_mod, "record")
+    _setup_first_sync_mocks(mock_course)
+    _write_announcement(course_root, published=True)
+
+    run_sync(_config(), course_root)
+
+    # record(manifest, manifest_path, local_key, canvas_id, canvas_type)
+    recorded = {
+        c.args[2]: c.args[4]
+        for c in record_spy.call_args_list
+        if c.args[2] == "announcements/midterm-reminder.md"
+    }
+    assert recorded == {"announcements/midterm-reminder.md": "announcement"}
+
+
+# ---------------------------------------------------------------------------
 # Scenario 2: Second sync — all items updated, no creates
 # ---------------------------------------------------------------------------
 
@@ -2379,6 +2562,97 @@ def test_existing_group_edited_with_flat_params() -> None:
     homework.edit.assert_called_once_with(name="Homework", position=1, group_weight=30.0)
 
 
+def test_drop_rules_deferred_when_group_has_no_assignments() -> None:
+    """On a fresh course a group has 0 assignments, so Canvas rejects the drop
+    rule. sync_assignment_groups retries without rules and reports it deferred."""
+    from canvasapi.exceptions import BadRequest
+
+    course = MagicMock()
+    course.get_assignment_groups.return_value = []
+    err = BadRequest(
+        '{"errors":{"rules":[{"message":"Drop rules cannot be higher than the '
+        'number of assignments"}]}}'
+    )
+    # First create (with rules) fails; retry (without rules) succeeds.
+    course.create_assignment_group.side_effect = [err, MagicMock()]
+
+    deferred = _capi.sync_assignment_groups(course, [
+        {"title": "Homework", "position": 1, "group_weight": 7.5,
+         "rules": [{"drop_type": "drop_lowest", "drop_count": 1}]},
+    ])
+
+    assert deferred == ["Homework"]
+    assert course.create_assignment_group.call_count == 2
+    # First attempt included rules; the retry dropped them.
+    assert "rules" in course.create_assignment_group.call_args_list[0][1]
+    assert "rules" not in course.create_assignment_group.call_args_list[1][1]
+
+
+def test_drop_rule_unrelated_badrequest_propagates() -> None:
+    """A BadRequest that is NOT the assignment-count case is not swallowed."""
+    from canvasapi.exceptions import BadRequest
+
+    course = MagicMock()
+    course.get_assignment_groups.return_value = []
+    course.create_assignment_group.side_effect = BadRequest('{"errors":"nope"}')
+
+    with pytest.raises(BadRequest):
+        _capi.sync_assignment_groups(course, [
+            {"title": "Homework",
+             "rules": [{"drop_type": "drop_lowest", "drop_count": 1}]},
+        ])
+
+
+def test_apply_assignment_group_rules_edits_named_groups() -> None:
+    """apply_assignment_group_rules re-applies drop rules to the named groups."""
+    course = MagicMock()
+    hw = MagicMock(); hw.name = "Homework"
+    exams = MagicMock(); exams.name = "Exams"
+    course.get_assignment_groups.return_value = [hw, exams]
+
+    groups = [
+        {"title": "Homework", "rules": [{"drop_type": "drop_lowest", "drop_count": 1}]},
+        {"title": "Exams"},  # no rules → never touched
+    ]
+    _capi.apply_assignment_group_rules(course, groups, ["Homework"])
+
+    hw.edit.assert_called_once_with(name="Homework", rules={"drop_lowest": 1})
+    exams.edit.assert_not_called()
+
+
+def test_drop_rules_applied_after_content_via_run_sync(mock_course, course_root, mocker) -> None:
+    """End-to-end: a group whose drop rule Canvas first rejects is created, then
+    the rule is re-applied after the content phase (single `update` run)."""
+    from canvasapi.exceptions import BadRequest
+
+    mocker.patch("github_to_canvas.manifest.flush")
+    cs = course_root / "course_settings" / "course_settings.toml"
+    cs.parent.mkdir(parents=True, exist_ok=True)
+    cs.write_text(
+        'title = "Intro to CS"\n'
+        'assignment_groups = [\n'
+        '    { title = "Homework", position = 1, group_weight = 100.0, '
+        'rules = [ { drop_type = "drop_lowest", drop_count = 1 } ] },\n'
+        ']\n'
+    )
+    _setup_first_sync_mocks(mock_course)
+
+    fresh_group = MagicMock(); fresh_group.name = "Homework"
+    # No groups exist yet; first create (with rules) is rejected, retry succeeds.
+    mock_course.get_assignment_groups.return_value = [fresh_group]
+    err = BadRequest('{"errors":{"rules":[{"message":"... number of assignments"}]}}')
+    mock_course.create_assignment_group.side_effect = [err, fresh_group]
+
+    run_sync(_config(), course_root)
+
+    # The deferred rule is re-applied after content via ag.edit(rules=...).
+    rule_edits = [
+        c for c in fresh_group.edit.call_args_list
+        if c.kwargs.get("rules") == {"drop_lowest": 1}
+    ]
+    assert rule_edits, "expected drop rules to be re-applied after content sync"
+
+
 def test_group_weights_reach_canvas_via_run_sync(mock_course, mocker, tmp_path) -> None:
     """Full pipeline: weighted assignment_groups enable the course flag and
     pass group_weight to create_assignment_group."""
@@ -2809,6 +3083,31 @@ def test_prune_delete_removes_orphans_and_keeps_present(
     assert "pages/kept.md" in manifest
 
 
+def test_prune_announcement_deletes_and_unpublishes_like_discussion(
+    mock_course, mocker, tmp_path
+) -> None:
+    """An orphaned announcement is a discussion topic: deleted via .delete(),
+    unpublished via .update(published=False)."""
+    root = _prune_repo(tmp_path)
+    manifest = {
+        "announcements/gone.md": {"canvas_type": "announcement", "canvas_id": 77},
+    }
+    mocker.patch("github_to_canvas.manifest.load", return_value=manifest)
+    mocker.patch("github_to_canvas.manifest.flush")
+
+    assert run_prune(_config(), root, "delete") is False
+    mock_course.get_discussion_topic.assert_called_once_with(77)
+    mock_course.get_discussion_topic.return_value.delete.assert_called_once()
+    assert manifest == {}
+
+    # And the unpublish path uses .update(published=False).
+    manifest["announcements/gone.md"] = {"canvas_type": "announcement", "canvas_id": 77}
+    mock_course.reset_mock()
+    assert run_prune(_config(), root, "unpublish") is False
+    mock_course.get_discussion_topic.return_value.update.assert_called_once_with(published=False)
+    assert manifest == {}
+
+
 def test_prune_unpublish_sets_published_false(mock_course, mocker, tmp_path) -> None:
     root = _prune_repo(tmp_path)
     manifest = {
@@ -2956,6 +3255,27 @@ def test_prune_keeps_page_linked_from_syllabus(mock_course, mocker, tmp_path) ->
     # A page referenced from the syllabus body is kept.
     assert "pages/syl.md" in manifest
     mock_course.get_page.return_value.delete.assert_not_called()
+
+
+def test_prune_keeps_announcement_linked_from_syllabus(mock_course, mocker, tmp_path) -> None:
+    """An announcement is a discussion_topic URL in the syllabus, so it is protected."""
+    root = _prune_repo(tmp_path)
+    manifest = {
+        "announcements/gone.md": {"canvas_type": "announcement", "canvas_id": 88},
+    }
+    mocker.patch("github_to_canvas.manifest.load", return_value=manifest)
+    mocker.patch("github_to_canvas.manifest.flush")
+    mock_course.show_front_page.return_value = None
+    _set_syllabus_body(
+        mock_course,
+        '<a href="/courses/123/discussion_topics/88">announcement link</a>',
+    )
+
+    had_errors = run_prune(_config(), root, "delete")
+
+    assert had_errors is False
+    assert "announcements/gone.md" in manifest
+    mock_course.get_discussion_topic.return_value.delete.assert_not_called()
 
 
 def test_prune_unpublish_keeps_front_page(mock_course, mocker, tmp_path) -> None:

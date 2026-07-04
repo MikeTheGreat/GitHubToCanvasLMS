@@ -273,8 +273,15 @@ Caveats to address:
 ## In course_settings.toml, within due_dates, KEEP and CREATE_NONE_THEN_KEEP do the same thing
 Maybe remove KEEP?
 
-## Would be nice to import Announcements
-- By default make them unpublished, so they could be posted later?
+## Announcements: possible follow-ups
+
+Announcements are fully supported end to end — import, `update` (create as
+`is_announcement=true`, unpublished unless `published: true`, with optional
+settings like `delayed_post_at`/`locked`/`discussion_type` forwarded), `prune`,
+and `mv` (see ARCHITECTURE.md → import/update). Remaining nice-to-have:
+
+- Optionally surface announcements on the `publish` MkDocs site (today they are
+  intentionally excluded, since they are not module content).
 
 ## Publish command: include a schedule
 - it would be nice to include a schedule, sorted chronologically

@@ -26,7 +26,9 @@ from github_to_canvas.imscc_import import (
     _shift_headings_down,
     _simplify_pandoc_attrs,
     _strip_canvas_img_attrs,
+    parse_announcement_meta,
     parse_assignment_settings,
+    parse_imsmanifest,
     parse_qti_questions,
     parse_topic_meta,
     rewrite_imscc_links,
@@ -383,6 +385,41 @@ def test_announcement_flagged(tmp_path: Path) -> None:
     )
     fields = parse_topic_meta(xml)
     assert fields["is_announcement"] is True
+
+
+# ---------------------------------------------------------------------------
+# Announcements: classification + parse_announcement_meta
+# ---------------------------------------------------------------------------
+
+
+def test_announcement_classified_into_announcements_folder() -> None:
+    manifest = parse_imsmanifest(FIXTURE_DIR)
+    entry = manifest["g_announcement_1"]
+    assert entry.category == "announcement"
+    assert entry.local_path == "announcements/midterm-reminder.md"
+
+
+def test_discussion_still_classified_as_discussion() -> None:
+    manifest = parse_imsmanifest(FIXTURE_DIR)
+    assert manifest["g_discussion_1"].category == "discussion"
+
+
+def test_parse_announcement_meta_active_fields() -> None:
+    active, _ = parse_announcement_meta(FIXTURE_DIR / "g_announcement_1_meta.xml")
+    assert active == {"title": "Midterm Reminder", "published": False}
+    # position is dropped entirely (Canvas orders announcements by date, not position).
+    assert "position" not in active
+
+
+def test_parse_announcement_meta_commented_fields() -> None:
+    _, commented = parse_announcement_meta(FIXTURE_DIR / "g_announcement_1_meta.xml")
+    # Original export metadata preserved for reference / opt-in on upload.
+    assert commented["type"] == "announcement"
+    assert commented["delayed_post_at"] == "2025-10-13T08:00:00"
+    assert commented["posted_at"] == "2025-10-06T08:00:00"
+    # title is active and position is dropped, so neither appears in comments.
+    assert "title" not in commented
+    assert "position" not in commented
 
 
 # ---------------------------------------------------------------------------

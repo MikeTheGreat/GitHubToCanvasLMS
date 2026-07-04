@@ -116,19 +116,49 @@ def sync_grading_standards(course, standards: list[dict[str, Any]]) -> int | Non
     return first_id
 
 
-def sync_assignment_groups(course, groups: list[dict[str, Any]]) -> None:
-    """Create or update assignment groups in position order."""
+def _extract_drop_rules(group: dict[str, Any]) -> dict[str, Any]:
+    """Build the Canvas ``rules`` dict (drop_lowest/drop_highest) for a group."""
+    rules: dict[str, Any] = {}
+    for r in group.get("rules", []):
+        if r.get("drop_type") == "drop_lowest":
+            rules["drop_lowest"] = r.get("drop_count", 0)
+        elif r.get("drop_type") == "drop_highest":
+            rules["drop_highest"] = r.get("drop_count", 0)
+    return rules
+
+
+def _is_drop_rule_count_error(exc: BadRequest) -> bool:
+    """True if Canvas rejected drop rules only because the group currently has
+    fewer assignments than the drop count (fixable once assignments are synced)."""
+    return "number of assignments" in str(exc)
+
+
+def _upsert_assignment_group(course, existing: dict, name: str, kwargs: dict[str, Any]) -> None:
+    # The update endpoint only permits flat top-level params; anything nested
+    # under assignment_group[...] is silently dropped by Canvas.
+    if name in existing:
+        existing[name].edit(name=name, **kwargs)
+    else:
+        course.create_assignment_group(name=name, **kwargs)
+
+
+def sync_assignment_groups(course, groups: list[dict[str, Any]]) -> list[str]:
+    """Create or update assignment groups in position order.
+
+    Returns the names of groups whose drop rules could not be applied yet
+    because Canvas reported the group has fewer assignments than the drop count.
+    This is always the case on a fresh course, where assignment groups are
+    created (during course-settings sync) before any assignments exist in them.
+    The caller re-applies those rules via `apply_assignment_group_rules` once the
+    content phase has populated the groups.
+    """
     if not groups:
-        return
+        return []
     existing = {ag.name: ag for ag in course.get_assignment_groups()}
+    deferred: list[str] = []
     for group in sorted(groups, key=lambda g: g.get("position", 9999)):
         name = group.get("title", "")
-        rules: dict[str, Any] = {}
-        for r in group.get("rules", []):
-            if r.get("drop_type") == "drop_lowest":
-                rules["drop_lowest"] = r.get("drop_count", 0)
-            elif r.get("drop_type") == "drop_highest":
-                rules["drop_highest"] = r.get("drop_count", 0)
+        rules = _extract_drop_rules(group)
         kwargs: dict[str, Any] = {}
         if "group_weight" in group:
             kwargs["group_weight"] = group["group_weight"]
@@ -136,12 +166,53 @@ def sync_assignment_groups(course, groups: list[dict[str, Any]]) -> None:
             kwargs["position"] = group["position"]
         if rules:
             kwargs["rules"] = rules
-        if name in existing:
-            # The update endpoint only permits flat top-level params; anything
-            # nested under assignment_group[...] is silently dropped by Canvas.
-            existing[name].edit(name=name, **kwargs)
-        else:
-            course.create_assignment_group(name=name, **kwargs)
+        try:
+            _upsert_assignment_group(course, existing, name, kwargs)
+        except BadRequest as exc:
+            if not (rules and _is_drop_rule_count_error(exc)):
+                raise
+            # Too few assignments in the group right now: create/update it
+            # without the drop rules, and defer them until content is synced.
+            print(
+                f"  Deferring drop rules for assignment group {name!r} "
+                "until its assignments are synced"
+            )
+            kwargs.pop("rules", None)
+            _upsert_assignment_group(course, existing, name, kwargs)
+            deferred.append(name)
+    return deferred
+
+
+def apply_assignment_group_rules(
+    course, groups: list[dict[str, Any]], names: list[str] | None = None
+) -> None:
+    """(Re)apply drop rules to assignment groups after their assignments exist.
+
+    If ``names`` is given, only those groups are touched; otherwise every group
+    that defines drop rules is. A group that still has too few assignments is
+    warned about rather than aborting the sync.
+    """
+    wanted = set(names) if names is not None else None
+    targets = [
+        g for g in groups
+        if _extract_drop_rules(g) and (wanted is None or g.get("title", "") in wanted)
+    ]
+    if not targets:
+        return
+    existing = {ag.name: ag for ag in course.get_assignment_groups()}
+    for group in targets:
+        name = group.get("title", "")
+        ag = existing.get(name)
+        if ag is None:
+            continue
+        try:
+            ag.edit(name=name, rules=_extract_drop_rules(group))
+            print(f"  Applied drop rules for assignment group {name!r}")
+        except BadRequest as exc:
+            print(
+                f"  WARNING: could not apply drop rules for assignment group "
+                f"{name!r} (does it have enough assignments?): {exc}"
+            )
 
 
 def get_assignment_group_ids(course) -> dict[str, int]:
@@ -386,6 +457,9 @@ _GETTERS = {
     "page": lambda course, key: course.get_page(key),
     "assignment": lambda course, key: course.get_assignment(key),
     "discussion": lambda course, key: course.get_discussion_topic(key),
+    # Announcements are discussion topics (is_announcement=true), so they are
+    # fetched the same way.
+    "announcement": lambda course, key: course.get_discussion_topic(key),
     "quiz": lambda course, key: course.get_quiz(key),
     "module": lambda course, key: course.get_module(key),
     "file": lambda course, key: course.get_file(key),
@@ -433,18 +507,19 @@ def get_canvas_updated_at(course, canvas_type: str, identifier) -> datetime | No
 # Manifest types prune can act on. Other types (syllabus, course_settings,
 # module_order, question_bank) have no standalone deletable/unpublishable object.
 DELETABLE_TYPES = frozenset(
-    {"page", "assignment", "discussion", "quiz", "module", "file"}
+    {"page", "assignment", "discussion", "announcement", "quiz", "module", "file"}
 )
 UNPUBLISHABLE_TYPES = frozenset(
-    {"page", "assignment", "discussion", "quiz", "module"}
+    {"page", "assignment", "discussion", "announcement", "quiz", "module"}
 )
 
 # canvas_type → callable(obj) that sets published=False. The edit-kwarg shape
-# differs per type, and discussions use .update() instead of .edit().
+# differs per type, and discussions/announcements use .update() instead of .edit().
 _UNPUBLISHERS = {
     "page": lambda obj: obj.edit(wiki_page={"published": False}),
     "assignment": lambda obj: obj.edit(assignment={"published": False}),
     "discussion": lambda obj: obj.update(published=False),
+    "announcement": lambda obj: obj.update(published=False),
     "quiz": lambda obj: obj.edit(quiz={"published": False}),
     "module": lambda obj: obj.edit(module={"published": False}),
 }
@@ -663,19 +738,57 @@ def create_or_update_discussion(
     )
 
 
-def _do_discussion(
+# Discussion-topic parameters that are meaningful for an announcement and may be
+# set from its frontmatter (forwarded verbatim to create/update). Announcements
+# cannot be graded, so grading / due-date / assignment-group params are excluded.
+# `title`, `published`, and `is_announcement` are handled separately.
+ANNOUNCEMENT_SETTABLE_FIELDS = (
+    "delayed_post_at",
+    "lock_at",
+    "locked",
+    "discussion_type",
+    "require_initial_post",
+    "allow_rating",
+    "only_graders_can_rate",
+    "sort_by_rating",
+    "podcast_enabled",
+    "pinned",
+)
+
+
+def create_or_update_announcement(
     course, canvas_id: int | None, title: str, body: str, **kwargs
+) -> dict[str, Any]:
+    """Create or update an announcement (a discussion topic with is_announcement).
+
+    Announcements share the discussion-topic API; the only difference is the
+    ``is_announcement=True`` flag and a ``canvas_type`` of ``announcement`` in
+    the returned manifest entry.  Additional discussion-topic settings from the
+    file's frontmatter (see ``ANNOUNCEMENT_SETTABLE_FIELDS``) are passed through
+    in ``kwargs``.
+    """
+    kwargs["is_announcement"] = True
+    return _retry_without_dates(
+        lambda **kw: _do_discussion(course, canvas_id, title, body, canvas_type="announcement", **kw),
+        kwargs,
+        _strip_discussion_dates,
+    )
+
+
+def _do_discussion(
+    course, canvas_id: int | None, title: str, body: str,
+    canvas_type: str = "discussion", **kwargs
 ) -> dict[str, Any]:
     if canvas_id is not None:
         try:
             topic = course.get_discussion_topic(canvas_id)
             topic = topic.update(title=title, message=body, **kwargs)
         except ResourceDoesNotExist:
-            print(f"  Canvas discussion {canvas_id} was deleted; re-creating")
+            print(f"  Canvas {canvas_type} {canvas_id} was deleted; re-creating")
             topic = course.create_discussion_topic(title=title, message=body, **kwargs)
     else:
         topic = course.create_discussion_topic(title=title, message=body, **kwargs)
-    return {"canvas_type": "discussion", "canvas_id": topic.id, "html_url": topic.html_url}
+    return {"canvas_type": canvas_type, "canvas_id": topic.id, "html_url": topic.html_url}
 
 
 def create_stub(course, canvas_type: str, title: str) -> dict[str, Any]:
@@ -691,6 +804,11 @@ def create_stub(course, canvas_type: str, title: str) -> dict[str, Any]:
     if canvas_type == "discussion":
         topic = course.create_discussion_topic(title=title, message="", published=False)
         return {"canvas_type": "discussion", "canvas_id": topic.id}
+    if canvas_type == "announcement":
+        topic = course.create_discussion_topic(
+            title=title, message="", published=False, is_announcement=True
+        )
+        return {"canvas_type": "announcement", "canvas_id": topic.id}
     raise ValueError(f"Cannot create stub for canvas_type: {canvas_type!r}")
 
 

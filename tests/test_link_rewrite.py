@@ -56,6 +56,10 @@ def test_infer_type_discussion() -> None:
     assert infer_canvas_type("discussions/intro.md") == "discussion"
 
 
+def test_infer_type_announcement() -> None:
+    assert infer_canvas_type("announcements/midterm-reminder.md") == "announcement"
+
+
 def test_infer_type_file() -> None:
     assert infer_canvas_type("assets/images/fig.png") == "file"
 
@@ -81,6 +85,12 @@ def test_canvas_url_assignment() -> None:
 
 def test_canvas_url_discussion() -> None:
     entry = {"canvas_type": "discussion", "canvas_id": 55555}
+    assert canvas_content_url(entry, COURSE_ID) == f"/courses/{COURSE_ID}/discussion_topics/55555"
+
+
+def test_canvas_url_announcement() -> None:
+    # Announcements are discussion topics in Canvas, so they use the same URL shape.
+    entry = {"canvas_type": "announcement", "canvas_id": 55555}
     assert canvas_content_url(entry, COURSE_ID) == f"/courses/{COURSE_ID}/discussion_topics/55555"
 
 

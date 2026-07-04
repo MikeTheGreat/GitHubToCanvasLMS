@@ -23,9 +23,9 @@ Only if the user specifically asks you to commit should you do so; even then you
 
 TODO.md is only for possible future work items. Once a feature is implemented, document it in ARCHITECTURE.md (internal notes) and README.md (user documentation), then remove it from TODO.md. Do not leave completed items in TODO.md marked as "DONE".
 
-## Keep the three core subcommands in sync
+## Keep the core subcommands in sync
 
-The three most important subcommands are **update**, **import**, and **publish**. When making changes to any one of them, ensure the same change is reflected in the other two where applicable.
+The three most important subcommands are **update**, **import**, **mv** and **publish**. When making changes to any one of them, ensure the same change is reflected in the other two where applicable.
 
 ## When asked to update documentation, you should normally consider three main files
 - README.md is for notes that humans using the tool will read

@@ -148,6 +148,17 @@
       <file href="g_discussion_attach_meta.xml"/>
     </resource>
 
+    <!-- Announcement (imsdt topic whose topicMeta type is "announcement") -->
+    <resource identifier="g_announcement_1" type="imsdt_xmlv1p1" href="g_announcement_1.xml">
+      <file href="g_announcement_1.xml"/>
+      <dependency identifierref="g_announcement_1_meta"/>
+    </resource>
+    <resource identifier="g_announcement_1_meta"
+              type="associatedcontent/imscc_xmlv1p1/learning-application-resource"
+              href="g_announcement_1_meta.xml">
+      <file href="g_announcement_1_meta.xml"/>
+    </resource>
+
     <!-- Standalone QTI question bank (question_bank category via objectbank detection) -->
     <resource identifier="g_bank_1"
               type="associatedcontent/imscc_xmlv1p1/learning-application-resource"
