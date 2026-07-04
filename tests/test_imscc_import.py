@@ -159,6 +159,14 @@ def test_assignment_group_and_grading_fields_imported(imported_dir: Path) -> Non
     assert "grader_names_visible_to_final_grader: true" in text
 
 
+def test_assignment_group_and_rubric_association_imported(imported_dir: Path) -> None:
+    text = (imported_dir / "assignments" / "my-assignment.md").read_text()
+    assert 'assignment_group_id: "Homework"' in text
+    assert 'rubric: "Test Rubric"' in text
+    assert "use_for_grading: true" in text
+    assert "identifierref" not in text
+
+
 def test_assignment_peer_review_fields_imported(imported_dir: Path) -> None:
     text = (imported_dir / "assignments" / "my-assignment.md").read_text()
     assert "peer_reviews: true" in text
@@ -188,6 +196,14 @@ def test_discussion_has_points_frontmatter(imported_dir: Path) -> None:
 def test_discussion_require_initial_post_frontmatter(imported_dir: Path) -> None:
     text = (imported_dir / "discussions" / "week-01-forum.md").read_text()
     assert "require_initial_post: true" in text
+
+
+def test_discussion_group_and_rubric_association_imported(imported_dir: Path) -> None:
+    text = (imported_dir / "discussions" / "week-01-forum.md").read_text()
+    assert 'assignment_group_id: "Exams"' in text
+    assert 'rubric: "Participation Rubric"' in text
+    assert "use_for_grading: true" in text
+    assert "identifierref" not in text
 
 
 # --- Modules ---
@@ -297,12 +313,18 @@ def test_quiz_md_has_title(imported_dir: Path) -> None:
 
 def test_quiz_md_has_quiz_type(imported_dir: Path) -> None:
     text = (imported_dir / "quizzes" / "a-quiz" / "a-quiz.md").read_text()
-    assert "quiz_type: assignment" in text
+    assert 'quiz_type: "assignment"' in text
 
 
 def test_quiz_md_has_points(imported_dir: Path) -> None:
     text = (imported_dir / "quizzes" / "a-quiz" / "a-quiz.md").read_text()
     assert "points_possible: 6.0" in text
+
+
+def test_quiz_assignment_group_imported(imported_dir: Path) -> None:
+    text = (imported_dir / "quizzes" / "a-quiz" / "a-quiz.md").read_text()
+    assert 'assignment_group_id: "Exams"' in text
+    assert "identifierref" not in text
 
 
 def test_quiz_md_lists_questions_in_order(imported_dir: Path) -> None:
@@ -326,7 +348,7 @@ def test_quiz_essay_question_file_created(imported_dir: Path) -> None:
 
 def test_quiz_mcq_has_correct_frontmatter(imported_dir: Path) -> None:
     text = (imported_dir / "quizzes" / "a-quiz" / "questions" / "what-is-22.md").read_text()
-    assert "question_type: multiple_choice_question" in text
+    assert 'question_type: "multiple_choice_question"' in text
     assert "points_possible: 1.0" in text
     assert "correct: 2" in text
 
@@ -342,7 +364,7 @@ def test_quiz_mcq_has_answers_section(imported_dir: Path) -> None:
 def test_quiz_essay_has_no_correct_field(imported_dir: Path) -> None:
     text = (imported_dir / "quizzes" / "a-quiz" / "questions" / "explain-something.md").read_text()
     assert "correct:" not in text
-    assert "question_type: essay_question" in text
+    assert 'question_type: "essay_question"' in text
 
 
 def test_quiz_essay_has_question_text(imported_dir: Path) -> None:
@@ -423,6 +445,7 @@ def test_course_settings_toml_has_assignment_groups(imported_dir: Path) -> None:
     titles = [g["title"] for g in data["assignment_groups"]]
     assert "Homework" in titles
     assert "Exams" in titles
+    assert all("identifier" not in g for g in data["assignment_groups"])
 
 
 def test_course_settings_toml_assignment_group_rules(imported_dir: Path) -> None:

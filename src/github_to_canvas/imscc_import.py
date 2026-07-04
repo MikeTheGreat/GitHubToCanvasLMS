@@ -47,6 +47,8 @@ class ImportContext:
     course_id: int | str | None = None
     base_url: str | None = None
     due_dates_collector: list[dict[str, Any]] | None = None
+    assignment_group_titles: dict[str, str] = field(default_factory=dict)
+    rubric_titles: dict[str, str] = field(default_factory=dict)
 
 
 # ---------------------------------------------------------------------------
@@ -877,6 +879,18 @@ def parse_assignment_settings(xml_path: Path) -> dict[str, Any]:
         "grading_type": grading_type,
     }
 
+    # Assignment group + rubric association (resolved from IMSCC identifierrefs
+    # to Canvas titles by convert_assignment(), which has access to the maps)
+    group_ref = _text("assignment_group_identifierref") or None
+    if group_ref:
+        result["assignment_group_identifierref"] = group_ref
+    rubric_ref = _text("rubric_identifierref") or None
+    if rubric_ref:
+        result["rubric_identifierref"] = rubric_ref
+        use_for_grading = _bool("rubric_use_for_grading")
+        if use_for_grading is not None:
+            result["use_for_grading"] = use_for_grading
+
     # Group assignment
     group_cat = _int("group_category_id")
     if group_cat:
@@ -942,10 +956,43 @@ def _collect_due_date(
     collector.append(entry)
 
 
+def _resolve_assignment_group_and_rubric(
+    ctx: ImportContext, fm_fields: dict[str, Any], local_path: str
+) -> None:
+    """Resolve assignment_group_identifierref/rubric_identifierref to Canvas
+    titles (in-place on *fm_fields*), matching the `assignment_group_id` /
+    `rubric` / `use_for_grading` frontmatter keys `sync.py` expects."""
+    group_ref = fm_fields.pop("assignment_group_identifierref", None)
+    if group_ref:
+        group_title = ctx.assignment_group_titles.get(group_ref)
+        if group_title:
+            fm_fields["assignment_group_id"] = group_title
+        else:
+            print(
+                f"  WARNING: {local_path}: assignment group ref '{group_ref}' "
+                "not found in assignment_groups.xml"
+            )
+
+    rubric_ref = fm_fields.pop("rubric_identifierref", None)
+    use_for_grading = fm_fields.pop("use_for_grading", None)
+    if rubric_ref:
+        rubric_title = ctx.rubric_titles.get(rubric_ref)
+        if rubric_title:
+            fm_fields["rubric"] = rubric_title
+            if use_for_grading is not None:
+                fm_fields["use_for_grading"] = use_for_grading
+        else:
+            print(
+                f"  WARNING: {local_path}: rubric ref '{rubric_ref}' "
+                "not found in rubrics.xml"
+            )
+
+
 def convert_assignment(ctx: ImportContext, entry: TempEntry) -> None:
     """Convert an assignment HTML + settings XML to assignments/{stem}.md."""
     settings_path = ctx.imscc_dir / entry.metadata["settings_path"]
     fm_fields = parse_assignment_settings(settings_path)
+    _resolve_assignment_group_and_rubric(ctx, fm_fields, entry.local_path)
 
     date_fields = _extract_date_fields(fm_fields)
     _collect_due_date(ctx.due_dates_collector, fm_fields.get("title", ""), "assignment", date_fields)
@@ -1000,6 +1047,15 @@ def parse_topic_meta(xml_path: Path) -> dict[str, Any]:
         result["due_at"] = _el_text(assignment_el, "due_at", ns) or None
         result["lock_at"] = _el_text(assignment_el, "lock_at", ns) or None
         result["unlock_at"] = _el_text(assignment_el, "unlock_at", ns) or None
+        group_ref = _el_text(assignment_el, "assignment_group_identifierref", ns) or None
+        if group_ref:
+            result["assignment_group_identifierref"] = group_ref
+        rubric_ref = _el_text(assignment_el, "rubric_identifierref", ns) or None
+        if rubric_ref:
+            result["rubric_identifierref"] = rubric_ref
+            use_for_grading_raw = _el_text(assignment_el, "rubric_use_for_grading", ns)
+            if use_for_grading_raw:
+                result["use_for_grading"] = use_for_grading_raw.lower() == "true"
 
     return result
 
@@ -1023,6 +1079,8 @@ def convert_discussion(ctx: ImportContext, entry: TempEntry) -> None:
     if fm_fields.pop("is_announcement", False):
         print(f"  WARNING: Skipping announcement: {entry.title!r}")
         return
+
+    _resolve_assignment_group_and_rubric(ctx, fm_fields, entry.local_path)
 
     date_fields = _extract_date_fields(fm_fields)
     _collect_due_date(ctx.due_dates_collector, fm_fields.get("title", ""), "discussion", date_fields)
@@ -1118,6 +1176,9 @@ def parse_quiz_meta(meta_path: Path) -> tuple[dict[str, Any], str]:
             result["shuffle_answers"] = shuffle_raw.lower() == "true"
         if show_correct_raw:
             result["show_correct_answers"] = show_correct_raw.lower() == "true"
+        group_ref = _el_text(root, "assignment_group_identifierref", ns) or None
+        if group_ref:
+            result["assignment_group_identifierref"] = group_ref
         for date_key in _DATE_KEYS:
             val = _el_text(root, date_key, ns)
             if val:
@@ -1504,6 +1565,7 @@ def convert_quiz(ctx: ImportContext, entry: TempEntry) -> None:
     fm_fields, description = parse_quiz_meta(meta_path) if meta_path else ({}, "")
     if not fm_fields:
         fm_fields = {"title": entry.title, "published": False, "quiz_type": "assignment"}
+    _resolve_assignment_group_and_rubric(ctx, fm_fields, entry.local_path)
 
     date_fields = _extract_date_fields(fm_fields)
     _collect_due_date(ctx.due_dates_collector, fm_fields.get("title", ""), "quiz", date_fields)
@@ -1912,6 +1974,9 @@ def _parse_assignment_groups(xml_path: Path) -> list[dict[str, Any]]:
 
         for ag_el in root.findall(ag_tag):
             g: dict[str, Any] = {"title": _el_text(ag_el, "title", ns)}
+            identifier = ag_el.get("identifier", "")
+            if identifier:
+                g["identifier"] = identifier
             pos_raw = _el_text(ag_el, "position", ns)
             if pos_raw.isdigit():
                 g["position"] = int(pos_raw)
@@ -2303,7 +2368,9 @@ def _write_course_settings_toml(
     if grading_standards:
         aot["grading_standards"] = grading_standards
     if assignment_groups:
-        aot["assignment_groups"] = assignment_groups
+        aot["assignment_groups"] = [
+            {k: v for k, v in g.items() if k != "identifier"} for g in assignment_groups
+        ]
     tab_configuration = course_settings.get("tab_configuration")
     if tab_configuration:
         aot["tab_configuration"] = tab_configuration
@@ -2528,6 +2595,31 @@ def _replace_canvas_course_url_in_md_files(output_dir: Path, base_url: str) -> N
 # Frontmatter helper
 # ---------------------------------------------------------------------------
 
+def _yaml_quote(s: str) -> str:
+    """Double-quote a YAML scalar string, escaping backslashes and quotes."""
+    escaped = s.replace("\\", "\\\\").replace('"', '\\"')
+    return f'"{escaped}"'
+
+
+def _format_scalar(value: Any) -> str:
+    """Render a single frontmatter value (bool/str/list/number) as YAML.
+
+    Strings are always double-quoted (backslashes/quotes escaped) so Canvas
+    titles or names containing YAML-special characters (colons, quotes, #,
+    etc.) can never corrupt the frontmatter block.
+    """
+    if isinstance(value, bool):
+        return str(value).lower()
+    if isinstance(value, list):
+        items = ", ".join(
+            _yaml_quote(v) if isinstance(v, str) else str(v) for v in value
+        )
+        return f"[{items}]"
+    if isinstance(value, str):
+        return _yaml_quote(value)
+    return str(value)
+
+
 def _build_frontmatter(
     fields: dict[str, Any],
     commented_fields: dict[str, Any] | None = None,
@@ -2543,28 +2635,14 @@ def _build_frontmatter(
     for key, value in fields.items():
         if value is None:
             continue
-        if isinstance(value, bool):
-            lines.append(f"{key}: {str(value).lower()}")
-        elif isinstance(value, list):
-            items = ", ".join(str(v) for v in value)
-            lines.append(f"{key}: [{items}]")
-        else:
-            s = str(value)
-            if key == "title" or any(c in s for c in ':#{}[]|>&*!,?') or s.startswith('"'):
-                lines.append(f'{key}: "{s}"')
-            else:
-                lines.append(f"{key}: {s}")
+        lines.append(f"{key}: {_format_scalar(value)}")
     if commented_fields:
         if comment_note:
             lines.append(f"# {comment_note}")
         for key, value in commented_fields.items():
             if value is None:
                 continue
-            s = str(value)
-            if key == "title" or any(c in s for c in ':#{}[]|>&*!,?') or s.startswith('"'):
-                lines.append(f'# {key}: "{s}"')
-            else:
-                lines.append(f"# {key}: {s}")
+            lines.append(f"# {key}: {_format_scalar(value)}")
     lines.append("---")
     return "\n".join(lines)
 
@@ -2610,6 +2688,21 @@ def run_import(imscc_path: Path, output_dir: Path) -> None:
 
         due_dates: list[dict[str, Any]] = []
 
+        # Assignment group / rubric identifier -> title maps, so assignments
+        # can resolve their assignment_group_identifierref/rubric_identifierref
+        # to the names sync.py matches against (see _resolve_assignment_group_and_rubric)
+        imscc_cs_dir = imscc_dir / "course_settings"
+        assignment_group_titles = {
+            g["identifier"]: g["title"]
+            for g in _parse_assignment_groups(imscc_cs_dir / "assignment_groups.xml")
+            if g.get("identifier") and g.get("title")
+        }
+        rubric_titles = {
+            r["identifier"]: r["title"]
+            for r in _parse_rubrics(imscc_cs_dir / "rubrics.xml")
+            if r.get("identifier") and r.get("title")
+        }
+
         ctx = ImportContext(
             imscc_dir=imscc_dir,
             temp_manifest=temp_manifest,
@@ -2617,6 +2710,8 @@ def run_import(imscc_path: Path, output_dir: Path) -> None:
             course_id=course_id,
             base_url=base_url,
             due_dates_collector=due_dates,
+            assignment_group_titles=assignment_group_titles,
+            rubric_titles=rubric_titles,
         )
 
         # Phase 3: pages

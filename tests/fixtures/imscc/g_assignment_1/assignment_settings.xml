@@ -10,7 +10,9 @@
   <grading_type>points</grading_type>
   <submission_types>online_upload</submission_types>
   <workflow_state>published</workflow_state>
-  <assignment_group_identifierref>g_default_group</assignment_group_identifierref>
+  <assignment_group_identifierref>g_ag_1</assignment_group_identifierref>
+  <rubric_identifierref>gtest_rubric_1</rubric_identifierref>
+  <rubric_use_for_grading>true</rubric_use_for_grading>
   <omit_from_final_grade>false</omit_from_final_grade>
   <group_category_id>12345</group_category_id>
   <grade_group_students_individually>true</grade_group_students_individually>

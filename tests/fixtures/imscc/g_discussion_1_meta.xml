@@ -20,5 +20,8 @@
     <grading_type>points</grading_type>
     <submission_types>discussion_topic</submission_types>
     <workflow_state>published</workflow_state>
+    <assignment_group_identifierref>g_ag_2</assignment_group_identifierref>
+    <rubric_identifierref>gtest_rubric_2</rubric_identifierref>
+    <rubric_use_for_grading>true</rubric_use_for_grading>
   </assignment>
 </topicMeta>

@@ -405,12 +405,27 @@ def test_frontmatter_none_values_omitted() -> None:
 
 def test_frontmatter_list_rendered_inline() -> None:
     result = _build_frontmatter({"submission_types": ["online_upload", "online_text_entry"]})
-    assert "[online_upload, online_text_entry]" in result
+    assert '["online_upload", "online_text_entry"]' in result
 
 
 def test_frontmatter_float() -> None:
     result = _build_frontmatter({"points_possible": 50.0})
     assert "50.0" in result
+
+
+def test_frontmatter_string_always_quoted() -> None:
+    result = _build_frontmatter({"assignment_group_id": "Homework"})
+    assert 'assignment_group_id: "Homework"' in result
+
+
+def test_frontmatter_embedded_quote_escaped() -> None:
+    result = _build_frontmatter({"title": 'Say "Hello"'})
+    assert r'title: "Say \"Hello\""' in result
+
+
+def test_frontmatter_embedded_backslash_escaped() -> None:
+    result = _build_frontmatter({"title": r"C:\Temp"})
+    assert r'title: "C:\\Temp"' in result
 
 
 # ---------------------------------------------------------------------------
@@ -945,7 +960,7 @@ def test_write_multiple_response_correct_is_index_list(tmp_path: Path) -> None:
     p = tmp_path / "q.md"
     _write_question_file(q, p)
     text = p.read_text()
-    assert "question_type: multiple_response_question" in text
+    assert 'question_type: "multiple_response_question"' in text
     assert "correct: [1, 2, 4]" in text
     assert "## Answers" in text
 
@@ -970,7 +985,7 @@ def test_write_fill_in_blank_has_answers_frontmatter(tmp_path: Path) -> None:
     p = tmp_path / "q.md"
     _write_question_file(q, p)
     text = p.read_text()
-    assert "question_type: fill_in_blank_question" in text
+    assert 'question_type: "fill_in_blank_question"' in text
     assert "answers:" in text
     assert "300000" in text
     assert "## Answers" not in text
@@ -996,8 +1011,8 @@ def test_write_pattern_match_has_match_type_frontmatter(tmp_path: Path) -> None:
     p = tmp_path / "q.md"
     _write_question_file(q, p)
     text = p.read_text()
-    assert "question_type: pattern_match_question" in text
-    assert "match_type: substring" in text
+    assert 'question_type: "pattern_match_question"' in text
+    assert 'match_type: "substring"' in text
     assert "answers:" in text
     assert "python" in text
 
