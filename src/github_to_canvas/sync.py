@@ -1555,19 +1555,20 @@ def _sync_content_file(ctx: SyncContext, md_file: Path) -> None:
     # the repo until you set `published: true` (then it posts). Skip it here,
     # before link rewriting could stub-create content it merely references.
     if canvas_type == "announcement" and not frontmatter.get("published", False):
-        if manifest.get(local_key) is not None:
-            print(
-                f"  WARNING: {local_key}: published is false, but this announcement "
-                "is already posted on Canvas from an earlier run. Canvas cannot "
-                "un-post an announcement, so it is left as-is — delete it in Canvas "
-                "or via `prune` if you want it removed."
-            )
-        else:
-            print(
-                f"  Skipping (unpublished announcement, not sent to Canvas): {local_key}\n"
-                "    Canvas has no draft state for announcements; set 'published: true' "
-                "to post it (optionally with a 'delayed_post_at' date to schedule it)."
-            )
+        if verbose:
+            if manifest.get(local_key) is not None:
+                print(
+                    f"  WARNING: {local_key}: published is false, but this announcement "
+                    "is already posted on Canvas from an earlier run. Canvas cannot "
+                    "un-post an announcement, so it is left as-is — delete it manually "
+                    "in Canvas if you want it removed."
+                )
+            else:
+                print(
+                    f"  Skipping (unpublished announcement, not sent to Canvas): {local_key}\n"
+                    "    Canvas has no draft state for announcements; set 'published: true' "
+                    "to post it (optionally with a 'delayed_post_at' date to schedule it)."
+                )
         return
 
     stub_creator = _make_stub_creator(
