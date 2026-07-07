@@ -19,8 +19,13 @@ from typing import Any
 
 import yaml
 
-from .convert import expand_frontmatter_snippets, preprocess_snippets
-from .quiz import parse_question_file
+from .convert import (
+    apply_outside_fences,
+    expand_frontmatter_snippets,
+    preprocess_snippets,
+    strip_raw_nonhtml_blocks,
+)
+from .quiz import parse_question_file, split_quiz_body
 from .sync import _content_default_published, parse_frontmatter, parse_module_body
 
 
@@ -176,13 +181,6 @@ def _rewrite_quiz_links(text: str) -> str:
 # Pandoc → MkDocs Markdown normalisation
 # ---------------------------------------------------------------------------
 
-# Matches Pandoc raw-attribute blocks for non-HTML formats (e.g. {=comment},
-# {=comment-for-in-person-sections}).  These are removed entirely — content
-# is format-specific and not meant for HTML output.
-_RAW_NONHTML_BLOCK_RE = re.compile(
-    r"^```\{=(?!html\})[\w-]+\}\s*\n.*?^```\s*\n?", re.MULTILINE | re.DOTALL
-)
-
 # Matches Pandoc raw-HTML blocks:  ```{=html}\n<content>\n```  →  <content>
 _RAW_HTML_BLOCK_RE = re.compile(
     r"^```\{=html\}\s*\n(.*?)^```\s*$", re.MULTILINE | re.DOTALL
@@ -210,21 +208,20 @@ def _strip_pandoc_syntax(text: str) -> str:
     Handles raw-HTML blocks, attribute blocks, Pandoc spans, and backslash
     escapes while leaving real fenced code blocks untouched.
     """
-    text = _RAW_NONHTML_BLOCK_RE.sub("", text)
+    text = strip_raw_nonhtml_blocks(text)
     text = _RAW_HTML_BLOCK_RE.sub(r"\1", text)
-    lines: list[str] = []
-    in_fence = False
-    for line in text.splitlines(keepends=True):
-        stripped = line.lstrip()
-        if stripped.startswith("```") or stripped.startswith("~~~"):
-            in_fence = not in_fence
-        if not in_fence:
+
+    def _clean(segment: str) -> str:
+        lines: list[str] = []
+        for line in segment.splitlines(keepends=True):
             line = _PANDOC_SPAN_RE.sub(r"\1", line)
             line = _PANDOC_ATTR_RE.sub("", line)
             line = line.replace("\\'", "'").replace('\\"', '"')
             line = _TRAILING_BACKSLASH_RE.sub("  ", line)
-        lines.append(line)
-    return "".join(lines)
+            lines.append(line)
+        return "".join(lines)
+
+    return apply_outside_fences(text, _clean)
 
 
 # ---------------------------------------------------------------------------
@@ -442,7 +439,7 @@ def stage_content_markdown(md_path: Path, repo: Path) -> str:
     frontmatter, body = parse_frontmatter(md_path.read_text())
     frontmatter, body = expand_frontmatter_snippets(frontmatter, body, md_path, repo / "snippets")
     body = preprocess_snippets(body, md_path, repo / "snippets")
-    body = _rewrite_quiz_links(body)
+    body = apply_outside_fences(body, _rewrite_quiz_links)
     body = _strip_pandoc_syntax(body)
     title = frontmatter.get("title", md_path.stem)
     if not _has_leading_h1(body):
@@ -461,17 +458,11 @@ def render_quiz_study_guide(quiz_folder: Path) -> str:
     title = frontmatter.get("title", quiz_folder.name)
 
     # Description = quiz body minus the numbered question-link list.
-    desc_lines: list[str] = []
-    question_files: list[Path] = []
-    for line in body.splitlines():
-        m = re.match(r"^\s*\d+\.\s+\[[^\]]+\]\(([^)]+\.md)\)\s*$", line)
-        if m:
-            question_files.append((quiz_md.parent / m.group(1)).resolve())
-        else:
-            desc_lines.append(line)
+    # Shared with the update pipeline so commented-out questions
+    # (```{=comment} blocks) are excluded here too.
+    desc, question_files = split_quiz_body(body, quiz_md)
 
     out: list[str] = [f"# {title}", ""]
-    desc = "\n".join(desc_lines).strip()
     if desc:
         out.append(desc)
         out.append("")

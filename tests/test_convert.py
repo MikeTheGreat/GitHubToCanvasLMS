@@ -11,6 +11,8 @@ from github_to_canvas.convert import (
     mark_decorative_images,
     markdown_to_html,
     preprocess_snippets,
+    split_fenced_segments,
+    strip_raw_nonhtml_blocks,
 )
 
 # ---------------------------------------------------------------------------
@@ -569,3 +571,80 @@ def test_mark_decorative_images_real_alt_untouched() -> None:
 def test_mark_decorative_images_existing_role_untouched() -> None:
     tag = '<img src="x.png" alt="" role="presentation" />'
     assert mark_decorative_images(tag) == tag
+
+
+# ---------------------------------------------------------------------------
+# split_fenced_segments / strip_raw_nonhtml_blocks
+# ---------------------------------------------------------------------------
+
+def test_split_fenced_segments_roundtrip_and_flags() -> None:
+    text = "before\n```python\ncode\n```\nafter\n"
+    segs = split_fenced_segments(text)
+    assert "".join(s for _, s in segs) == text
+    assert [f for f, _ in segs] == [False, True, False]
+
+
+def test_split_fenced_segments_unclosed_fence_runs_to_end() -> None:
+    text = "before\n```\nno closing fence\n"
+    segs = split_fenced_segments(text)
+    assert segs[-1] == (True, "```\nno closing fence\n")
+
+
+def test_split_fenced_segments_tilde_fences() -> None:
+    text = "~~~\ninside\n~~~\n"
+    assert split_fenced_segments(text) == [(True, text)]
+
+
+def test_split_fenced_segments_longer_outer_fence_swallows_inner() -> None:
+    """A ``` block shown inside a ````markdown block is content, not a fence."""
+    text = "````markdown\n```{=comment}\nhi\n```\n````\nafter\n"
+    segs = split_fenced_segments(text)
+    assert segs[0] == (True, "````markdown\n```{=comment}\nhi\n```\n````\n")
+    assert segs[1] == (False, "after\n")
+
+
+def test_strip_raw_nonhtml_blocks_removes_comment_block() -> None:
+    text = "keep\n```{=comment-for-in-person-sections}\ndrop me\n```\nkeep too\n"
+    result = strip_raw_nonhtml_blocks(text)
+    assert "drop me" not in result
+    assert "keep" in result and "keep too" in result
+
+
+def test_strip_raw_nonhtml_blocks_keeps_html_and_code_blocks() -> None:
+    text = "```{=html}\n<b>hi</b>\n```\n```python\nx = 1\n```\n"
+    assert strip_raw_nonhtml_blocks(text) == text
+
+
+def test_strip_raw_nonhtml_blocks_keeps_example_inside_outer_fence() -> None:
+    """A ```{=comment} example nested in a longer outer fence is literal
+    documentation (as in the README's comment tip) and must survive."""
+    text = "````markdown\n```{=comment}\nexample\n```\n````\n"
+    assert strip_raw_nonhtml_blocks(text) == text
+
+
+def test_snippet_refs_inside_code_fences_stay_literal(tmp_path: Path) -> None:
+    snippets_dir, _ = _make_snippet(tmp_path, "tip.md", "EXPANDED CONTENT")
+    source = tmp_path / "pages" / "notes.md"
+    source.parent.mkdir()
+    text = (
+        "Real: [Tip](../snippets/tip.md)\n\n"
+        "```markdown\n"
+        "Example: [Tip](../snippets/tip.md)\n"
+        "Inline example: $../snippets/tip.md$\n"
+        "```\n"
+    )
+    result = preprocess_snippets(text, source, snippets_dir)
+    assert result.count("EXPANDED CONTENT") == 1
+    assert "Example: [Tip](../snippets/tip.md)" in result
+    assert "$../snippets/tip.md$" in result
+
+
+def test_find_referenced_snippets_ignores_refs_in_code_fences(tmp_path: Path) -> None:
+    snippets_dir, snippet = _make_snippet(tmp_path, "tip.md", "content")
+    source = tmp_path / "pages" / "notes.md"
+    source.parent.mkdir()
+    text = "```\n[Tip](../snippets/tip.md)\n$../snippets/tip.md$\n```\n"
+    assert find_referenced_snippets(text, source, snippets_dir) == set()
+    assert find_referenced_snippets(
+        "[Tip](../snippets/tip.md)\n", source, snippets_dir
+    ) == {snippet}

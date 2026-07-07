@@ -26,6 +26,90 @@ _FRONTMATTER_SNIPPET_RE = re.compile(
 _IMG_TAG_RE = re.compile(r"<img\b[^>]*/?>", re.IGNORECASE)
 _ALT_ATTR_RE = re.compile(r'\balt="([^"]*)"')
 _ROLE_ATTR_RE = re.compile(r'\brole="[^"]*"')
+_FENCE_DELIM_RE = re.compile(r"^\s{0,3}(`{3,}|~{3,})(.*)$")
+_RAW_NONHTML_INFO_RE = re.compile(r"^\{=(?!html\})[\w-]+\}\s*$")
+
+
+def split_fenced_segments(text: str) -> list[tuple[bool, str]]:
+    """Split text into (is_fenced, segment) chunks, in document order.
+
+    A fenced segment runs from its opening ``` / ~~~ line through the matching
+    closing line (same fence character, at least as long, nothing else on the
+    line); an unclosed fence runs to the end of the text. Fence-lookalikes
+    *inside* a fenced segment are plain content, so a block nested in a longer
+    outer fence (e.g. a ```{=comment} example shown inside a ````markdown
+    block) stays part of the outer block.
+    """
+    segments: list[tuple[bool, str]] = []
+    plain: list[str] = []
+    fenced: list[str] = []
+    close_char, close_len = "", 0
+    for line in text.splitlines(keepends=True):
+        m = _FENCE_DELIM_RE.match(line)
+        if not fenced:
+            if m:
+                if plain:
+                    segments.append((False, "".join(plain)))
+                    plain = []
+                fenced.append(line)
+                close_char, close_len = m.group(1)[0], len(m.group(1))
+            else:
+                plain.append(line)
+        else:
+            fenced.append(line)
+            if (
+                m
+                and m.group(1)[0] == close_char
+                and len(m.group(1)) >= close_len
+                and not m.group(2).strip()
+            ):
+                segments.append((True, "".join(fenced)))
+                fenced = []
+    if plain:
+        segments.append((False, "".join(plain)))
+    if fenced:
+        segments.append((True, "".join(fenced)))
+    return segments
+
+
+def iter_lines_with_fence_info(text: str):
+    """Yield (line, is_fenced) for each line of text (without newlines).
+
+    Fence delimiter lines count as fenced. Line-based parsers use this so that
+    structure-lookalikes inside code blocks (question links, module items,
+    ## headings, …) are treated as literal text.
+    """
+    for is_fenced, seg in split_fenced_segments(text):
+        for line in seg.splitlines():
+            yield line, is_fenced
+
+
+def apply_outside_fences(text: str, transform) -> str:
+    """Apply transform (str → str) to the text between fenced code blocks,
+    leaving the fenced blocks byte-for-byte intact."""
+    return "".join(
+        seg if is_fenced else transform(seg)
+        for is_fenced, seg in split_fenced_segments(text)
+    )
+
+
+def strip_raw_nonhtml_blocks(text: str) -> str:
+    """Remove raw-attribute fenced blocks (```{=comment} …) except {=html}.
+
+    Pandoc drops these from converted output, so this is a no-op for prose —
+    but the line-based parsers (module items, quiz question lists, question
+    sections) must strip them first, or "commented-out" content inside them
+    would still be uploaded.
+    """
+    out: list[str] = []
+    for is_fenced, seg in split_fenced_segments(text):
+        if is_fenced:
+            opener = seg.split("\n", 1)[0]
+            m = _FENCE_DELIM_RE.match(opener)
+            if m and _RAW_NONHTML_INFO_RE.match(m.group(2).strip()):
+                continue
+        out.append(seg)
+    return "".join(out)
 
 
 def warn(msg: str, errors: list[str] | None) -> None:
@@ -119,10 +203,14 @@ def preprocess_snippets(
                 )
         return content
 
-    # Pass 1: expand $path.md$ inline snippet refs (stripped, safe for URLs)
-    text = _INLINE_SNIPPET_RE.sub(_replace_inline, text)
-    # Pass 2: expand [text](snippet_path) block snippet links
-    return _SNIPPET_LINK_RE.sub(_replace, text)
+    def _expand(segment: str) -> str:
+        # Pass 1: expand $path.md$ inline snippet refs (stripped, safe for URLs)
+        segment = _INLINE_SNIPPET_RE.sub(_replace_inline, segment)
+        # Pass 2: expand [text](snippet_path) block snippet links
+        return _SNIPPET_LINK_RE.sub(_replace, segment)
+
+    # Snippet refs inside fenced code blocks are literal example text.
+    return apply_outside_fences(text, _expand)
 
 
 def find_referenced_snippets(text: str, source_file: Path, snippets_dir: Path) -> set[Path]:
@@ -133,7 +221,8 @@ def find_referenced_snippets(text: str, source_file: Path, snippets_dir: Path) -
     which use the same ``[text](path)`` syntax) and keeps the ones that land
     inside ``snippets_dir`` and exist. Unlike ``preprocess_snippets`` /
     ``expand_frontmatter_snippets``, this never reports errors — it's a
-    passive probe, not part of the expansion pipeline.
+    passive probe, not part of the expansion pipeline. Refs inside fenced
+    code blocks are ignored, matching what expansion does.
     """
     resolved_snippets_dir = snippets_dir.resolve()
     found: set[Path] = set()
@@ -143,10 +232,13 @@ def find_referenced_snippets(text: str, source_file: Path, snippets_dir: Path) -
         if target_path.is_relative_to(resolved_snippets_dir) and target_path.exists():
             found.add(target_path)
 
-    for m in _INLINE_SNIPPET_RE.finditer(text):
-        _maybe_add(m.group(1))
-    for m in _SNIPPET_LINK_RE.finditer(text):
-        _maybe_add(m.group(2))
+    for is_fenced, seg in split_fenced_segments(text):
+        if is_fenced:
+            continue
+        for m in _INLINE_SNIPPET_RE.finditer(seg):
+            _maybe_add(m.group(1))
+        for m in _SNIPPET_LINK_RE.finditer(seg):
+            _maybe_add(m.group(2))
     return found
 
 

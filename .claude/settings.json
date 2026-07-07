@@ -1,12 +1,20 @@
 {
-    "permissions": {
-        "allow": [
-            "Bash(*)",
-            "Edit(*)",
-            "Write(*)",
-            "Read(*)",
-            "WebFetch(*)"
-        ],
-        "defaultMode": "bypassPermissions"
-    }
+  "permissions": {
+    "allow": [
+      "Bash(*)",
+      "Edit(*)",
+      "Write(*)",
+      "Read(*)",
+      "WebFetch(*)",
+      "Bash(cp /tmp/claude-1000/-home-mike-Dropbox-Personal-Tech-GitHubToCanvasLMS-GitHubToCanvasLMS/5c2615a5-ecfb-4419-948f-5c3a1a900ac8/scratchpad/settings.json.current .claude/settings.json && git stash list)",
+      "Bash(git worktree *)",
+      "Bash(grep -n \"Quiz \\(\\\\`quizzes/\\\\`\\)\" README.md)",
+      "Bash(awk 'NR<1900 && /^def /{name=$0; line=NR} END{}' src/github_to_canvas/sync.py)",
+      "Bash(uv tool *)"
+    ],
+    "defaultMode": "bypassPermissions",
+    "additionalDirectories": [
+      "/home/mike/Dropbox/Personal/Tech/GitHubToCanvasLMS/GitHubToCanvasLMS/.claude"
+    ]
+  }
 }

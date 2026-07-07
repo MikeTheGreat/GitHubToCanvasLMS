@@ -7,9 +7,11 @@ from typing import Any
 
 from .convert import (
     expand_frontmatter_snippets,
+    iter_lines_with_fence_info,
     markdown_to_html,
     parse_frontmatter as _parse_frontmatter,
     preprocess_snippets,
+    strip_raw_nonhtml_blocks,
 )
 
 _QUIZ_LINK_RE = re.compile(r"^\s*\d+\.\s+\[([^\]]+)\]\(([^)]+\.md)\)")
@@ -35,48 +37,65 @@ def parse_quiz_file(
         frontmatter, body = expand_frontmatter_snippets(frontmatter, body, quiz_md, snippets_dir)
         body = preprocess_snippets(body, quiz_md, snippets_dir)
 
-    question_files: list[Path] = []
-    description_lines: list[str] = []
-
-    for line in body.splitlines():
-        m = _QUIZ_LINK_RE.match(line)
-        if m:
-            href = m.group(2)
-            q_path = (quiz_md.parent / href).resolve()
-            question_files.append(q_path)
-        else:
-            description_lines.append(line)
-
-    description_md = "\n".join(description_lines).strip()
+    description_md, question_files = split_quiz_body(body, quiz_md)
     desc_html = markdown_to_html(description_md) if description_md else ""
 
     return frontmatter, desc_html, question_files
 
 
-def _split_sections(body: str) -> dict[str, str]:
-    """Split body into named sections keyed by ## heading text (lowercased).
+def split_quiz_body(body: str, quiz_md: Path) -> tuple[str, list[Path]]:
+    """Separate a quiz-level body into (description_md, question_paths).
 
-    The implicit first section (before any ## heading) is stored as "".
+    Raw-attribute fences (```{=comment} …) are the documented way to comment
+    out questions, so they are stripped first; a numbered link inside a
+    regular fenced code block is literal example text, not a question.
+    Shared by the update pipeline (parse_quiz_file) and the publish study
+    guide so both agree on what counts as a question.
+    """
+    body = strip_raw_nonhtml_blocks(body)
+    question_files: list[Path] = []
+    description_lines: list[str] = []
+    for line, is_fenced in iter_lines_with_fence_info(body):
+        m = None if is_fenced else _QUIZ_LINK_RE.match(line)
+        if m:
+            href = m.group(2)
+            question_files.append((quiz_md.parent / href).resolve())
+        else:
+            description_lines.append(line)
+    return "\n".join(description_lines).strip(), question_files
+
+
+def _split_on_headings(body: str, heading_re: re.Pattern) -> dict[str, str]:
+    """Split body at heading lines into {heading_lowercased: content}.
+
+    The implicit first section (before any heading) is stored as "". Heading
+    lookalikes inside fenced code blocks are content, not section boundaries.
     """
     sections: dict[str, str] = {}
-    parts = _SECTION_HEADING_RE.split(body)
-    # parts[0] = text before first ##, then alternating heading/content
-    sections[""] = parts[0]
-    for i in range(1, len(parts), 2):
-        heading = parts[i].strip().lower()
-        content = parts[i + 1] if i + 1 < len(parts) else ""
-        sections[heading] = content
+    current = ""
+    acc: list[str] = []
+    for line, is_fenced in iter_lines_with_fence_info(body):
+        m = None if is_fenced else heading_re.match(line)
+        if m:
+            sections[current] = "\n".join(acc)
+            current = m.group(1).strip().lower()
+            acc = []
+        else:
+            acc.append(line)
+    sections[current] = "\n".join(acc)
     return sections
+
+
+def _split_sections(body: str) -> dict[str, str]:
+    """Split body into named sections keyed by ## heading text (lowercased)."""
+    return _split_on_headings(body, _SECTION_HEADING_RE)
 
 
 def _parse_feedback_section(feedback_body: str) -> dict[str, str]:
     """Parse ### General/Correct/Incorrect subsections from a ## Feedback section."""
     result: dict[str, str] = {}
-    parts = _SUBSECTION_HEADING_RE.split(feedback_body)
-    # parts[0] is text before first ###
-    for i in range(1, len(parts), 2):
-        subheading = parts[i].strip().lower()
-        content = (parts[i + 1] if i + 1 < len(parts) else "").strip()
+    for subheading, raw in _split_on_headings(feedback_body, _SUBSECTION_HEADING_RE).items():
+        content = raw.strip()
         if subheading == "general" and content:
             result["neutral_comments"] = content
         elif subheading == "correct" and content:
@@ -89,8 +108,8 @@ def _parse_feedback_section(feedback_body: str) -> dict[str, str]:
 def _parse_answers_section(answers_text: str, correct, question_type: str) -> list[dict[str, Any]]:
     """Parse numbered answer list into answer dicts for MCQ or multiple_response."""
     answer_texts: list[str] = []
-    for line in answers_text.splitlines():
-        am = _ANSWER_ITEM_RE.match(line)
+    for line, is_fenced in iter_lines_with_fence_info(answers_text):
+        am = None if is_fenced else _ANSWER_ITEM_RE.match(line)
         if am:
             answer_texts.append(am.group(1).strip())
 
@@ -123,6 +142,8 @@ def parse_question_file(
     if snippets_dir is not None:
         frontmatter, body = expand_frontmatter_snippets(frontmatter, body, q_path, snippets_dir)
         body = preprocess_snippets(body, q_path, snippets_dir)
+    # Commented-out sections/answers (```{=comment} …) must not be parsed.
+    body = strip_raw_nonhtml_blocks(body)
 
     question_type = frontmatter.get("question_type", "essay_question")
     points = frontmatter.get("points_possible", 0)

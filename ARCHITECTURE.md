@@ -47,11 +47,16 @@ git clone (local)
        f. update manifest dict and flush to disk
 4b. for each quiz folder in quizzes/ alphabetically:
      → skip if quiz .md AND all question files have mtime ≤ manifest last_synced
-     → parse quiz-level .md (frontmatter + ordered question list)
+     → parse quiz-level .md (frontmatter + ordered question list); raw-attribute
+       blocks (```{=comment} …) are stripped first — question links inside them are
+       "commented out" (shared strip_raw_nonhtml_blocks in convert.py, same as module
+       items) — and numbered links inside regular code fences are not questions
      → parse each question .md file
      → run rewrite_links() on quiz description HTML and each question_text HTML (same as step 4d)
-     → create or update quiz in Canvas (Classic Quizzes API)
+     → create or update quiz in Canvas (Classic Quizzes API), WITHOUT the publish state
      → delete all existing quiz questions, re-add in order
+     → apply the publish state last (finalize_quiz_publish_state); warn if a manual
+       "Save It Now" is needed (see "Quiz publish ordering" below)
      → update manifest dict and flush to disk
 4c. for each question bank in question_banks/ alphabetically:
      → skip if bank .toml mtime ≤ manifest last_synced (unless --force-uploads)
@@ -68,6 +73,29 @@ git clone (local)
 **Processing order:**
 
 Course settings and syllabus are applied first. Then `assets/`. Then regular content folders alphabetically. Then `quizzes/`. Then `question_banks/`. Finally `modules/`. All other content folders (`announcements/`, `assignments/`, `discussions/`, `pages/`, etc.) are processed in alphabetical order, with files within each folder also sorted alphabetically. `course_settings/`, `question_banks/`, `quizzes/`, `snippets/`, and `assets/` are excluded from the regular content pass — each has its own dedicated phase.
+
+**Quiz publish ordering ("Save It Now"):**
+
+Canvas Classic Quizzes keep a snapshot (`quiz_data`) of the questions that students actually see. Editing questions (create/update/delete, via UI or API) only sets `last_edited_at` on the quiz; the snapshot is regenerated when the quiz is *saved through the web UI* or when it *transitions* to published. While `last_edited_at > published_at`, the quiz page shows the "you have unsaved changes… Save It Now" banner and **students keep seeing the old questions**. The REST API has no equivalent of the "Save It Now" button: `PUT /quizzes/:id` with `published=true` on an already-published quiz is a no-op state-wise (Canvas only regenerates on a `workflow_state` *change*), and the unpublish→republish dance is rejected when the quiz has student submissions and re-sends "assignment created" notifications in a published course, so the tool deliberately does not attempt it.
+
+What the tool does instead (`_sync_quiz` in `sync.py` + `finalize_quiz_publish_state` in `canvas_api.py`):
+
+- The initial create/edit call omits `published`, so new quizzes are created unpublished.
+- Questions are synced next.
+- The publish state from frontmatter is applied **last** (with `notify_of_update: false`). For a quiz being published this run (new, or previously unpublished), the unpublished→published transition regenerates the snapshot — no banner, no manual step.
+- If the quiz was **already published and stays published**, nothing programmatic can absorb the question changes: the tool prints a warning (also collected into the end-of-run error summary) with the quiz's `html_url` telling the user to open it and click "Save It Now".
+
+**Fenced code blocks and `{=comment}` blocks in Markdown input:**
+
+All Markdown-input parsing respects fenced code blocks, built on shared primitives in `convert.py` (`split_fenced_segments`, `iter_lines_with_fence_info`, `apply_outside_fences`, `strip_raw_nonhtml_blocks`):
+
+- **Raw-attribute blocks** (```` ```{=comment} ````, or any non-`html` format) are the documented way to comment content out. They are stripped before every line-based scan, so commented-out quiz question links, module items, question answers, and `## sections` are genuinely ignored — by `update` and by `publish` (study guide, staging). `{=html}` blocks are always preserved.
+- **Regular code fences** are literal text: numbered `[x](y.md)` links inside them are not quiz questions (`quiz.split_quiz_body`, shared by sync and the publish study guide), `- [x](y.md)` / `# heading` lines are not module items (`parse_module_body`), `## Answers`-lookalikes do not split question files (`_split_on_headings`), and numbered lines are not answers.
+- **Snippet expansion** (`preprocess_snippets`) and the staleness probe (`find_referenced_snippets`) skip fence content, so `$path.md$` / snippet links in a code block stay literal.
+- **publish's Pandoc-syntax cleanup** (`_strip_pandoc_syntax`, `_rewrite_quiz_links`) applies only outside fences, so literal `{#id}` / span / quiz-link examples in code blocks survive staging.
+- Fence matching follows CommonMark closely enough for course content: ` ``` ` or `~~~` (3+, up to 3 leading spaces), closed by an equal-or-longer fence of the same character; an unclosed fence runs to end of file; fence-lookalikes inside a longer outer fence (e.g. a ```` ```{=comment} ```` example shown inside a ` ````markdown ` block) are content, not fences. Indented (4-space) code blocks and inline backtick spans are *not* considered fences by these parsers.
+
+Not fence-aware by design: `mv`'s link updating (renames also fix example links in code blocks, keeping them valid), orphan detection's "in use" scan (a Canvas URL in a code block still protects content from `prune` — conservative), and `link_rewrite.py` (operates on Pandoc's HTML output, where code content is already escaped).
 
 **Content subfolder support:**
 

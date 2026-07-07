@@ -19,9 +19,11 @@ from .config import Config
 from .convert import (
     expand_frontmatter_snippets,
     find_referenced_snippets,
+    iter_lines_with_fence_info,
     markdown_to_html,
     parse_frontmatter,
     preprocess_snippets,
+    strip_raw_nonhtml_blocks,
     warn,
 )
 from .ignore import IgnoreMatcher, load_ignore_matcher
@@ -286,6 +288,15 @@ def _date_rejection_message(
     return "".join(parts)
 
 
+def _quiz_manual_save_message(local_key: str, title: str, html_url: str | None) -> str:
+    where = html_url or "the quiz page in Canvas"
+    return (
+        f'WARNING: {local_key}: "{title}" is already published, so Canvas holds the'
+        " question changes as a pending draft — students keep seeing the old questions"
+        f' until the quiz is saved in the web UI. Open {where} and click "Save It Now".'
+    )
+
+
 def _file_referenced_snippets(path: Path, snippets_dir: Path) -> set[Path]:
     """Snippets referenced by a file's body, for staleness checks only.
 
@@ -374,11 +385,6 @@ _INDENT_SPACES_PER_LEVEL = 2
 MAX_CANVAS_INDENT = 5
 _ITEM_ATTRS_RE = re.compile(r"<!--(.*?)-->")
 _ITEM_ATTR_KV_RE = re.compile(r'(\w+)=["\']([^"\']*)["\']')
-_RAW_NONHTML_BLOCK_RE = re.compile(
-    r"^```\{=(?!html\})[\w-]+\}\s*\n.*?^```\s*\n?", re.MULTILINE | re.DOTALL
-)
-
-
 def _parse_item_attrs(comment_text: str) -> dict[str, str]:
     """Parse key="value" pairs from an HTML comment string."""
     return {m.group(1): m.group(2) for m in _ITEM_ATTR_KV_RE.finditer(comment_text)}
@@ -409,9 +415,12 @@ def parse_module_body(
     body: str, module_file: Path, course_root: Path
 ) -> list[dict[str, Any]]:
     """Parse a module body into an ordered list of item dicts."""
-    body = _RAW_NONHTML_BLOCK_RE.sub("", body)
+    body = strip_raw_nonhtml_blocks(body)
     items: list[dict[str, Any]] = []
-    for line in body.splitlines():
+    for line, is_fenced in iter_lines_with_fence_info(body):
+        if is_fenced:
+            # Links/headings inside a code fence are literal text, not items.
+            continue
         link_m = _MODULE_LINK_RE.match(line)
         if link_m:
             leading_spaces = len(link_m.group(1))
@@ -1869,8 +1878,11 @@ def _sync_quiz(ctx: SyncContext, quiz_folder: Path, quiz_md: Path) -> None:
         )
 
     print(f"  Uploading: {local_key}")
+    # The publish state is applied after the questions are synced (see
+    # finalize_quiz_publish_state) so a quiz being published this sync
+    # includes its new questions without a manual save in the web UI.
     result = capi.create_or_update_quiz(
-        course, canvas_id, title, desc_html, published=published, **quiz_kwargs
+        course, canvas_id, title, desc_html, **quiz_kwargs
     )
     if result.get("date_warning"):
         msg = _date_rejection_message(
@@ -1880,6 +1892,8 @@ def _sync_quiz(ctx: SyncContext, quiz_folder: Path, quiz_md: Path) -> None:
     print(f"  Link: {result['html_url']}")
     quiz_obj = course.get_quiz(result["canvas_id"])
     q_id_map = capi.sync_quiz_questions(course, quiz_obj, questions)
+    if capi.finalize_quiz_publish_state(quiz_obj, published):
+        warn(_quiz_manual_save_message(local_key, title, result.get("html_url")), errors)
 
     manifest_lib.record(
         manifest,

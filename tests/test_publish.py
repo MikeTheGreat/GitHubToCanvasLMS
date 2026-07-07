@@ -350,6 +350,32 @@ def test_render_quiz_study_guide():
     assert "## Question 2: Explain something" in guide
 
 
+def test_render_quiz_study_guide_skips_commented_out_questions(tmp_path: Path) -> None:
+    """Questions inside ```{=comment} blocks are excluded from the study guide,
+    matching what the update pipeline uploads."""
+    quiz_dir = tmp_path / "quizzes" / "my-quiz"
+    q_dir = quiz_dir / "questions"
+    q_dir.mkdir(parents=True)
+    (quiz_dir / "my-quiz.md").write_text(
+        "---\ntitle: My Quiz\n---\n\n"
+        "Study hard.\n\n"
+        "1. [Kept](questions/kept.md)\n"
+        "```{=comment}\n"
+        "2. [Dropped](questions/dropped.md)\n"
+        "```\n"
+    )
+    (q_dir / "kept.md").write_text(
+        "---\ntitle: Kept\nquestion_type: essay_question\npoints_possible: 1\n---\n\nExplain.\n"
+    )
+    (q_dir / "dropped.md").write_text(
+        "---\ntitle: Dropped\nquestion_type: essay_question\npoints_possible: 1\n---\n\nNope.\n"
+    )
+    guide = publish.render_quiz_study_guide(quiz_dir)
+    assert "## Question 1: Kept" in guide
+    assert "Dropped" not in guide
+    assert "{=comment}" not in guide
+
+
 # ---------------------------------------------------------------------------
 # Module overview page
 # ---------------------------------------------------------------------------

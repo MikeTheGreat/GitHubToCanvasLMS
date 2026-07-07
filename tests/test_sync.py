@@ -262,18 +262,32 @@ def _announcement_create_call(mock_course):
 
 
 def test_unpublished_announcement_is_skipped_not_posted(mock_course, course_root, mocker, capsys) -> None:
-    """Canvas has no draft announcements, so published:false is skipped (not created)."""
+    """Canvas has no draft announcements, so published:false is skipped (not created).
+    The skip message is only printed in verbose mode."""
     mocker.patch("github_to_canvas.manifest.flush")
     _setup_first_sync_mocks(mock_course)
     _write_announcement(course_root, published=False)
 
-    run_sync(_config(), course_root)
+    run_sync(_config(), course_root, verbose=True)
 
     # Nothing announcement-shaped was sent to Canvas.
     assert _announcement_create_call(mock_course) is None
     out = capsys.readouterr().out
     assert "Skipping (unpublished announcement, not sent to Canvas)" in out
     assert "set 'published: true' to post it" in out
+
+
+def test_unpublished_announcement_skip_message_quiet_by_default(
+    mock_course, course_root, mocker, capsys
+) -> None:
+    mocker.patch("github_to_canvas.manifest.flush")
+    _setup_first_sync_mocks(mock_course)
+    _write_announcement(course_root, published=False)
+
+    run_sync(_config(), course_root)
+
+    assert _announcement_create_call(mock_course) is None
+    assert "Skipping (unpublished announcement" not in capsys.readouterr().out
 
 
 def test_unpublished_announcement_skipped_before_link_rewriting(
@@ -1054,9 +1068,10 @@ def test_recursive_target_no_duplicate_processing(mock_course, course_root, mock
 # ---------------------------------------------------------------------------
 
 
-def _mock_quiz(canvas_id: int) -> MagicMock:
+def _mock_quiz(canvas_id: int, published: bool = False) -> MagicMock:
     q = MagicMock()
     q.id = canvas_id
+    q.published = published
     q.html_url = f"https://school.instructure.com/courses/1/quizzes/{canvas_id}"
     q.edit.return_value = q
     q.get_questions.return_value = []
@@ -1105,7 +1120,20 @@ def test_quiz_sync_creates_quiz_on_first_sync(mock_course, mocker, tmp_path) -> 
     mock_course.create_quiz.assert_called_once()
     call_params = mock_course.create_quiz.call_args[1]["quiz"]
     assert call_params["title"] == "A Quiz"
-    assert call_params["published"] is True
+    # published is applied after the questions are synced, not at creation,
+    # so the publish transition regenerates the quiz with the new questions.
+    assert "published" not in call_params
+    quiz.edit.assert_called_once_with(
+        quiz={"published": True, "notify_of_update": False}
+    )
+    # publish must come after the questions exist
+    publish_pos = quiz.mock_calls.index(
+        mocker.call.edit(quiz={"published": True, "notify_of_update": False})
+    )
+    question_positions = [
+        i for i, c in enumerate(quiz.mock_calls) if c[0] == "create_question"
+    ]
+    assert question_positions and all(i < publish_pos for i in question_positions)
 
 
 def test_quiz_sync_updates_quiz_on_second_sync(mock_course, mocker, tmp_path) -> None:
@@ -1127,7 +1155,57 @@ def test_quiz_sync_updates_quiz_on_second_sync(mock_course, mocker, tmp_path) ->
 
     mock_course.create_quiz.assert_not_called()
     mock_course.get_quiz.assert_called_with(12345)
-    quiz.edit.assert_called_once()
+    # one edit for the quiz fields, one to apply the publish state last
+    assert quiz.edit.call_count == 2
+    assert quiz.edit.call_args_list[-1] == mocker.call(
+        quiz={"published": True, "notify_of_update": False}
+    )
+
+
+def test_published_quiz_update_warns_about_manual_save(
+    mock_course, mocker, tmp_path, capsys
+) -> None:
+    """Canvas keeps question changes to an already-published quiz as a pending
+    draft; the API cannot trigger the web UI's "Save It Now", so warn with a link."""
+    root = _quiz_course_root(tmp_path)
+    preloaded = {
+        "quizzes/a-quiz/a-quiz.md": {
+            "canvas_id": 12345, "canvas_type": "quiz",
+            "last_synced": "2025-01-01T00:00:00+00:00",
+            "canvas_question_ids": {},
+        },
+    }
+    mocker.patch("github_to_canvas.manifest.load", return_value=preloaded)
+    mocker.patch("github_to_canvas.manifest.flush")
+    quiz = _mock_quiz(12345, published=True)
+    mock_course.get_quiz.return_value = quiz
+    quiz.create_question.side_effect = [_mock_quiz_question(i) for i in [101, 102]]
+
+    run_sync(_config(), root)
+
+    out = capsys.readouterr().out
+    assert 'click "Save It Now"' in out
+    assert quiz.html_url in out
+
+
+def test_unpublished_quiz_update_does_not_warn(mock_course, mocker, tmp_path, capsys) -> None:
+    root = _quiz_course_root(tmp_path)
+    preloaded = {
+        "quizzes/a-quiz/a-quiz.md": {
+            "canvas_id": 12345, "canvas_type": "quiz",
+            "last_synced": "2025-01-01T00:00:00+00:00",
+            "canvas_question_ids": {},
+        },
+    }
+    mocker.patch("github_to_canvas.manifest.load", return_value=preloaded)
+    mocker.patch("github_to_canvas.manifest.flush")
+    quiz = _mock_quiz(12345, published=False)
+    mock_course.get_quiz.return_value = quiz
+    quiz.create_question.side_effect = [_mock_quiz_question(i) for i in [101, 102]]
+
+    run_sync(_config(), root)
+
+    assert "Save It Now" not in capsys.readouterr().out
 
 
 def test_quiz_deleted_on_canvas_is_recreated(mock_course, mocker, tmp_path, capsys) -> None:
@@ -1224,7 +1302,7 @@ def test_quiz_resynced_when_question_file_updated(mock_course, mocker, tmp_path)
 
     # Question file mtime > last_synced → whole quiz re-synced via update
     mock_course.get_quiz.assert_called_with(12345)
-    quiz.edit.assert_called_once()
+    assert quiz.edit.call_count == 2  # quiz fields + publish state
 
 
 def test_quiz_resynced_when_referenced_snippet_updated(mock_course, mocker, tmp_path) -> None:
@@ -1271,7 +1349,7 @@ def test_quiz_resynced_when_referenced_snippet_updated(mock_course, mocker, tmp_
     run_sync(_config(), root)
 
     mock_course.get_quiz.assert_called_with(12345)
-    quiz.edit.assert_called_once()
+    assert quiz.edit.call_count == 2  # quiz fields + publish state
 
 
 def test_quiz_module_item_type_is_quiz(mock_course, mocker, tmp_path) -> None:
@@ -1536,8 +1614,9 @@ def test_parse_module_body_strips_raw_attribute_blocks(tmp_path: Path) -> None:
     assert items[1]["title"] == "Also Visible"
 
 
-def test_parse_module_body_preserves_raw_html_blocks(tmp_path: Path) -> None:
-    """Raw-HTML blocks ({=html}) should NOT be stripped — only non-HTML formats."""
+def test_parse_module_body_ignores_lines_inside_fenced_blocks(tmp_path: Path) -> None:
+    """Content inside any fenced block ({=html} or a plain code fence) is
+    literal text, not module items."""
     course_root = tmp_path / "course"
     course_root.mkdir()
     (course_root / "modules").mkdir()
@@ -1548,10 +1627,14 @@ def test_parse_module_body_preserves_raw_html_blocks(tmp_path: Path) -> None:
         "```{=html}\n"
         "- [Inside HTML](../pages/b.md)\n"
         "```\n"
+        "```markdown\n"
+        "- [Example link](../pages/example.md)\n"
+        "# Example heading\n"
+        "```\n"
         "- [After](../pages/c.md)\n"
     )
     items = parse_module_body(body, module_file, course_root)
-    assert len(items) == 3
+    assert [i["title"] for i in items] == ["Before", "After"]
 
 
 # ---------------------------------------------------------------------------

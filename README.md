@@ -509,6 +509,16 @@ to avoid surprises.
 > It will never appear in any output format.
 > ```
 > ````
+>
+> This works everywhere, including the structured lists the tool parses itself:
+> quiz question links, module items, and question `## Answers` entries inside a
+> `{=comment}` block are commented out (not uploaded, not published). Any word
+> works after the `=` (e.g. `{=comment-until-fall}`) — everything except
+> `{=html}` is treated as a comment.
+>
+> Relatedly, regular fenced code blocks are always literal: links, headings,
+> and snippet references (`$path.md$`) inside ```` ``` ```` fences are shown
+> as-is, never expanded or treated as quiz questions / module items.
 
 ### `course_settings.toml`
 
@@ -1172,7 +1182,15 @@ When this file is modified, the tool repositions the listed modules on Canvas wi
 
 Each quiz lives in its own sub-folder. The folder name becomes the quiz slug.
 
-**Sync behavior:** When a quiz is synced, the quiz itself is updated in place on Canvas, but all of its questions are deleted and re-created from the question files.
+**Sync behavior:** When a quiz is synced, the quiz itself is updated in place on Canvas, but all of its questions are deleted and re-created from the question files. The publish state is applied after the questions, so a quiz that becomes published during the sync goes live with its new questions — no manual step needed.
+
+> **Updating an already-published quiz:** Canvas holds question changes to a
+> published quiz as a pending draft — students keep seeing the old questions,
+> and the quiz page shows an "unsaved changes" banner. The Canvas API offers no
+> way to accept those changes programmatically, so the tool prints a warning
+> with a link to the quiz: open it and click **Save It Now**. (Unpublishing and
+> re-publishing would work around it, but Canvas forbids that once students have
+> submissions and it re-sends notifications, so the tool doesn't do it.)
 
 ```text
 quizzes/
@@ -1207,6 +1225,20 @@ Read each question carefully.   <!-- optional description; everything that isn't
 1. [What is 2+2?](questions/what-is-2-plus-2.md)
 2. [Explain gravity](questions/explain-gravity.md)
 ```
+
+**Commenting out questions:** wrap question links in a raw-attribute block (the
+same [comment trick](#course_settingstoml) that works everywhere else) and they
+are skipped — not uploaded, not shown in the description. The numbers on the
+remaining links don't need to be renumbered; question order comes from list
+order, not the numbers.
+
+````markdown
+1. [What is 2+2?](questions/what-is-2-plus-2.md)
+```{=comment}
+2. [Skipped this quarter](questions/skipped.md)
+```
+3. [Explain gravity](questions/explain-gravity.md)
+````
 
 **Assignment group:** `assignment_group_id` works the same way as it does for
 [assignments](#assignment-assignments) — a group name resolved via

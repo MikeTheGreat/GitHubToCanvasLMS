@@ -48,6 +48,43 @@ def test_parse_quiz_file_question_paths_are_absolute():
         assert p.is_absolute()
 
 
+def test_parse_quiz_file_skips_questions_in_raw_comment_blocks(tmp_path):
+    """Question links inside ```{=comment...} raw blocks are commented out —
+    they must not be uploaded (same convention as module items)."""
+    quiz_md = tmp_path / "quiz.md"
+    quiz_md.write_text(
+        "---\ntitle: Q\n---\n\n"
+        "Intro text.\n\n"
+        "1. [Question](questions/question.md)\n"
+        "```{=comment-for-in-person-sections}\n"
+        "1. [Question 2](questions/question-2.md)\n"
+        "2. [Question 3](questions/question-3.md)\n"
+        "```\n"
+        "1. [Question 4](questions/question-4.md)\n"
+    )
+    _, desc_html, q_paths = parse_quiz_file(quiz_md)
+    assert [p.name for p in q_paths] == ["question.md", "question-4.md"]
+    assert "question-2" not in desc_html
+    assert "Intro text" in desc_html
+
+
+def test_parse_quiz_file_skips_question_lookalikes_in_code_blocks(tmp_path):
+    """A numbered .md link inside a regular fenced code block is literal
+    example text in the description, not a question."""
+    quiz_md = tmp_path / "quiz.md"
+    quiz_md.write_text(
+        "---\ntitle: Q\n---\n\n"
+        "How to write a question list:\n\n"
+        "```markdown\n"
+        "1. [Example](questions/example.md)\n"
+        "```\n\n"
+        "1. [Question](questions/question.md)\n"
+    )
+    _, desc_html, q_paths = parse_quiz_file(quiz_md)
+    assert [p.name for p in q_paths] == ["question.md"]
+    assert "example.md" in desc_html  # stays in the description as code
+
+
 # ---------------------------------------------------------------------------
 # parse_question_file — MCQ
 # ---------------------------------------------------------------------------
@@ -453,3 +490,75 @@ def test_parse_quiz_file_works_without_snippets_dir():
     fm, desc_html, q_paths = parse_quiz_file(QUIZ_MD)
     assert fm["title"] == "A Quiz"
     assert len(q_paths) == 2
+
+
+# ---------------------------------------------------------------------------
+# Fenced code blocks in question files
+# ---------------------------------------------------------------------------
+
+def test_question_heading_lookalike_in_code_fence_is_not_a_section(tmp_path):
+    """A '## Answers'-looking line inside a code fence (e.g. a bash or markdown
+    example) must not split the question into sections."""
+    md = tmp_path / "q.md"
+    md.write_text(
+        "---\n"
+        "title: Markdown question\n"
+        "question_type: multiple_choice_question\n"
+        "points_possible: 1\n"
+        "correct: 1\n"
+        "---\n\n"
+        "What does this markdown do?\n\n"
+        "```markdown\n"
+        "## Answers\n"
+        "1. fake answer\n"
+        "```\n\n"
+        "## Answers\n\n"
+        "1. real answer\n"
+        "2. other answer\n"
+    )
+    q = parse_question_file(md)
+    assert [a["text"] for a in q["answers"]] == ["real answer", "other answer"]
+    # the example block stays in the question text
+    assert "fake answer" in q["question_text"]
+
+
+def test_question_answers_in_comment_block_are_skipped(tmp_path):
+    md = tmp_path / "q.md"
+    md.write_text(
+        "---\n"
+        "title: Pick one\n"
+        "question_type: multiple_choice_question\n"
+        "points_possible: 1\n"
+        "correct: 2\n"
+        "---\n\n"
+        "Pick.\n\n"
+        "## Answers\n\n"
+        "1. first\n"
+        "```{=comment}\n"
+        "2. commented out\n"
+        "```\n"
+        "3. second\n"
+    )
+    q = parse_question_file(md)
+    assert [a["text"] for a in q["answers"]] == ["first", "second"]
+    assert q["answers"][1]["weight"] == 100  # correct: 2 = second listed answer
+
+
+def test_question_commented_out_feedback_section_ignored(tmp_path):
+    md = tmp_path / "q.md"
+    md.write_text(
+        "---\n"
+        "title: Essay\n"
+        "question_type: essay_question\n"
+        "points_possible: 5\n"
+        "---\n\n"
+        "Explain.\n\n"
+        "```{=comment}\n"
+        "## Feedback\n\n"
+        "### General\n\n"
+        "draft feedback, not ready\n"
+        "```\n"
+    )
+    q = parse_question_file(md)
+    assert "neutral_comments" not in q
+    assert "draft feedback" not in q["question_text"]

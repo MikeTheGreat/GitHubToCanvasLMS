@@ -871,6 +871,22 @@ def sync_quiz_questions(
     return result
 
 
+def finalize_quiz_publish_state(quiz, published: bool) -> bool:
+    """Apply the desired publish state after the questions have been synced.
+
+    Canvas only regenerates the question snapshot students see when a quiz
+    transitions to published, so publishing *after* the questions are in
+    place makes the transition pick them up with no manual save. For a quiz
+    that was already published, the API offers no equivalent of the web UI's
+    "Save It Now" button: question changes stay pending (and invisible to
+    students) until someone clicks it. Returns True in that case so the
+    caller can warn the user.
+    """
+    was_published = bool(getattr(quiz, "published", False))
+    quiz.edit(quiz={"published": published, "notify_of_update": False})
+    return was_published and published
+
+
 def create_or_update_module(course, canvas_id: int | None, title: str, **kwargs):
     """Return the canvasapi Module object (created or updated)."""
     if canvas_id is not None:
