@@ -2856,6 +2856,54 @@ def test_module_item_missing_from_manifest_warns_and_skips(
     module.create_module_item.assert_not_called()
 
 
+def test_module_with_failed_items_is_retried_next_run(
+    mock_course, mocker, tmp_path
+) -> None:
+    """A module whose items could not all be added keeps its canvas_id in the
+    manifest (so the next run updates rather than duplicates it) but gets no
+    last_synced stamp, so needs_sync() retries it on the next update."""
+    manifest: dict = {}
+    mocker.patch("github_to_canvas.manifest.load", return_value=manifest)
+    mocker.patch("github_to_canvas.manifest.flush")
+    root = tmp_path / "course"
+    (root / "modules").mkdir(parents=True)
+    (root / "modules" / "m.md").write_text(
+        "---\ntitle: Module\n---\n\n"
+        "- [Ghost Page](../pages/ghost.md)\n"
+    )
+    module = _mock_module(66666)
+    mock_course.create_module.return_value = module
+
+    had_errors = run_sync(_config(), root)
+
+    assert had_errors
+    entry = manifest["modules/m.md"]
+    assert entry["canvas_id"] == 66666
+    assert "last_synced" not in entry
+
+
+def test_quiz_with_missing_question_file_skips_upload_and_reports_error(
+    mock_course, mocker, tmp_path, capsys
+) -> None:
+    """A quiz listing a question file that doesn't exist is not uploaded (so
+    last_synced is never stamped and the quiz is retried next run) and the
+    missing file counts as an error, failing the run."""
+    manifest: dict = {}
+    mocker.patch("github_to_canvas.manifest.load", return_value=manifest)
+    mocker.patch("github_to_canvas.manifest.flush")
+    root = _quiz_course_root(tmp_path)
+    (root / "quizzes" / "a-quiz" / "questions" / "what-is-2-plus-2.md").unlink()
+
+    had_errors = run_sync(_config(), root)
+
+    assert had_errors
+    mock_course.create_quiz.assert_not_called()
+    assert "quizzes/a-quiz/a-quiz.md" not in manifest
+    out = capsys.readouterr().out
+    assert "question file not found" in out
+    assert "Skipping upload due to errors" in out
+
+
 def test_assignment_without_optional_fields_still_uploads(
     mock_course, mocker, tmp_path
 ) -> None:

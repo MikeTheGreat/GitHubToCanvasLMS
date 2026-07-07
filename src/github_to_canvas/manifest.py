@@ -108,13 +108,21 @@ def record(
     canvas_id: int,
     canvas_type: str,
     extra: dict[str, Any] | None = None,
+    mark_synced: bool = True,
 ) -> None:
-    """Update an entry and immediately flush to disk."""
+    """Update an entry and immediately flush to disk.
+
+    mark_synced=False records the Canvas object (so a later run updates it
+    instead of creating a duplicate) but omits ``last_synced``, leaving the
+    entry stale so needs_sync() retries it on the next run — used when the
+    upload partially failed.
+    """
     entry: dict[str, Any] = {
         "canvas_id": canvas_id,
         "canvas_type": canvas_type,
-        "last_synced": datetime.now(timezone.utc).isoformat(),
     }
+    if mark_synced:
+        entry["last_synced"] = datetime.now(timezone.utc).isoformat()
     if extra:
         entry.update(extra)
     manifest[local_path] = entry

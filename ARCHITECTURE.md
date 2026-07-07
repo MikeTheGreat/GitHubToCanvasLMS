@@ -821,6 +821,7 @@ canvas_question_ids = {"questions/what-is-2-plus-2.md" = 111, "questions/explain
 - On each sync, all existing Canvas questions are deleted and re-created in the order listed in the quiz `.md`. This keeps question order correct and avoids stale questions after edits.
 - Canvas module items reference the quiz by `canvas_id` and use module item type `"Quiz"`.
 - Quiz description HTML and question text HTML are passed through `rewrite_links()` before upload, so cross-links to other course content resolve to correct Canvas URLs.
+- A question file listed in the quiz `.md` but missing on disk is a hard error: the whole quiz upload is skipped (nothing recorded in the manifest, so the quiz is retried next run) and the run's error summary fails the run.
 
 **Supported question types:** `multiple_choice_question`, `true_false_question`, `essay_question`, `multiple_response_question`, `fill_in_blank_question`, `pattern_match_question`. Other types emit a warning and are skipped.
 
@@ -966,6 +967,7 @@ published: true
 - All content files linked from a module must already exist in Canvas (i.e., have entries in the manifest) before the module can be synced. The tool should sync content first, modules second.
 - Canvas modules hold a flat ordered list of items. The tool syncs this by comparing the desired item list (derived from the Markdown) against the current Canvas module items and adding, removing, or reordering as needed.
 - The manifest tracks both the module's Canvas ID and the Canvas item IDs within it (needed to reorder or delete individual items).
+- If any item cannot be added (e.g., its file was never synced so it has no manifest entry), the module's manifest entry is written **without** `last_synced` (`record(..., mark_synced=False)`) — the Canvas ID is kept so the next run updates the same module instead of duplicating it, but the module stays stale and is retried on the next `update`.
 
 ### Manifest file (`.canvas-manifest.toml`)
 
@@ -1001,6 +1003,8 @@ canvas_item_ids = {"pages/syllabus.md" = 201, "assignments/week1.md" = 202}
 ```
 
 Source Markdown files stay clean — no tool-written fields mixed in with author-written frontmatter. On first publish the tool creates the item, records the Canvas ID in the manifest, and writes the updated manifest back to disk. On subsequent runs it looks up the Canvas ID from the manifest and updates the existing item.
+
+**Error-retry semantics:** `last_synced` is only stamped on a fully successful upload — every "Skipping upload due to errors" path returns before `manifest.record()`, so an errored file stays stale and is retried on the next `update`. The one partial case is a module some of whose items could not be added: `_sync_module()` calls `record(..., mark_synced=False)`, which records the module's `canvas_id` (so the next run updates it rather than creating a duplicate) but omits `last_synced`, leaving the entry stale for retry.
 
 ## Snippets (`snippets/` directory)
 

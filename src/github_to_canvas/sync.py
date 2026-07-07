@@ -1867,6 +1867,9 @@ def _sync_module(
     flags_used = _flags_used_for([md_file], snippets_dir, ctx.flags)
     if flags_used:
         extra["flags_used"] = flags_used
+    # On item failures, still record the module's canvas_id (so the next run
+    # updates this module rather than creating a duplicate) but leave the
+    # entry unstamped so it is retried.
     manifest_lib.record(
         manifest,
         manifest_path,
@@ -1874,7 +1877,10 @@ def _sync_module(
         module.id,
         "module",
         extra=extra,
+        mark_synced=not had_warnings,
     )
+    if had_warnings:
+        print(f"  Module will be retried on the next update: {local_key}")
     return had_warnings
 
 
@@ -2012,7 +2018,7 @@ def _sync_quiz(ctx: SyncContext, quiz_folder: Path, quiz_md: Path) -> None:
     questions: list[dict[str, Any]] = []
     for q_path in question_paths:
         if not q_path.exists():
-            print(f"  ERROR: question file not found: {q_path}")
+            warn(f"ERROR: {local_key}: question file not found: {q_path}", errors)
             continue
         rel_path = q_path.relative_to(quiz_folder.resolve()).as_posix()
         q_data = parse_question_file(
