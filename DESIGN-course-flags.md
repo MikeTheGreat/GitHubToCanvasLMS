@@ -398,24 +398,11 @@ Deferred per user decision; publish per-target flag overrides live here too.
 
 ### 12.3 due_dates value caching (the same idea, applied to dates)
 
-Today, when `course_settings.toml` changes, `_phase_due_dates` runs a
-dates-only API pass over **every** item with a `due_dates` entry. Extension:
-
-- At sync time, compute the item's **resolved dates** — the effective
-  `due_at`/`lock_at`/`unlock_at` after title/type matching and sentinel
-  processing (`NONE`, `KEEP`, `CREATE_NONE_THEN_KEEP`, `""`), i.e. "what we
-  would tell Canvas". Normalize to a canonical string form (sentinels kept
-  symbolic: `KEEP` resolves to the instruction *leave alone*, not to a
-  concrete date).
-- Store per-file in the manifest entry, e.g.
-  `resolved_dates = { due_at = "2026-01-15T23:59:00-08:00", lock_at = "KEEP" }`
-  (or a hash — prefer the readable table; the manifest is a debugging aid).
-- The dates-only pass then skips items whose freshly-computed resolution equals
-  the cached one, making it O(changed entries) API calls instead of O(all).
-- Unlike flags, this must **not** make the item's full body re-sync — it only
-  gates the dates-only pass.
-- Same per-file-values principle as §9 (no global snapshot), for the same
-  crash/skip-robustness reason.
+Spec'd and **implemented** (2026-07-07) — see **DESIGN-settings-caching.md**,
+which supersedes the sketch that used to live here. It covers per-item
+resolved-dates caching for the dates-only pass *and* section-level change
+detection for the rest of `course_settings.toml` (metadata, grading
+standards, dashboard image, etc.).
 
 ### 12.4 Richer conditions and values
 

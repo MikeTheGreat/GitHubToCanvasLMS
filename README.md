@@ -538,6 +538,13 @@ Placed inside the `course_settings/` folder (i.e. `course_settings/course_settin
 Drives the course's own settings: identity, dates, visibility, grading scheme,
 assignment groups, and policies. Applied before any content is uploaded.
 
+Edits to this file are change-detected **per section**: only the parts whose
+values actually changed are re-sent to Canvas. Flipping a `[course_flags]`
+value, editing one `due_dates` entry, or adding a comment does *not* re-send
+course metadata, re-upload the dashboard image, or touch the other sections.
+(Conversely, editing the `dashboard_image` file itself — without touching the
+TOML — *does* re-upload it.)
+
 ```toml
 # course_settings/course_settings.toml — TOML syntax. Every key is optional.
 
@@ -744,6 +751,18 @@ If Canvas rejects the due dates (e.g. `due_at` falls outside existing
 `unlock_at`/`lock_at` availability dates), the tool retries the upload without
 date fields and prints a warning. The content is still synced; only the dates
 are skipped.
+
+Every `update` checks the `due_dates` table against Canvas, but each item's
+last-applied dates are cached in the manifest, so **only entries you actually
+changed produce API calls** — editing one due date out of dozens updates one
+item. (The first run after upgrading to a version with this cache seeds it by
+applying every entry once.) A rejected date is deliberately *not* cached: it is
+retried, and re-warned about, on every run until you fix it.
+
+**Deleting** a `due_dates` entry does not clear anything on Canvas — it means
+"stop managing this item's dates here". The run after the deletion prints a
+one-time notice (`NOTICE: due_dates entry for "…" was removed — leaving Canvas
+dates as-is`) so the change is visible.
 
 During `update`, the tool prints warnings for:
 

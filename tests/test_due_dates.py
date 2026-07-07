@@ -18,6 +18,7 @@ from github_to_canvas.imscc_import import (
 from github_to_canvas.sync import (
     find_due_date_override,
     load_due_dates,
+    resolve_dates_symbolic,
     run_sync,
 )
 from github_to_canvas.config import Config
@@ -80,6 +81,38 @@ class TestFindDueDateOverride:
     def test_no_type_matches_any(self) -> None:
         due_dates = [{"name": "HW1", "due_at": "2025-02-01T23:59:00"}]
         assert find_due_date_override(due_dates, "HW1", "discussion") is not None
+
+
+class TestResolveDatesSymbolic:
+    def test_concrete_values_verbatim(self) -> None:
+        r = resolve_dates_symbolic({"due_at": "2099-01-15T23:59:00-08:00"})
+        assert r == {
+            "due_at": "2099-01-15T23:59:00-08:00",
+            "unlock_at": "KEEP",
+            "lock_at": "KEEP",
+        }
+
+    def test_sentinels_symbolic_case_insensitive(self) -> None:
+        r = resolve_dates_symbolic(
+            {"due_at": "none", "unlock_at": "Keep", "lock_at": "NONE"}
+        )
+        assert r == {"due_at": "NONE", "unlock_at": "KEEP", "lock_at": "NONE"}
+
+    def test_create_none_then_keep_resolves_keep(self) -> None:
+        # Its clear-on-create meaning only applies during creation; the steady
+        # state of an existing item is "leave alone".
+        r = resolve_dates_symbolic({"due_at": "CREATE_NONE_THEN_KEEP"})
+        assert r["due_at"] == "KEEP"
+
+    def test_empty_and_missing_resolve_keep(self) -> None:
+        r = resolve_dates_symbolic({"due_at": ""})
+        assert r == {"due_at": "KEEP", "unlock_at": "KEEP", "lock_at": "KEEP"}
+
+    def test_same_instant_different_format_is_a_change(self) -> None:
+        # Comparison is verbatim-string; a reformatting re-sends once (harmless).
+        a = resolve_dates_symbolic({"due_at": "2099-01-15T23:59:00+00:00"})
+        b = resolve_dates_symbolic({"due_at": "2099-01-15T23:59:00Z"})
+        assert a != b
 
 
 # ---------------------------------------------------------------------------
@@ -620,6 +653,310 @@ def test_settings_change_applies_dates_only(
     assert call_kwargs["assignment"]["due_at"] == "2099-12-31T23:59:00"
     assert call_kwargs["assignment"]["unlock_at"] == ""
     assert call_kwargs["assignment"]["lock_at"] == ""
+
+
+# ---------------------------------------------------------------------------
+# Integration: per-item resolved_dates caching (dates-only pass)
+# ---------------------------------------------------------------------------
+
+_FUTURE = "2999-12-31T00:00:00+00:00"
+
+
+def _cfg() -> Config:
+    return Config(
+        base_url="https://school.instructure.com", course_id=999, api_token="tok"
+    )
+
+
+def _write_settings(course_root: Path, body: str) -> None:
+    cs_dir = course_root / "course_settings"
+    cs_dir.mkdir(exist_ok=True)
+    (cs_dir / "course_settings.toml").write_text(body)
+
+
+def _fresh_settings_entry() -> dict:
+    return {
+        "canvas_id": 0,
+        "canvas_type": "course_settings",
+        "last_synced": _FUTURE,
+    }
+
+
+def _setup_cached_dates_run(course_root: Path, mocker, preloaded: dict) -> MagicMock:
+    """Mock Canvas + manifest for a run_sync where the gradeable fixture files
+    are up-to-date and only the dates pass has work to consider."""
+    import os
+
+    mocker.patch("github_to_canvas.manifest.load", return_value=preloaded)
+    mocker.patch("github_to_canvas.manifest.flush")
+
+    mock_canvas_cls = mocker.patch("github_to_canvas.canvas_api.Canvas")
+    course = MagicMock()
+    mock_canvas_cls.return_value.get_course.return_value = course
+
+    stub_page = _mock_page(99999, "syllabus-stub")
+    course.create_page.return_value = stub_page
+    course.create_discussion_topic.return_value = _mock_discussion(55555)
+    course.upload.return_value = (
+        True,
+        {"id": 77777, "url": "https://school.instructure.com/files/77777/download"},
+    )
+    module = _mock_module(66666)
+    course.create_module.return_value = module
+    module.create_module_item.side_effect = [_mock_item(i) for i in range(201, 240)]
+
+    os.utime(course_root / "assignments" / "week1.md", (0.0, 0.0))
+    os.utime(course_root / "discussions" / "week1-intro.md", (0.0, 0.0))
+    return course
+
+
+def test_dates_pass_skips_cached_unchanged(course_root: Path, mocker) -> None:
+    """The dates pass runs even when course_settings.toml is up-to-date, but an
+    item whose cached resolved_dates match the current resolution gets no API call."""
+    _write_settings(
+        course_root,
+        'due_dates = [\n'
+        '    {name = "Week 1 Problem Set", due_at = "2099-12-31T23:59:00", '
+        'unlock_at = "NONE", lock_at = "NONE"},\n'
+        ']\n',
+    )
+    preloaded = {
+        "course_settings/course_settings.toml": _fresh_settings_entry(),
+        "assignments/week1.md": {
+            "canvas_id": 98765,
+            "canvas_type": "assignment",
+            "last_synced": _FUTURE,
+            "resolved_dates": {
+                "due_at": "2099-12-31T23:59:00",
+                "unlock_at": "NONE",
+                "lock_at": "NONE",
+            },
+        },
+        "discussions/week1-intro.md": {
+            "canvas_id": 55555,
+            "canvas_type": "discussion",
+            "last_synced": _FUTURE,
+        },
+    }
+    course = _setup_cached_dates_run(course_root, mocker, preloaded)
+
+    run_sync(_cfg(), course_root)
+
+    course.get_assignment.assert_not_called()
+
+
+def test_dates_pass_updates_only_changed_item(course_root: Path, mocker) -> None:
+    """Editing one due_dates entry produces an API call for exactly that item."""
+    _write_settings(
+        course_root,
+        'due_dates = [\n'
+        '    {name = "Week 1 Problem Set", due_at = "2088-06-30T23:59:00", '
+        'unlock_at = "NONE", lock_at = "NONE"},\n'
+        '    {name = "Introduce Yourself", due_at = "2099-06-15T23:59:00", '
+        'unlock_at = "KEEP", lock_at = "KEEP"},\n'
+        ']\n',
+    )
+    preloaded = {
+        "course_settings/course_settings.toml": _fresh_settings_entry(),
+        "assignments/week1.md": {
+            "canvas_id": 98765,
+            "canvas_type": "assignment",
+            "last_synced": _FUTURE,
+            # Cached resolution differs from the TOML (due_at was edited).
+            "resolved_dates": {
+                "due_at": "2099-12-31T23:59:00",
+                "unlock_at": "NONE",
+                "lock_at": "NONE",
+            },
+        },
+        "discussions/week1-intro.md": {
+            "canvas_id": 55555,
+            "canvas_type": "discussion",
+            "last_synced": _FUTURE,
+            "resolved_dates": {
+                "due_at": "2099-06-15T23:59:00",
+                "unlock_at": "KEEP",
+                "lock_at": "KEEP",
+            },
+        },
+    }
+    course = _setup_cached_dates_run(course_root, mocker, preloaded)
+    assignment = _mock_assignment(98765)
+    course.get_assignment.return_value = assignment
+
+    run_sync(_cfg(), course_root)
+
+    course.get_assignment.assert_called_once_with(98765)
+    assignment.edit.assert_called_once()
+    assert (
+        assignment.edit.call_args[1]["assignment"]["due_at"] == "2088-06-30T23:59:00"
+    )
+    course.get_discussion_topic.assert_not_called()
+    # The cache advanced to the new resolution.
+    assert preloaded["assignments/week1.md"]["resolved_dates"] == {
+        "due_at": "2088-06-30T23:59:00",
+        "unlock_at": "NONE",
+        "lock_at": "NONE",
+    }
+
+
+def test_removed_entry_notice_and_cache_drop(course_root: Path, mocker, capsys) -> None:
+    """Deleting a due_dates entry leaves Canvas alone, prints a one-time notice,
+    and drops the cached resolution; the following run is silent."""
+    _write_settings(course_root, 'title = "Test"\n')  # no due_dates at all
+    preloaded = {
+        "course_settings/course_settings.toml": _fresh_settings_entry(),
+        "assignments/week1.md": {
+            "canvas_id": 98765,
+            "canvas_type": "assignment",
+            "last_synced": _FUTURE,
+            "resolved_dates": {
+                "due_at": "2099-12-31T23:59:00",
+                "unlock_at": "NONE",
+                "lock_at": "NONE",
+            },
+        },
+        "discussions/week1-intro.md": {
+            "canvas_id": 55555,
+            "canvas_type": "discussion",
+            "last_synced": _FUTURE,
+        },
+    }
+    course = _setup_cached_dates_run(course_root, mocker, preloaded)
+
+    run_sync(_cfg(), course_root)
+
+    out = capsys.readouterr().out
+    assert 'NOTICE: due_dates entry for "Week 1 Problem Set"' in out
+    assert "leaving Canvas dates as-is" in out
+    assert "resolved_dates" not in preloaded["assignments/week1.md"]
+    course.get_assignment.assert_not_called()
+
+    # Second run: the cache is gone, so the notice does not repeat.
+    run_sync(_cfg(), course_root)
+    assert "NOTICE: due_dates entry" not in capsys.readouterr().out
+
+
+def test_change_to_keep_updates_cache_without_api_call(
+    course_root: Path, mocker
+) -> None:
+    """An entry changed from concrete dates to all-KEEP means 'leave Canvas alone':
+    no API call, but the cache must still advance or it re-triggers forever."""
+    _write_settings(
+        course_root,
+        'due_dates = [\n'
+        '    {name = "Week 1 Problem Set", due_at = "KEEP", '
+        'unlock_at = "KEEP", lock_at = "KEEP"},\n'
+        ']\n',
+    )
+    preloaded = {
+        "course_settings/course_settings.toml": _fresh_settings_entry(),
+        "assignments/week1.md": {
+            "canvas_id": 98765,
+            "canvas_type": "assignment",
+            "last_synced": _FUTURE,
+            "resolved_dates": {
+                "due_at": "2099-12-31T23:59:00",
+                "unlock_at": "NONE",
+                "lock_at": "NONE",
+            },
+        },
+        "discussions/week1-intro.md": {
+            "canvas_id": 55555,
+            "canvas_type": "discussion",
+            "last_synced": _FUTURE,
+        },
+    }
+    course = _setup_cached_dates_run(course_root, mocker, preloaded)
+
+    run_sync(_cfg(), course_root)
+
+    course.get_assignment.assert_not_called()
+    assert preloaded["assignments/week1.md"]["resolved_dates"] == {
+        "due_at": "KEEP",
+        "unlock_at": "KEEP",
+        "lock_at": "KEEP",
+    }
+
+
+def test_date_rejection_not_cached_retries_next_run(course_root: Path, mocker, capsys) -> None:
+    """A Canvas date rejection leaves the cache un-written, so the next run
+    retries (and re-warns) instead of going silent on a half-applied state."""
+    from canvasapi.exceptions import BadRequest
+
+    _write_settings(
+        course_root,
+        'due_dates = [\n'
+        '    {name = "Week 1 Problem Set", due_at = "2099-12-31T23:59:00", '
+        'unlock_at = "NONE", lock_at = "NONE"},\n'
+        ']\n',
+    )
+    preloaded = {
+        "course_settings/course_settings.toml": _fresh_settings_entry(),
+        "assignments/week1.md": {
+            "canvas_id": 98765,
+            "canvas_type": "assignment",
+            "last_synced": _FUTURE,
+        },
+        "discussions/week1-intro.md": {
+            "canvas_id": 55555,
+            "canvas_type": "discussion",
+            "last_synced": _FUTURE,
+        },
+    }
+    course = _setup_cached_dates_run(course_root, mocker, preloaded)
+    assignment = _mock_assignment(98765)
+    assignment.edit.side_effect = BadRequest(
+        '{"errors":{"due_at":[{"message":"must be between availability dates"}]}}'
+    )
+    course.get_assignment.return_value = assignment
+
+    run_sync(_cfg(), course_root)
+
+    assert "Could not set due date" in capsys.readouterr().out
+    assert "resolved_dates" not in preloaded["assignments/week1.md"]
+
+    assignment.edit.reset_mock()
+    assignment.edit.side_effect = None
+    assignment.edit.return_value = assignment
+    run_sync(_cfg(), course_root)
+    assignment.edit.assert_called_once()
+    assert "resolved_dates" in preloaded["assignments/week1.md"]
+
+
+def test_full_sync_records_resolved_dates(course_root: Path) -> None:
+    """The full-sync upload path caches the symbolic resolution alongside the entry
+    (empty value and CREATE_NONE_THEN_KEEP both cache as KEEP)."""
+    from github_to_canvas.sync import _sync_content_file, SyncContext
+    from github_to_canvas import manifest as manifest_lib
+
+    due_dates = [
+        {
+            "name": "Week 1 Problem Set",
+            "due_at": "2099-12-31T23:59:00",
+            "unlock_at": "",
+            "lock_at": "CREATE_NONE_THEN_KEEP",
+        },
+    ]
+
+    course = MagicMock()
+    course.create_assignment.return_value = _mock_assignment(98765)
+    course.create_page.return_value = _mock_page(99999, "syllabus-stub")
+
+    manifest_path = course_root / ".canvas-manifest.toml"
+    manifest = manifest_lib.load(manifest_path)
+    ctx = SyncContext(
+        course=course, repo_path=course_root, snippets_dir=course_root / "snippets",
+        manifest=manifest, manifest_path=manifest_path, course_id=999,
+        force_uploads=True, force_overwrite=True, due_dates=due_dates,
+    )
+    _sync_content_file(ctx, course_root / "assignments" / "week1.md")
+
+    assert manifest["assignments/week1.md"]["resolved_dates"] == {
+        "due_at": "2099-12-31T23:59:00",
+        "unlock_at": "KEEP",
+        "lock_at": "KEEP",
+    }
 
 
 # ---------------------------------------------------------------------------

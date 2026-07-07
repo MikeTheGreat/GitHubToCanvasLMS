@@ -3994,8 +3994,38 @@ def test_front_page_set_when_page_resynced(mock_course, mocker, tmp_path) -> Non
     _assert_front_page_set(page)
 
 
-def test_front_page_set_when_settings_resynced(mock_course, mocker, tmp_path) -> None:
-    """When course_settings.toml is re-synced, set_front_page fires even if the page hasn't changed."""
+def test_front_page_set_when_front_page_setting_changed(mock_course, mocker, tmp_path) -> None:
+    """When the front_page value in course_settings.toml changes, set_front_page fires
+    even if the page itself hasn't changed."""
+    page = _mock_page(111, "home")
+    mock_course.create_page.return_value = page
+    mock_course.get_page.return_value = page
+
+    root = _make_front_page_repo(tmp_path)
+    (root / "pages" / "other.md").write_text(
+        '---\ntitle: Other\npublished: true\n---\n\nOther page.\n'
+    )
+    (root / "course_settings" / "course_settings.toml").write_text(
+        'title = "Test"\nfront_page = "pages/other.md"\n'
+    )
+
+    # First sync (front page is other.md).
+    run_sync(_config(), root)
+    page.edit.reset_mock()
+
+    # Point front_page at home.md; the page itself is old.
+    _make_old(root / "pages" / "home.md")
+    (root / "course_settings" / "course_settings.toml").write_text(
+        'title = "Test"\nfront_page = "pages/home.md"\n'
+    )
+
+    run_sync(_config(), root)
+
+    _assert_front_page_set(page)
+
+
+def test_front_page_not_reset_on_unrelated_settings_change(mock_course, mocker, tmp_path) -> None:
+    """Editing an unrelated setting (course title) does not re-set an unchanged front page."""
     page = _mock_page(111, "home")
     mock_course.create_page.return_value = page
     mock_course.get_page.return_value = page
@@ -4006,7 +4036,7 @@ def test_front_page_set_when_settings_resynced(mock_course, mocker, tmp_path) ->
     run_sync(_config(), root)
     page.edit.reset_mock()
 
-    # Mark the page as old, but rewrite course_settings.toml to make it fresh.
+    # Mark the page as old; change only the course title.
     _make_old(root / "pages" / "home.md")
     (root / "course_settings" / "course_settings.toml").write_text(
         'title = "Test Updated"\nfront_page = "pages/home.md"\n'
@@ -4014,7 +4044,7 @@ def test_front_page_set_when_settings_resynced(mock_course, mocker, tmp_path) ->
 
     run_sync(_config(), root)
 
-    _assert_front_page_set(page)
+    assert not _front_page_was_set(page)
 
 
 # ---------------------------------------------------------------------------

@@ -18,6 +18,9 @@ git clone (local)
      any matched file/dir is skipped during discovery in every phase below)
 2.5. if course_settings/course_settings.toml exists: apply course metadata to Canvas (name, dates, flags, grading
      standards, assignment groups, late policy, post policy, rubrics)
+     → sections are change-detected individually via hashes cached in the manifest
+       entry's section_hashes sub-table; only sections whose values changed are
+       re-sent (see "Section-level change detection" below)
 2.6. if course_settings/syllabus.md exists: convert body to HTML and set as course syllabus body
 2.7. load centralized due_dates from course_settings.toml (if present);
      these override any due_at/lock_at/unlock_at in individual file frontmatter
@@ -63,11 +66,15 @@ git clone (local)
      → parse bank metadata .toml; parse each question .md in questions/
      → create Canvas question bank and populate with questions
      → update manifest dict and flush to disk
-4d. if front_page is set in course_settings.toml AND either course_settings.toml
-     or the target page's .md was re-synced in this run → set_front_page
-     (skipped when neither file changed, to avoid a redundant API call every run)
+4d. if front_page is set in course_settings.toml AND either the front_page value
+     changed (its section hash) or the target page's .md was re-synced in this
+     run → set_front_page (skipped otherwise, to avoid a redundant API call)
 5. sync modules/ alphabetically         (all content IDs now guaranteed in manifest)
      → skip any module whose mtime ≤ manifest last_synced (unless --force-uploads)
+6. due_dates pass (every run): for each gradeable item with a due_dates entry,
+     compare the entry's symbolic resolution against the resolved_dates cache in
+     the item's manifest entry; API calls only for items whose resolution changed
+     (see "due_dates resolved-value caching" below)
 ```
 
 **Processing order:**
@@ -906,6 +913,10 @@ The following sections are handled separately from the flat `course.update()` ca
 
 Read-only or infrastructure fields (`storage_quota`, `root_account_uuid`, `image_identifier_ref`, `last_modified`, `copyright_restrictions`, `copyright_description`, and others) are present in the TOML for round-trip fidelity but are silently ignored by the uploader.
 
+**Section-level change detection** (`DESIGN-settings-caching.md`): the settings file is split into named sections — `metadata` (every top-level key not claimed by another section, so unknown keys conservatively count as metadata), `grading_standards`, `dashboard_image`, `assignment_groups`, `late_policy`, `default_post_policy`, `tab_configuration`, and `front_page` — and each section's canonical-JSON SHA-256 hash (first 16 hex chars; `compute_settings_section_hashes()`) is cached in the manifest entry's `section_hashes` sub-table. When the file's mtime is stale, only sections whose hash differs are re-applied; a comment-only edit re-runs nothing. `due_dates` and `[course_flags]` are excluded from every section (including metadata): due_dates changes are handled per-item by the dates pass and flag changes per-file via `flags_used`, so flipping a flag or editing a due date re-sends no settings section. Couplings: a `grading_standards` or `assignment_groups` change also forces the `metadata` action (the metadata call carries `grading_standard_id` and the group-weight inference); when only metadata changed, `gs_id` is `None` and the course's existing grading standard is left alone. The dashboard image **file's own mtime** joins the staleness check (via `extra_mtime_paths` against the settings entry's `last_synced`), so editing the image alone re-uploads it — and conversely, unrelated settings edits no longer re-upload it. `front_page` has no action inside `sync_course_settings()`; `run_sync` keys the front-page phase off `"front_page" in changed_sections` (or the page itself having re-synced). **Failure/retry:** a failed section is recorded via `warn(..., errors)` (fails the run) and its hash is *not* updated; the entry is recorded with `mark_synced=False`, so the next run re-parses and retries exactly the failed sections while skipping the succeeded ones. The `tab_configuration` misplaced-nested-key lint runs on every stale parse regardless of section gates (the misplaced key lives inside some *other* section's value, so its own hash never trips). Migration: an entry without `section_hashes` (older tool version) re-runs all sections once when stale, then records hashes.
+
+**due_dates resolved-value caching** (`DESIGN-settings-caching.md`): the dates-only pass (`_apply_due_dates_only`, phase 6) runs on **every** update — not just when settings changed — and each gradeable item's manifest entry caches the **symbolic resolution** of its due_dates entry in a `resolved_dates` sub-table: per date key, a concrete date string (verbatim), `"NONE"` (clear), or `"KEEP"` (leave alone; also what empty values and — for existing items — `CREATE_NONE_THEN_KEEP` resolve to). Computed by `resolve_dates_symbolic()`; comparison is verbatim-string, so reformatting the same instant re-sends once (harmless). Per item: skip if synced this run (the full-sync upload paths record `resolved_dates` themselves, via `extra=` since `record()` rebuilds entries wholesale); if no entry matches but a cache exists, print a one-time `NOTICE` and drop the cache (deleting an entry means "stop managing", never "clear dates"); if the fresh resolution equals the cache, skip with no API call (`--force-uploads` bypasses); otherwise send the changed fields via `update_dates()` and advance the cache — including when there is nothing to send because everything resolved `KEEP` (the cache must advance or the entry re-triggers forever). A Canvas date rejection (`date_warning`) leaves the cache un-written so the item is retried (and re-warned, failing the run) every run until fixed. This structurally fixes the old crash hole where the settings entry was recorded before the dates pass ran, so an interrupted run silently skipped the remaining date updates. Deliberately **not** in scope: the cache never triggers a body re-sync, and frontmatter-only dates are not cached (the dates pass has never applied them). First run after upgrading seeds the cache by applying every matched entry once.
+
 ### Module file format
 
 Module files differ from content files: they don't have a body that becomes HTML. Instead, the frontmatter holds module attributes and the body is a Markdown list of links to local content files. The order of links defines the order of items in the Canvas module.
@@ -993,6 +1004,34 @@ last_synced = "2025-02-01T10:01:00"
 ["assignments/week1.md".flags_used]
 in_person_class = true
 
+# resolved_dates caches the symbolic resolution of this item's due_dates entry
+# as of its last successful date application (concrete date / "NONE" / "KEEP";
+# all three keys always present). Omitted when no due_dates entry matches. The
+# every-run dates pass skips items whose fresh resolution equals this cache.
+# See "due_dates resolved-value caching" above.
+["assignments/week1.md".resolved_dates]
+due_at = "2025-02-01T23:59:00-05:00"
+unlock_at = "NONE"
+lock_at = "KEEP"
+
+# section_hashes (settings entry only) caches each course_settings.toml
+# section's content hash as of its last successful application; only sections
+# whose hash changed are re-applied. See "Section-level change detection" above.
+["course_settings/course_settings.toml"]
+canvas_id = 0
+canvas_type = "course_settings"
+last_synced = "2025-02-01T10:00:30"
+
+["course_settings/course_settings.toml".section_hashes]
+metadata = "9f2b4c1a0d3e5f67"
+grading_standards = "e3b0c44298fc1c14"
+assignment_groups = "a1b2c3d4e5f60718"
+late_policy = "0123456789abcdef"
+default_post_policy = "fedcba9876543210"
+tab_configuration = "00112233445566aa"
+dashboard_image = "bb4455667788ccdd"
+front_page = "5566778899aabbcc"
+
 ["modules/week-1.md"]
 canvas_id = 55555
 canvas_type = "module"
@@ -1004,7 +1043,7 @@ canvas_item_ids = {"pages/syllabus.md" = 201, "assignments/week1.md" = 202}
 
 Source Markdown files stay clean — no tool-written fields mixed in with author-written frontmatter. On first publish the tool creates the item, records the Canvas ID in the manifest, and writes the updated manifest back to disk. On subsequent runs it looks up the Canvas ID from the manifest and updates the existing item.
 
-**Error-retry semantics:** `last_synced` is only stamped on a fully successful upload — every "Skipping upload due to errors" path returns before `manifest.record()`, so an errored file stays stale and is retried on the next `update`. The one partial case is a module some of whose items could not be added: `_sync_module()` calls `record(..., mark_synced=False)`, which records the module's `canvas_id` (so the next run updates it rather than creating a duplicate) but omits `last_synced`, leaving the entry stale for retry.
+**Error-retry semantics:** `last_synced` is only stamped on a fully successful upload — every "Skipping upload due to errors" path returns before `manifest.record()`, so an errored file stays stale and is retried on the next `update`. Partial cases use `record(..., mark_synced=False)`, which records the `canvas_id` (so the next run updates rather than duplicates) but omits `last_synced`, leaving the entry stale for retry: a module some of whose items could not be added (`_sync_module()`), and `course_settings.toml` when any settings section failed (the succeeded sections' hashes *are* recorded, so the retry re-runs only the failed ones). Similarly, an item whose due-date update Canvas rejected keeps its `resolved_dates` cache un-advanced, so the dates pass retries it every run until fixed.
 
 ## Snippets (`snippets/` directory)
 

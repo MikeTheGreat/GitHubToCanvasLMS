@@ -13,9 +13,6 @@ extensions are sketched in **[DESIGN-course-flags.md](DESIGN-course-flags.md)
 - **CLI flag overrides** — repeatable `--flag name=true/false` on
   `update`/`publish` to preview the other variant without editing the TOML
   (with care around what gets written to `flags_used`).
-- **due_dates value caching** — apply the same per-file cached-values idea to
-  resolved due dates so editing one due date doesn't trigger a dates-only API
-  pass over every dated item.
 - **Richer conditions and values** — `and`/`or`/parentheses, non-boolean flag
   values with `#if flag == "value"`, `$flag$` substitution; needs a real
   expression parser, keep out until a concrete need appears.
@@ -82,8 +79,9 @@ deferred. The problems, roughly in order of severity:
   flag` in YAML/TOML) works but means two directive syntaxes for one feature.
 - **Flags-file migration.** `#if` inside `course_settings.toml` requires
   moving `[course_flags]` to its own file (chicken-and-egg), plus a
-  back-compat story and rewiring the "settings changed → dates-only pass"
-  staleness to also watch the flags file.
+  back-compat story and teaching the settings staleness check (mtime +
+  section hashes, see DESIGN-settings-caching.md) to also watch the flags
+  file.
 
 Net: a multi-day change touching most frontmatter read sites, with quiet
 inconsistency as the main risk and a permanently higher support burden from

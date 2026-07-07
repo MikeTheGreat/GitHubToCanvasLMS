@@ -1,6 +1,7 @@
 """Main sync pipeline."""
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import tomllib
@@ -218,7 +219,13 @@ def iter_gradeable_content(
 
 
 def _apply_due_dates_only(ctx: SyncContext) -> None:
-    """Apply due_dates overrides via dates-only API calls for items not already synced this run."""
+    """Apply due_dates overrides via dates-only API calls for items not already synced this run.
+
+    Runs on every update. Each item's symbolic date resolution is cached in
+    its manifest entry (``resolved_dates``); items whose resolution is
+    unchanged are skipped without any API call, so the pass is O(changed
+    entries) rather than O(all dated items).
+    """
     course = ctx.course
     repo_path = ctx.repo_path
     manifest = ctx.manifest
@@ -238,18 +245,36 @@ def _apply_due_dates_only(ctx: SyncContext) -> None:
         title = fm.get("title", md_path.stem)
         override = find_due_date_override(ctx.due_dates, title, ctype)
         if override is None:
+            if "resolved_dates" in existing:
+                print(
+                    f'  NOTICE: due_dates entry for "{title}" ({local_key}) was '
+                    f"removed — leaving Canvas dates as-is"
+                )
+                del existing["resolved_dates"]
+                manifest_lib.flush(ctx.manifest_path, manifest)
+            continue
+        resolved = resolve_dates_symbolic(override)
+        if not ctx.force_uploads and existing.get("resolved_dates") == resolved:
+            if ctx.verbose:
+                print(f"  Skipping (dates unchanged): {local_key}")
             continue
         canvas_id = existing["canvas_id"]
         date_fields = _resolve_date_overrides(override, canvas_id, local_key, errors)
-        if not date_fields:
-            continue
-        print(f"  Updating dates: {local_key}")
-        result = capi.update_dates(course, ctype, canvas_id, date_fields)
-        if result.get("date_warning"):
-            msg = _date_rejection_message(
-                local_key, title, date_fields.get("due_at"), result.get("html_url")
-            )
-            warn(msg, errors)
+        if date_fields:
+            print(f"  Updating dates: {local_key}")
+            result = capi.update_dates(course, ctype, canvas_id, date_fields)
+            if result.get("date_warning"):
+                msg = _date_rejection_message(
+                    local_key, title, date_fields.get("due_at"), result.get("html_url")
+                )
+                warn(msg, errors)
+                # Cache deliberately not updated: the next run retries (and
+                # re-warns) until the dates are fixed in Canvas or the TOML.
+                continue
+        # Recorded even when there was nothing to send (everything resolved
+        # KEEP) — the cache must advance or the entry re-triggers forever.
+        existing["resolved_dates"] = resolved
+        manifest_lib.flush(ctx.manifest_path, manifest)
 
 
 def _check_due_dates_coverage(
@@ -372,6 +397,29 @@ def _resolve_date_overrides(
         )
         warn(msg, errors)
     return result
+
+
+def resolve_dates_symbolic(override: dict[str, Any]) -> dict[str, str]:
+    """Compute the symbolic date resolution of a due_dates entry, for caching.
+
+    For each date key: a concrete date string (verbatim), "NONE" (clear the
+    date on Canvas), or "KEEP" (leave Canvas alone). All three keys are always
+    present so cached entries are self-describing. Sentinels stay symbolic —
+    KEEP is the instruction *leave alone*, never a concrete date — and
+    CREATE_NONE_THEN_KEEP resolves to KEEP because its clear-on-create meaning
+    only applies while the item is first created (the full-sync path handles
+    that; this resolution describes the steady state of an existing item).
+    """
+    resolved: dict[str, str] = {}
+    for dk in _DATE_KEYS:
+        val = override.get(dk, "")
+        if isinstance(val, str) and val.strip().lower() in _DATE_SENTINELS:
+            resolved[dk] = "NONE" if val.strip().lower() == "none" else "KEEP"
+        elif val:
+            resolved[dk] = str(val)
+        else:
+            resolved[dk] = "KEEP"
+    return resolved
 
 
 def _date_rejection_message(
@@ -728,6 +776,47 @@ def sync_syllabus(ctx: SyncContext) -> None:
     )
 
 
+# course_settings.toml keys with a section of their own for change detection.
+_SETTINGS_SECTION_KEYS = (
+    "grading_standards",
+    "dashboard_image",
+    "assignment_groups",
+    "late_policy",
+    "default_post_policy",
+    "tab_configuration",
+    "front_page",
+)
+# Excluded from the metadata section but with no section of their own:
+# due_dates changes are handled per-item by the dates pass (which runs every
+# update), and course_flags changes are handled per-file via flags_used.
+_NON_METADATA_SETTINGS_KEYS = _SETTINGS_SECTION_KEYS + ("due_dates", "course_flags")
+
+
+def _section_hash(value: Any) -> str:
+    canonical = json.dumps(value, sort_keys=True, separators=(",", ":"), default=str)
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:16]
+
+
+def compute_settings_section_hashes(settings: dict[str, Any]) -> dict[str, str]:
+    """Hash each course_settings.toml section for change detection.
+
+    "metadata" covers every top-level key not claimed by another section, so
+    unknown keys conservatively count as metadata (update_course_metadata
+    reads the whole dict). A section absent from the file hashes a fixed
+    marker rather than being omitted, so adding/removing it is a change like
+    any other.
+    """
+    hashes = {
+        key: _section_hash(settings.get(key, "<absent>"))
+        for key in _SETTINGS_SECTION_KEYS
+    }
+    metadata = {
+        k: v for k, v in settings.items() if k not in _NON_METADATA_SETTINGS_KEYS
+    }
+    hashes["metadata"] = _section_hash(metadata)
+    return hashes
+
+
 def sync_course_settings(
     course,
     repo_path: Path,
@@ -735,22 +824,44 @@ def sync_course_settings(
     manifest_path: Path,
     force_uploads: bool = False,
     verbose: bool = False,
-) -> tuple[dict[str, int], bool, list[str]]:
+    settings: dict | None = None,
+    errors: list[str] | None = None,
+) -> tuple[dict[str, int], set[str], list[str]]:
     """Sync course_settings.toml: metadata, grading standards, assignment groups, policies, rubrics.
 
-    Returns ({rubric_title: canvas_id}, settings_synced, deferred_ag_rules) where
-    settings_synced is True when course_settings.toml was actually re-uploaded
-    this run, and deferred_ag_rules lists assignment-group names whose drop rules
-    Canvas rejected (too few assignments) and must be re-applied after content.
+    Sections of the settings file are change-detected individually via hashes
+    cached in the manifest entry's ``section_hashes`` sub-table, so editing
+    one section (or [course_flags], or due_dates) re-runs only the affected
+    actions. If ``settings`` is provided (pre-loaded), the file is not re-read.
+
+    Returns ({rubric_title: canvas_id}, changed_sections, deferred_ag_rules):
+    changed_sections is the set of section names actually (re)applied this run
+    (run_sync's front-page phase keys off "front_page"), and deferred_ag_rules
+    lists assignment-group names whose drop rules Canvas rejected (too few
+    assignments) and must be re-applied after content.
     """
     settings_path = repo_path / "course_settings" / "course_settings.toml"
     rubrics_path = repo_path / "course_settings" / "rubrics.toml"
     settings_key = "course_settings/course_settings.toml"
     rubrics_key = "course_settings/rubrics.toml"
     deferred_ag_rules: list[str] = []
+    changed_sections: set[str] = set()
+
+    if settings is None and settings_path.exists():
+        with settings_path.open("rb") as fh:
+            settings = tomllib.load(fh)
+
+    # The dashboard image file's own mtime joins the staleness check: editing
+    # the image alone must re-upload it, not just editing the TOML.
+    image_rel = (settings or {}).get("dashboard_image")
+    image_path = repo_path / image_rel if image_rel else None
+
+    def _image_paths() -> list[Path]:
+        return [image_path] if image_path is not None and image_path.exists() else []
 
     settings_stale = settings_path.exists() and manifest_lib.needs_sync(
-        manifest, settings_key, settings_path, force_uploads
+        manifest, settings_key, settings_path, force_uploads,
+        extra_mtime_paths=_image_paths,
     )
     rubrics_stale = rubrics_path.exists() and manifest_lib.needs_sync(
         manifest, rubrics_key, rubrics_path, force_uploads
@@ -760,14 +871,57 @@ def sync_course_settings(
         if verbose and settings_path.exists():
             print(f"Skipping (up-to-date): {settings_key}")
         try:
-            return capi.get_rubric_ids(course), False, deferred_ag_rules
+            return capi.get_rubric_ids(course), changed_sections, deferred_ag_rules
         except Exception:
-            return {}, False, deferred_ag_rules
+            return {}, changed_sections, deferred_ag_rules
 
     if settings_stale:
-        print("Syncing course settings...")
-        with settings_path.open("rb") as fh:
-            settings = tomllib.load(fh)
+        assert settings is not None  # settings_path exists when settings_stale
+        entry = manifest.get(settings_key) or {}
+        recorded_hashes = entry.get("section_hashes")
+        current_hashes = compute_settings_section_hashes(settings)
+        if force_uploads or recorded_hashes is None:
+            stale_sections = set(current_hashes)
+        else:
+            stale_sections = {
+                name
+                for name, digest in current_hashes.items()
+                if recorded_hashes.get(name) != digest
+            }
+            # Image file newer than the last sync: the path string (and its
+            # hash) is unchanged, but the upload must re-run.
+            if image_path is not None and image_path.exists() and manifest_lib.needs_sync(
+                manifest, settings_key, image_path, False
+            ):
+                stale_sections.add("dashboard_image")
+        # update_course_metadata's output also depends on grading standards
+        # (grading_standard_id) and assignment groups (group_weight inference).
+        if stale_sections & {"grading_standards", "assignment_groups"}:
+            stale_sections.add("metadata")
+
+        if stale_sections:
+            print("Syncing course settings...")
+        elif verbose:
+            print(f"Skipping (no section changed): {settings_key}")
+        if verbose:
+            for name in sorted(set(current_hashes) - stale_sections):
+                print(f"  Skipping section (unchanged): {name}")
+
+        # Hashes for sections that succeeded this run; a failed section keeps
+        # its old hash (or none), so the next run retries exactly that section.
+        new_hashes = dict(recorded_hashes or {})
+        section_failures: list[str] = []
+
+        def _section_done(name: str) -> None:
+            changed_sections.add(name)
+            new_hashes[name] = current_hashes[name]
+
+        def _section_failed(name: str, exc: Exception, detail: str = "") -> None:
+            warn(
+                f"WARNING: course_settings section '{name}' failed{detail}: {exc}",
+                errors,
+            )
+            section_failures.append(name)
 
         grading_standards = settings.get("grading_standards", [])
         assignment_groups = settings.get("assignment_groups", [])
@@ -775,49 +929,75 @@ def sync_course_settings(
         default_post_policy = settings.get("default_post_policy", {})
 
         # §1c: grading standards (needed before §1a so we can set grading_standard_id)
-        gs_id = capi.sync_grading_standards(course, grading_standards)
+        gs_id = None
+        if "grading_standards" in stale_sections:
+            gs_id = capi.sync_grading_standards(course, grading_standards)
+            _section_done("grading_standards")
 
-        # §1a: core course metadata
-        capi.update_course_metadata(course, settings, grading_standard_id=gs_id)
+        # §1a: core course metadata. When only metadata changed, gs_id is None
+        # and update_course_metadata leaves the course's grading standard alone.
+        if "metadata" in stale_sections:
+            capi.update_course_metadata(course, settings, grading_standard_id=gs_id)
+            _section_done("metadata")
 
         # Dashboard image
-        dashboard_image = settings.get("dashboard_image")
-        if dashboard_image:
-            image_path = repo_path / dashboard_image
-            if image_path.exists():
-                print(f"  Uploading dashboard image: {dashboard_image}")
-                try:
-                    capi.upload_course_image(course, image_path)
-                except Exception as exc:
-                    print(f"  WARNING: dashboard image upload failed: {exc}")
-            else:
-                print(f"  WARNING: dashboard_image file not found: {dashboard_image}")
+        if "dashboard_image" in stale_sections:
+            image_ok = True
+            if image_rel:
+                if image_path is not None and image_path.exists():
+                    print(f"  Uploading dashboard image: {image_rel}")
+                    try:
+                        capi.upload_course_image(course, image_path)
+                    except Exception as exc:
+                        _section_failed("dashboard_image", exc)
+                        image_ok = False
+                else:
+                    print(f"  WARNING: dashboard_image file not found: {image_rel}")
+            if image_ok:
+                _section_done("dashboard_image")
 
         # §1d: assignment groups. Drop rules that Canvas rejects because the
         # group has no assignments yet (always so on a fresh course) are deferred
         # and re-applied after the content phase by run_sync.
-        deferred_ag_rules[:] = capi.sync_assignment_groups(course, assignment_groups)
+        if "assignment_groups" in stale_sections:
+            deferred_ag_rules[:] = capi.sync_assignment_groups(course, assignment_groups)
+            _section_done("assignment_groups")
 
         # §1e: late policy
-        if late_policy:
-            try:
-                capi.update_late_policy(course, late_policy)
-            except Exception as exc:
-                print(
-                    f"  WARNING: late policy update failed (late_policy={late_policy!r}): {exc}"
-                )
+        if "late_policy" in stale_sections:
+            late_ok = True
+            if late_policy:
+                try:
+                    capi.update_late_policy(course, late_policy)
+                except Exception as exc:
+                    _section_failed(
+                        "late_policy", exc, f" (late_policy={late_policy!r})"
+                    )
+                    late_ok = False
+            if late_ok:
+                _section_done("late_policy")
 
         # §1b: default post policy
-        if "post_manually" in default_post_policy:
-            post_manually = default_post_policy["post_manually"]
-            try:
-                capi.update_post_policy(course, post_manually)
-            except Exception as exc:
-                print(
-                    f"  WARNING: post policy update failed (post_manually={post_manually!r}): {exc}"
-                )
+        if "default_post_policy" in stale_sections:
+            post_ok = True
+            if "post_manually" in default_post_policy:
+                post_manually = default_post_policy["post_manually"]
+                try:
+                    capi.update_post_policy(course, post_manually)
+                except Exception as exc:
+                    _section_failed(
+                        "default_post_policy",
+                        exc,
+                        f" (post_manually={post_manually!r})",
+                    )
+                    post_ok = False
+            if post_ok:
+                _section_done("default_post_policy")
 
-        # Course-navigation (left sidebar) order/visibility.
+        # Course-navigation (left sidebar) order/visibility. The misplaced-key
+        # lint runs on every parse (not just when the section changed) — the
+        # misplaced key lives inside some *other* section's value, so its own
+        # section hash never trips.
         tab_config_raw = settings.get("tab_configuration")
         if tab_config_raw is None:
             misplaced = _find_nested_key(settings, "tab_configuration")
@@ -828,23 +1008,45 @@ def sync_course_settings(
                     "top-level key must come BEFORE any [section]/[[section]] headers — move "
                     "the tab_configuration block above the first section in course_settings.toml."
                 )
-        elif tab_config_raw:
-            try:
-                tab_config = (
-                    json.loads(tab_config_raw)
-                    if isinstance(tab_config_raw, str)
-                    else tab_config_raw
-                )
-            except (json.JSONDecodeError, TypeError) as exc:
-                print(f"  WARNING: tab_configuration is not valid JSON; skipping: {exc}")
-                tab_config = None
-            if tab_config:
+            if "tab_configuration" in stale_sections:
+                _section_done("tab_configuration")
+        elif "tab_configuration" in stale_sections:
+            tabs_ok = True
+            if tab_config_raw:
                 try:
-                    capi.sync_tab_configuration(course, tab_config)
-                except Exception as exc:
-                    print(f"  WARNING: tab configuration sync failed: {exc}")
+                    tab_config = (
+                        json.loads(tab_config_raw)
+                        if isinstance(tab_config_raw, str)
+                        else tab_config_raw
+                    )
+                except (json.JSONDecodeError, TypeError) as exc:
+                    print(f"  WARNING: tab_configuration is not valid JSON; skipping: {exc}")
+                    tab_config = None
+                if tab_config:
+                    try:
+                        capi.sync_tab_configuration(course, tab_config)
+                    except Exception as exc:
+                        _section_failed("tab_configuration", exc)
+                        tabs_ok = False
+            if tabs_ok:
+                _section_done("tab_configuration")
 
-        manifest_lib.record(manifest, manifest_path, settings_key, 0, "course_settings")
+        # front_page has no action here; run_sync's front-page phase keys off
+        # its presence in changed_sections.
+        if "front_page" in stale_sections:
+            _section_done("front_page")
+
+        # mark_synced=False on any section failure leaves the entry stale, so
+        # the next run re-checks hashes and retries exactly the failed sections.
+        manifest_lib.record(
+            manifest,
+            manifest_path,
+            settings_key,
+            0,
+            "course_settings",
+            extra={"section_hashes": new_hashes},
+            mark_synced=not section_failures,
+        )
 
     # §15: rubrics (tracked independently from course_settings.toml)
     rubric_ids: dict[str, int] = {}
@@ -872,7 +1074,7 @@ def sync_course_settings(
         except Exception:
             pass
 
-    return rubric_ids, settings_stale, deferred_ag_rules
+    return rubric_ids, changed_sections, deferred_ag_rules
 
 
 def _phase_assets(ctx: SyncContext) -> None:
@@ -951,14 +1153,14 @@ def _phase_question_banks(ctx: SyncContext) -> None:
 
 
 def _phase_front_page(
-    ctx: SyncContext, front_page_path: str | None, settings_synced: bool
+    ctx: SyncContext, front_page_path: str | None, front_page_changed: bool
 ) -> None:
-    """Phase 2.7: Set front page (only when course_settings.toml or the target page was re-synced)."""
+    """Phase 2.7: Set front page (only when the front_page setting or the target page was re-synced)."""
     course = ctx.course
     manifest = ctx.manifest
     errors = ctx.errors
     synced_keys = ctx.synced_keys
-    if front_page_path and (settings_synced or front_page_path in synced_keys):
+    if front_page_path and (front_page_changed or front_page_path in synced_keys):
         entry = manifest.get(front_page_path)
         if entry and "canvas_url" in entry:
             print(f"Setting front page: {front_page_path}")
@@ -1036,9 +1238,17 @@ def _phase_modules(ctx: SyncContext, force_uploads: bool) -> None:
         manifest_lib.record(manifest, manifest_path, _order_key, 0, "module_order")
 
 
-def _phase_due_dates(ctx: SyncContext, due_dates: list, settings_synced: bool) -> None:
-    """Phase 4: Apply and check due dates."""
-    if due_dates and settings_synced:
+def _phase_due_dates(ctx: SyncContext, due_dates: list) -> None:
+    """Phase 4: Apply and check due dates.
+
+    Runs on every update; the per-item resolved_dates cache keeps unchanged
+    items API-free. Also runs when the due_dates table is empty but cached
+    resolutions remain, so entry removals still get their one-time notice.
+    """
+    have_cached = any(
+        isinstance(e, dict) and "resolved_dates" in e for e in ctx.manifest.values()
+    )
+    if due_dates or have_cached:
         _apply_due_dates_only(ctx)
     if due_dates:
         _check_due_dates_coverage(due_dates, ctx.repo_path, ctx.matcher)
@@ -1072,7 +1282,10 @@ def run_sync(
             _front_page_path = _settings_dict.get("front_page")
 
     # 0. Course settings (metadata, grading standards, assignment groups, policies, rubrics)
-    rubric_ids, settings_synced, deferred_ag_rules = sync_course_settings(course, repo_path, manifest, manifest_path, force_uploads, verbose=verbose)
+    rubric_ids, changed_sections, deferred_ag_rules = sync_course_settings(
+        course, repo_path, manifest, manifest_path, force_uploads,
+        verbose=verbose, settings=_settings_dict, errors=errors,
+    )
 
     assignment_group_ids = capi.get_assignment_group_ids(course)
 
@@ -1126,13 +1339,13 @@ def run_sync(
         )
 
     # 2.7. Front page
-    _phase_front_page(ctx, _front_page_path, settings_synced)
+    _phase_front_page(ctx, _front_page_path, "front_page" in changed_sections)
 
     # 3. Modules
     _phase_modules(ctx, force_uploads)
 
     # 4. Due dates
-    _phase_due_dates(ctx, due_dates, settings_synced)
+    _phase_due_dates(ctx, due_dates)
 
     # 5. Unused course flags (warning only, once per flag)
     check_course_flags_coverage(course_flags, repo_path, matcher)
@@ -1508,9 +1721,17 @@ def _upload_assignment(
         )
         warn(msg, errors)
     print(f"  Link: {entry['html_url']}")
+    extra_record: dict[str, Any] = {}
+    if flags_used:
+        extra_record["flags_used"] = flags_used
+    # record() rebuilds the entry wholesale, so the resolved-dates cache must
+    # be re-supplied here or it is silently dropped. Skipped on date_warning
+    # so the dates-only pass retries on the next run.
+    if override is not None and not entry.get("date_warning"):
+        extra_record["resolved_dates"] = resolve_dates_symbolic(override)
     manifest_lib.record(
         manifest, manifest_path, local_key, entry["canvas_id"], "assignment",
-        extra={"flags_used": flags_used} if flags_used else None,
+        extra=extra_record or None,
     )
     _apply_rubric(ctx, entry, frontmatter, local_key)
     if synced_keys is not None:
@@ -1569,9 +1790,14 @@ def _upload_discussion(
         )
         warn(msg, errors)
     print(f"  Link: {entry['html_url']}")
+    extra_record: dict[str, Any] = {}
+    if flags_used:
+        extra_record["flags_used"] = flags_used
+    if override is not None and not entry.get("date_warning"):
+        extra_record["resolved_dates"] = resolve_dates_symbolic(override)
     manifest_lib.record(
         manifest, manifest_path, local_key, entry["canvas_id"], "discussion",
-        extra={"flags_used": flags_used} if flags_used else None,
+        extra=extra_record or None,
     )
     if synced_keys is not None:
         synced_keys.add(local_key)
@@ -2082,6 +2308,8 @@ def _sync_quiz(ctx: SyncContext, quiz_folder: Path, quiz_md: Path) -> None:
     flags_used = _flags_used_for(quiz_files, snippets_dir, ctx.flags)
     if flags_used:
         extra["flags_used"] = flags_used
+    if override is not None and not result.get("date_warning"):
+        extra["resolved_dates"] = resolve_dates_symbolic(override)
     manifest_lib.record(
         manifest,
         manifest_path,
