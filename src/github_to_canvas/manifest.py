@@ -12,18 +12,54 @@ from typing import Any
 ManifestDict = dict[str, dict[str, Any]]
 
 
+def flag_change(
+    entry: dict[str, Any], current_flags: dict[str, bool]
+) -> tuple[str, bool, bool | None] | None:
+    """First recorded course flag whose value no longer matches, if any.
+
+    Compares the entry's ``flags_used`` sub-table (flag values in effect at
+    the file's last successful sync) against ``current_flags``. Returns
+    ``(name, recorded_value, current_value)`` — current_value is None when
+    the flag was deleted from [course_flags] — or None if nothing changed.
+    """
+    flags_used = entry.get("flags_used") or {}
+    for name, recorded in flags_used.items():
+        if name not in current_flags:
+            return name, bool(recorded), None
+        if bool(current_flags[name]) != bool(recorded):
+            return name, bool(recorded), bool(current_flags[name])
+    return None
+
+
+def print_flag_change_reason(change: tuple[str, bool, bool | None]) -> None:
+    """Verbose-mode explanation for a flag-triggered re-sync."""
+    name, recorded, current = change
+    if current is None:
+        print(f"  re-syncing: flag '{name}' deleted from course_settings.toml")
+    else:
+        print(
+            f"  re-syncing: flag '{name}' changed "
+            f"{str(recorded).lower()} → {str(current).lower()}"
+        )
+
+
 def needs_sync(
     manifest: ManifestDict,
     local_key: str,
     file_path: Path,
     force: bool = False,
     extra_mtime_paths: Callable[[], Iterable[Path]] | None = None,
+    current_flags: dict[str, bool] | None = None,
+    verbose: bool = False,
 ) -> bool:
     """Return True if the file should be synced to Canvas.
 
     True when: force=True, no manifest entry, no last_synced, file mtime is newer
     than last_synced, or (if file_path alone isn't newer) any path returned by
-    extra_mtime_paths() is newer than last_synced.
+    extra_mtime_paths() is newer than last_synced. When ``current_flags`` is
+    given, also True when any course flag recorded in the entry's
+    ``flags_used`` sub-table is missing from current_flags or differs in value
+    (in verbose mode the changed flag is printed as the reason).
 
     extra_mtime_paths is a zero-arg callable rather than a plain iterable so
     callers can defer the (potentially file-reading) work of computing it —
@@ -39,12 +75,18 @@ def needs_sync(
     file_mtime = datetime.fromtimestamp(file_path.stat().st_mtime, tz=timezone.utc)
     if file_mtime > last_synced:
         return True
-    if extra_mtime_paths is None:
-        return False
-    return any(
+    if extra_mtime_paths is not None and any(
         datetime.fromtimestamp(p.stat().st_mtime, tz=timezone.utc) > last_synced
         for p in extra_mtime_paths()
-    )
+    ):
+        return True
+    if current_flags is not None:
+        change = flag_change(entry, current_flags)
+        if change is not None:
+            if verbose:
+                print_flag_change_reason(change)
+            return True
+    return False
 
 
 def load(path: Path) -> ManifestDict:

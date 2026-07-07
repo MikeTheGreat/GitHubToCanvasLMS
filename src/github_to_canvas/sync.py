@@ -15,6 +15,7 @@ import yaml
 
 from . import canvas_api as capi
 from . import manifest as manifest_lib
+from .conditionals import apply_conditionals, find_referenced_flags
 from .config import Config
 from .convert import (
     expand_frontmatter_snippets,
@@ -58,6 +59,8 @@ class SyncContext:
     newer_on_canvas: list[str] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
     due_dates: list[dict[str, Any]] = field(default_factory=list)
+    # [course_flags] values driving #if/#elif/#else/#endif conditionals.
+    flags: dict[str, bool] = field(default_factory=dict)
     assignment_group_ids: dict[str, int] = field(default_factory=dict)
     rubric_ids: dict[str, int] = field(default_factory=dict)
     synced_keys: set[str] = field(default_factory=set)
@@ -79,6 +82,108 @@ def load_due_dates(repo_path: Path, settings: dict | None = None) -> list[dict[s
         with settings_path.open("rb") as fh:
             settings = tomllib.load(fh)
     return settings.get("due_dates", [])
+
+
+_FLAG_NAME_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\Z")
+
+
+def load_course_flags(repo_path: Path, settings: dict | None = None) -> dict[str, bool]:
+    """Load the [course_flags] table from course_settings/course_settings.toml.
+
+    If settings dict is provided (pre-loaded), use it; otherwise read from
+    disk. The table is optional (absent == no flags defined). An invalid flag
+    name or a non-boolean value is a whole-run config error: raises ValueError,
+    which the CLI reports via die().
+    """
+    if settings is None:
+        settings_path = repo_path / "course_settings" / "course_settings.toml"
+        if not settings_path.exists():
+            return {}
+        with settings_path.open("rb") as fh:
+            settings = tomllib.load(fh)
+    table = settings.get("course_flags", {})
+    if not isinstance(table, dict):
+        raise ValueError(
+            "[course_flags] in course_settings.toml must be a table of "
+            "flag_name = true/false entries"
+        )
+    for name, value in table.items():
+        if not _FLAG_NAME_RE.match(name):
+            raise ValueError(
+                f"invalid course flag name {name!r} in [course_flags] — names "
+                f"must match [A-Za-z_][A-Za-z0-9_]* (letters, digits, "
+                f"underscores; not starting with a digit)"
+            )
+        if not isinstance(value, bool):
+            raise ValueError(
+                f"course flag '{name}' in [course_flags] must be a TOML "
+                f"boolean (true/false), got {value!r}"
+            )
+    return dict(table)
+
+
+def _flags_used_for(
+    paths: Iterable[Path], snippets_dir: Path, flags: dict[str, bool]
+) -> dict[str, bool]:
+    """Flag values to record in a manifest entry's ``flags_used`` sub-table.
+
+    Unions every flag referenced by any of the given files' bodies (all
+    branches, taken or not) or by any snippet they reference — the same
+    snippet enumeration the snippet-mtime staleness path uses — and maps each
+    to its current value.
+    """
+    names: set[str] = set()
+    snippet_paths: set[Path] = set()
+    for path in paths:
+        try:
+            _, body = parse_frontmatter(path.read_text())
+        except yaml.YAMLError:
+            continue
+        names |= find_referenced_flags(body)
+        snippet_paths |= find_referenced_snippets(body, path, snippets_dir)
+    for snippet_path in snippet_paths:
+        names |= find_referenced_flags(snippet_path.read_text())
+    return {name: flags[name] for name in sorted(names) if name in flags}
+
+
+def check_course_flags_coverage(
+    flags: dict[str, bool],
+    repo_path: Path,
+    matcher: IgnoreMatcher | None = None,
+) -> None:
+    """Warn (once per flag) about [course_flags] entries no content file uses.
+
+    Scans every .md file in the repo (content, modules, quizzes, question
+    banks, syllabus, snippets — a flag referenced only inside a snippet counts
+    as used) and unions find_referenced_flags(). Warning only — never an error:
+    defining a flag before writing the content that uses it is legitimate.
+    """
+    if not flags:
+        return
+    used: set[str] = set()
+    for md_file in sorted(repo_path.rglob("*.md")):
+        rel_parts = md_file.relative_to(repo_path).parts
+        if any(part.startswith(".") for part in rel_parts):
+            continue
+        if matcher is not None and matcher.is_ignored(md_file, repo_path):
+            continue
+        try:
+            text = md_file.read_text()
+        except UnicodeDecodeError:
+            continue
+        try:
+            _, body = parse_frontmatter(text)
+        except yaml.YAMLError:
+            body = text  # malformed frontmatter — probe the raw text instead
+        used |= find_referenced_flags(body)
+        if used >= flags.keys():
+            return
+    for name in flags:
+        if name not in used:
+            print(
+                f"WARNING: course flag '{name}' is defined in "
+                f"course_settings.toml but not used by any content file"
+            )
 
 
 def iter_gradeable_content(
@@ -586,7 +691,11 @@ def sync_syllabus(ctx: SyncContext) -> None:
     if not syllabus_md.exists():
         return
     local_key = "course_settings/syllabus.md"
-    if not manifest_lib.needs_sync(manifest, local_key, syllabus_md, ctx.force_uploads):
+    if not manifest_lib.needs_sync(
+        manifest, local_key, syllabus_md, ctx.force_uploads,
+        extra_mtime_paths=lambda: _file_referenced_snippets(syllabus_md, ctx.snippets_dir),
+        current_flags=ctx.flags, verbose=ctx.verbose,
+    ):
         if ctx.verbose:
             print(f"Skipping (up-to-date): {local_key}")
         return
@@ -597,7 +706,11 @@ def sync_syllabus(ctx: SyncContext) -> None:
         msg = f"WARNING: course_settings/syllabus.md: malformed frontmatter: {exc}"
         warn(msg, errors)
         return
-    body = preprocess_snippets(body, syllabus_md, ctx.snippets_dir, errors)
+    body = apply_conditionals(body, ctx.flags, local_key, errors)
+    if body is None:
+        print(f"  Skipping upload due to errors: {local_key}")
+        return
+    body = preprocess_snippets(body, syllabus_md, ctx.snippets_dir, errors, flags=ctx.flags)
     html = markdown_to_html(body.strip()) if body.strip() else ""
     error_count_before = len(errors)
     # Stub creator is not needed for the syllabus; pass a no-op
@@ -608,7 +721,11 @@ def sync_syllabus(ctx: SyncContext) -> None:
         print(f"  Skipping upload due to errors: {local_key}")
         return
     ctx.course.update(course={"syllabus_body": html})
-    manifest_lib.record(manifest, ctx.manifest_path, local_key, course_id, "syllabus")
+    flags_used = _flags_used_for([syllabus_md], ctx.snippets_dir, ctx.flags)
+    manifest_lib.record(
+        manifest, ctx.manifest_path, local_key, course_id, "syllabus",
+        extra={"flags_used": flags_used} if flags_used else None,
+    )
 
 
 def sync_course_settings(
@@ -892,6 +1009,10 @@ def _phase_modules(ctx: SyncContext, force_uploads: bool) -> None:
                     _, body = parse_frontmatter(md_file.read_text())
                 except yaml.YAMLError:
                     continue
+                # Passive probe: conditionals are NOT applied here, so refs in
+                # false branches still count — a conservative superset that at
+                # worst re-syncs a module unnecessarily. The real _sync_module
+                # pass applies (and reports errors for) the directives.
                 body = preprocess_snippets(body, md_file, snippets_dir)
                 items = parse_module_body(body, md_file, repo_path)
                 refs = {i["local_path"] for i in items if i["type"] == "content"}
@@ -956,6 +1077,7 @@ def run_sync(
     assignment_group_ids = capi.get_assignment_group_ids(course)
 
     due_dates = load_due_dates(repo_path, _settings_dict)
+    course_flags = load_course_flags(repo_path, _settings_dict)
 
     ctx = SyncContext(
         course=course,
@@ -971,6 +1093,7 @@ def run_sync(
         newer_on_canvas=newer_on_canvas,
         errors=errors,
         due_dates=due_dates,
+        flags=course_flags,
         assignment_group_ids=assignment_group_ids,
         rubric_ids=rubric_ids,
         synced_keys=synced_content_keys,
@@ -1010,6 +1133,9 @@ def run_sync(
 
     # 4. Due dates
     _phase_due_dates(ctx, due_dates, settings_synced)
+
+    # 5. Unused course flags (warning only, once per flag)
+    check_course_flags_coverage(course_flags, repo_path, matcher)
 
     _print_newer_on_canvas_summary(newer_on_canvas)
     _print_unpublishable_summary(unpublishable_items)
@@ -1280,7 +1406,7 @@ def _apply_rubric(
 
 def _upload_page(
     ctx: SyncContext, existing: dict | None, frontmatter: dict, html: str, title: str,
-    published: bool, local_key: str
+    published: bool, local_key: str, flags_used: dict[str, bool] | None = None
 ) -> None:
     """Upload a page to Canvas."""
     course = ctx.course
@@ -1297,13 +1423,16 @@ def _upload_page(
         editing_roles=frontmatter.get("editing_roles", "teachers"),
     )
     print(f"  Link: {entry['html_url']}")
+    extra: dict[str, Any] = {"canvas_url": entry["canvas_url"]}
+    if flags_used:
+        extra["flags_used"] = flags_used
     manifest_lib.record(
         manifest,
         manifest_path,
         local_key,
         entry["canvas_id"],
         "page",
-        extra={"canvas_url": entry["canvas_url"]},
+        extra=extra,
     )
     if synced_keys is not None:
         synced_keys.add(local_key)
@@ -1311,7 +1440,7 @@ def _upload_page(
 
 def _upload_assignment(
     ctx: SyncContext, existing: dict | None, frontmatter: dict, html: str, title: str,
-    published: bool, local_key: str
+    published: bool, local_key: str, flags_used: dict[str, bool] | None = None
 ) -> None:
     """Upload an assignment to Canvas."""
     course = ctx.course
@@ -1380,7 +1509,8 @@ def _upload_assignment(
         warn(msg, errors)
     print(f"  Link: {entry['html_url']}")
     manifest_lib.record(
-        manifest, manifest_path, local_key, entry["canvas_id"], "assignment"
+        manifest, manifest_path, local_key, entry["canvas_id"], "assignment",
+        extra={"flags_used": flags_used} if flags_used else None,
     )
     _apply_rubric(ctx, entry, frontmatter, local_key)
     if synced_keys is not None:
@@ -1389,7 +1519,7 @@ def _upload_assignment(
 
 def _upload_discussion(
     ctx: SyncContext, existing: dict | None, frontmatter: dict, html: str, title: str,
-    published: bool, local_key: str
+    published: bool, local_key: str, flags_used: dict[str, bool] | None = None
 ) -> None:
     """Upload a discussion to Canvas."""
     course = ctx.course
@@ -1440,7 +1570,8 @@ def _upload_discussion(
         warn(msg, errors)
     print(f"  Link: {entry['html_url']}")
     manifest_lib.record(
-        manifest, manifest_path, local_key, entry["canvas_id"], "discussion"
+        manifest, manifest_path, local_key, entry["canvas_id"], "discussion",
+        extra={"flags_used": flags_used} if flags_used else None,
     )
     if synced_keys is not None:
         synced_keys.add(local_key)
@@ -1455,7 +1586,7 @@ _ANNOUNCEMENT_HANDLED_KEYS = frozenset({"title", "published", "canvas_type"})
 
 def _upload_announcement(
     ctx: SyncContext, existing: dict | None, frontmatter: dict, html: str, title: str,
-    published: bool, local_key: str
+    published: bool, local_key: str, flags_used: dict[str, bool] | None = None
 ) -> None:
     """Upload (post) an announcement to Canvas.
 
@@ -1496,7 +1627,8 @@ def _upload_announcement(
     )
     print(f"  Link: {entry['html_url']}")
     manifest_lib.record(
-        manifest, manifest_path, local_key, entry["canvas_id"], "announcement"
+        manifest, manifest_path, local_key, entry["canvas_id"], "announcement",
+        extra={"flags_used": flags_used} if flags_used else None,
     )
     if synced_keys is not None:
         synced_keys.add(local_key)
@@ -1519,6 +1651,7 @@ def _sync_content_file(ctx: SyncContext, md_file: Path) -> None:
     if not manifest_lib.needs_sync(
         manifest, local_key, md_file, force_uploads,
         extra_mtime_paths=lambda: _file_referenced_snippets(md_file, snippets_dir),
+        current_flags=ctx.flags, verbose=verbose,
     ):
         if verbose:
             print(f"Skipping (up-to-date): {local_key}")
@@ -1540,8 +1673,12 @@ def _sync_content_file(ctx: SyncContext, md_file: Path) -> None:
     if errors is not None and len(errors) > error_count_before_frontmatter_snippets:
         print(f"  Skipping upload due to errors: {local_key}")
         return
+    body = apply_conditionals(body, ctx.flags, local_key, errors)
+    if body is None:
+        print(f"  Skipping upload due to errors: {local_key}")
+        return
     error_count_before_snippets = len(errors) if errors is not None else 0
-    body = preprocess_snippets(body, md_file, snippets_dir, errors)
+    body = preprocess_snippets(body, md_file, snippets_dir, errors, flags=ctx.flags)
     if errors is not None and len(errors) > error_count_before_snippets:
         print(f"  Skipping upload due to errors: {local_key}")
         return
@@ -1595,16 +1732,17 @@ def _sync_content_file(ctx: SyncContext, md_file: Path) -> None:
     existing = manifest.get(local_key)
     title = frontmatter.get("title", md_file.stem)
     published = frontmatter.get("published", False)
+    flags_used = _flags_used_for([md_file], snippets_dir, ctx.flags)
 
     print(f"  Uploading: {local_key}")
     if canvas_type == "page":
-        _upload_page(ctx, existing, frontmatter, html, title, published, local_key)
+        _upload_page(ctx, existing, frontmatter, html, title, published, local_key, flags_used)
     elif canvas_type == "assignment":
-        _upload_assignment(ctx, existing, frontmatter, html, title, published, local_key)
+        _upload_assignment(ctx, existing, frontmatter, html, title, published, local_key, flags_used)
     elif canvas_type == "discussion":
-        _upload_discussion(ctx, existing, frontmatter, html, title, published, local_key)
+        _upload_discussion(ctx, existing, frontmatter, html, title, published, local_key, flags_used)
     elif canvas_type == "announcement":
-        _upload_announcement(ctx, existing, frontmatter, html, title, published, local_key)
+        _upload_announcement(ctx, existing, frontmatter, html, title, published, local_key, flags_used)
 
 
 def _load_module_order(repo_path: Path) -> dict[str, int]:
@@ -1670,6 +1808,7 @@ def _sync_module(
     if not manifest_lib.needs_sync(
         manifest, local_key, md_file, force_this,
         extra_mtime_paths=lambda: _file_referenced_snippets(md_file, snippets_dir),
+        current_flags=ctx.flags, verbose=verbose,
     ):
         if verbose:
             print(f"Skipping (up-to-date): {local_key}")
@@ -1687,7 +1826,11 @@ def _sync_module(
         return False
     frontmatter, body = parsed
     frontmatter, body = expand_frontmatter_snippets(frontmatter, body, md_file, snippets_dir, errors)
-    body = preprocess_snippets(body, md_file, snippets_dir)
+    body = apply_conditionals(body, ctx.flags, local_key, errors)
+    if body is None:
+        print(f"  Skipping upload due to errors: {local_key}")
+        return False
+    body = preprocess_snippets(body, md_file, snippets_dir, flags=ctx.flags)
     items = parse_module_body(body, md_file, repo_root)
     for item in items:
         if item.get("type") == "content" and item.get("published") is None:
@@ -1720,13 +1863,17 @@ def _sync_module(
             else:
                 had_warnings = True
 
+    extra: dict[str, Any] = {"canvas_item_ids": canvas_item_ids}
+    flags_used = _flags_used_for([md_file], snippets_dir, ctx.flags)
+    if flags_used:
+        extra["flags_used"] = flags_used
     manifest_lib.record(
         manifest,
         manifest_path,
         local_key,
         module.id,
         "module",
-        extra={"canvas_item_ids": canvas_item_ids},
+        extra=extra,
     )
     return had_warnings
 
@@ -1738,9 +1885,13 @@ def _quiz_needs_sync(
     manifest: manifest_lib.ManifestDict,
     force_uploads: bool,
     snippets_dir: Path,
+    current_flags: dict[str, bool] | None = None,
+    verbose: bool = False,
 ) -> bool:
     """Return True if the quiz .md, any question file, or any snippet they
-    reference is newer than last_synced."""
+    reference is newer than last_synced, or if any course flag recorded in
+    the quiz entry's flags_used table changed (the quiz and its questions
+    sync as one unit, so flags_used covers all of them)."""
     if force_uploads:
         return True
     entry = manifest.get(local_key)
@@ -1759,6 +1910,12 @@ def _quiz_needs_sync(
             snippet_mtime = datetime.fromtimestamp(snippet_path.stat().st_mtime, tz=timezone.utc)
             if snippet_mtime > last_synced:
                 return True
+    if current_flags is not None:
+        change = manifest_lib.flag_change(entry, current_flags)
+        if change is not None:
+            if verbose:
+                manifest_lib.print_flag_change_reason(change)
+            return True
     return False
 
 
@@ -1780,7 +1937,10 @@ def _sync_quiz(ctx: SyncContext, quiz_folder: Path, quiz_md: Path) -> None:
     local_key = quiz_md.relative_to(repo_root).as_posix()
     questions_dir = quiz_folder / "questions"
 
-    if not _quiz_needs_sync(quiz_md, questions_dir, local_key, manifest, force_uploads, snippets_dir):
+    if not _quiz_needs_sync(
+        quiz_md, questions_dir, local_key, manifest, force_uploads, snippets_dir,
+        current_flags=ctx.flags, verbose=verbose,
+    ):
         if verbose:
             print(f"Skipping (up-to-date): {local_key}")
         return
@@ -1797,7 +1957,13 @@ def _sync_quiz(ctx: SyncContext, quiz_folder: Path, quiz_md: Path) -> None:
 
     print(f"Processing quiz: {local_key}")
 
-    frontmatter, desc_html, question_paths = parse_quiz_file(quiz_md, snippets_dir)
+    error_count_before_parse = len(errors) if errors is not None else 0
+    frontmatter, desc_html, question_paths = parse_quiz_file(
+        quiz_md, snippets_dir, flags=ctx.flags, source_desc=local_key, errors=errors
+    )
+    if errors is not None and len(errors) > error_count_before_parse:
+        print(f"  Skipping upload due to errors: {local_key}")
+        return
     title = frontmatter.get("title", quiz_folder.name)
     published = frontmatter.get("published", False)
 
@@ -1849,7 +2015,12 @@ def _sync_quiz(ctx: SyncContext, quiz_folder: Path, quiz_md: Path) -> None:
             print(f"  ERROR: question file not found: {q_path}")
             continue
         rel_path = q_path.relative_to(quiz_folder.resolve()).as_posix()
-        q_data = parse_question_file(q_path, snippets_dir)
+        q_data = parse_question_file(
+            q_path, snippets_dir,
+            flags=ctx.flags,
+            source_desc=f"{local_key.rsplit('/', 1)[0]}/{rel_path}",
+            errors=errors,
+        )
         # §7: rewrite links in question text
         if q_data.get("question_text"):
             q_data["question_text"] = rewrite_links(
@@ -1895,13 +2066,23 @@ def _sync_quiz(ctx: SyncContext, quiz_folder: Path, quiz_md: Path) -> None:
     if capi.finalize_quiz_publish_state(quiz_obj, published):
         warn(_quiz_manual_save_message(local_key, title, result.get("html_url")), errors)
 
+    extra: dict[str, Any] = {"canvas_question_ids": q_id_map}
+    # flags_used spans the quiz .md and every question file (globbed, not just
+    # the ones currently listed) — the quiz syncs as one unit, and a question
+    # excluded by a false flag must still make the quiz stale when it flips.
+    quiz_files: list[Path] = [quiz_md]
+    if questions_dir.exists():
+        quiz_files.extend(questions_dir.glob("*.md"))
+    flags_used = _flags_used_for(quiz_files, snippets_dir, ctx.flags)
+    if flags_used:
+        extra["flags_used"] = flags_used
     manifest_lib.record(
         manifest,
         manifest_path,
         local_key,
         result["canvas_id"],
         "quiz",
-        extra={"canvas_question_ids": q_id_map},
+        extra=extra,
     )
     if synced_keys is not None:
         synced_keys.add(local_key)
@@ -1940,12 +2121,21 @@ def _sync_question_banks(ctx: SyncContext) -> None:
         with toml_path.open("rb") as fh:
             bank_meta = tomllib.load(fh)
         bank_title = bank_meta.get("bank_title", bank_folder.name)
+        error_count_before = len(ctx.errors)
         questions: list[dict[str, Any]] = []
         if questions_dir.exists():
             for q_path in sorted(questions_dir.glob("*.md")):
-                q_data = parse_question_file(q_path, snippets_dir)
+                q_data = parse_question_file(
+                    q_path, snippets_dir,
+                    flags=ctx.flags,
+                    source_desc=q_path.relative_to(repo_root).as_posix(),
+                    errors=ctx.errors,
+                )
                 q_data["rel_path"] = q_path.relative_to(bank_folder).as_posix()
                 questions.append(q_data)
+        if len(ctx.errors) > error_count_before:
+            print(f"  Skipping upload due to errors: {local_key}")
+            continue
         print(f"  Uploading question bank: {local_key}")
         canvas_id = capi.sync_question_bank(course, bank_title, questions)
         manifest_lib.record(
@@ -1956,7 +2146,13 @@ def _sync_question_banks(ctx: SyncContext) -> None:
 def _get_file_refs(
     local_key: str, file_path: Path, repo_root: Path, snippets_dir: Path
 ) -> set[str]:
-    """Return the set of locally-referenced file keys from any file type, without uploading."""
+    """Return the set of locally-referenced file keys from any file type, without uploading.
+
+    Passive probe: course-flag conditionals are NOT applied, so refs in false
+    branches still count (a conservative superset — at worst the BFS visits a
+    file that active content no longer links). The actual per-file sync applies
+    and reports the directives.
+    """
     folder = local_key.split("/")[0]
     if folder == "modules":
         try:
@@ -2066,6 +2262,7 @@ def run_targeted_sync(
     rubric_ids = capi.get_rubric_ids(course)
     _targeted_position_map = _load_module_order(repo_path)
     due_dates = load_due_dates(repo_path)
+    course_flags = load_course_flags(repo_path)
 
     ctx = SyncContext(
         course=course,
@@ -2080,6 +2277,7 @@ def run_targeted_sync(
         newer_on_canvas=newer_on_canvas,
         errors=errors,
         due_dates=due_dates,
+        flags=course_flags,
         assignment_group_ids=assignment_group_ids,
         rubric_ids=rubric_ids,
         unpublishable_items=unpublishable_items,
@@ -2177,6 +2375,8 @@ def run_targeted_sync(
 
     if due_dates:
         _check_due_dates_coverage(due_dates, repo_path)
+
+    check_course_flags_coverage(course_flags, repo_path)
 
     _print_newer_on_canvas_summary(newer_on_canvas)
     _print_unpublishable_summary(unpublishable_items)

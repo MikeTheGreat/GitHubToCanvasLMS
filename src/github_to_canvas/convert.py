@@ -136,6 +136,7 @@ def preprocess_snippets(
     source_file: Path,
     snippets_dir: Path,
     errors: list[str] | None = None,
+    flags: dict[str, bool] | None = None,
 ) -> str:
     """Replace snippet references with the snippet file's contents.
 
@@ -151,9 +152,18 @@ def preprocess_snippets(
        the snippets directory.  The full file content replaces the link.
        Useful for reusable policy paragraphs, office-hour blocks, etc.
 
+    When ``flags`` is given, each snippet's content has its course-flag
+    conditionals (#if/#elif/#else/#endif) evaluated before insertion; a
+    snippet whose directives error contributes an error and the reference is
+    left unexpanded, matching the other snippet-error behaviors.
+
     Nested snippet includes (a snippet that links to another snippet) are not
     expanded; an error is printed and the inner link is left as-is.
     """
+    # Local import: conditionals.py imports split_fenced_segments/warn from
+    # this module, so a top-level import here would be circular.
+    from .conditionals import apply_conditionals
+
     resolved_snippets_dir = snippets_dir.resolve()
 
     try:
@@ -178,7 +188,18 @@ def preprocess_snippets(
         if not target_path.exists():
             _report_error(f"ERROR: snippet not found: {target_path}")
             return None
-        return target_path.read_text(), target_path
+        content = target_path.read_text()
+        if flags is not None:
+            try:
+                snippet_desc = target_path.relative_to(
+                    resolved_snippets_dir.parent
+                ).as_posix()
+            except ValueError:
+                snippet_desc = target_path.name
+            content = apply_conditionals(content, flags, snippet_desc, errors)
+            if content is None:
+                return None  # directive error reported; leave the ref unexpanded
+        return content, target_path
 
     def _replace_inline(m: re.Match) -> str:
         """Expand a $path.md$ inline snippet ref (content is stripped)."""

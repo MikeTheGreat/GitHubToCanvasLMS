@@ -52,6 +52,7 @@ Write your course content as Markdown files in a Git repository. Run this tool t
     - [Snippets](#snippets)
       - [Inline snippets and the `CANVAS_COURSE_REFERENCE` snippet](#inline-snippets-and-the-canvas_course_reference-snippet)
       - [Shared frontmatter via `PASTE_SNIPPET_INTO_FRONTMATTER`](#shared-frontmatter-via-paste_snippet_into_frontmatter)
+    - [Course flags — conditional content (`#if` / `#elif` / `#else` / `#endif`)](#course-flags--conditional-content-if--elif--else--endif)
   - [Manifest file](#manifest-file)
     - [Deleting a file in Canvas](#deleting-a-file-in-canvas)
   - [IMSCC import](#imscc-import)
@@ -516,6 +517,17 @@ to avoid surprises.
 > works after the `=` (e.g. `{=comment-until-fall}`) — everything except
 > `{=html}` is treated as a comment.
 >
+> If you find yourself using ad-hoc labels like `{=comment-until-fall}` to
+> toggle content between course offerings (in-person vs. online, one quarter
+> vs. the next), use **course flags** instead — a better fit: boolean flags
+> defined once in `course_settings.toml` conditionally include or exclude
+> Markdown regions via `<!-- #if flag -->` … `<!-- #endif -->` directives, so
+> switching offerings is a one-line config change instead of editing every
+> file. One difference to be aware of: content inside a `{=comment}` block
+> renders as monospace code in VSCode, while content inside an `#if` region
+> stays fully rendered/highlighted Markdown. See
+> [Course flags — conditional content](#course-flags--conditional-content-if--elif--else--endif).
+>
 > Relatedly, regular fenced code blocks are always literal: links, headings,
 > and snippet references (`$path.md$`) inside ```` ``` ```` fences are shown
 > as-is, never expanded or treated as quiz questions / module items.
@@ -634,6 +646,15 @@ late_submission_deduction               = 0.0    # percent deducted per interval
 late_submission_interval                = "day"  # "day" or "hour"
 late_submission_minimum_percent_enabled = false
 late_submission_minimum_percent         = 0.0    # floor: never deduct below this %
+
+# ── Course flags (conditional content) ───────────────────────────────────
+# Boolean switches referenced by <!-- #if flag --> directives in Markdown
+# bodies; flip one value here to switch the whole course between offerings.
+# Names must be identifiers ([A-Za-z_][A-Za-z0-9_]*); values must be booleans.
+# See "Course flags — conditional content" below for the directive syntax.
+[course_flags]
+in_person_class = true
+hybrid          = false
 
 # ── Grading standards (letter-grade schemes) ─────────────────────────────
 # Array-of-tables. `data` is a list of [label, minimum-fraction] rows, highest
@@ -1521,6 +1542,98 @@ Each referenced file must be a plain YAML mapping (not Markdown prose) — its k
 - Nested includes (a frontmatter snippet referencing another snippet) are not supported.
 
 This is a different tool than the centralized `due_dates` table in `course_settings.toml` (see [Centralized due dates](#course_settingstoml)): `due_dates` is for fields that should mostly be *unique per item* but reviewed in one place; `PASTE_SNIPPET_INTO_FRONTMATTER` is for fields that should be *identical* across many files, edited once and reflected everywhere that includes the snippet (after a re-sync — see the staleness caveat above).
+
+### Course flags — conditional content (`#if` / `#elif` / `#else` / `#endif`)
+
+If you teach the same course in multiple variants (in-person vs. online,
+different quarters), course flags let one repo produce different Canvas content
+per offering. Define boolean flags once in `course_settings.toml`:
+
+```toml
+# course_settings/course_settings.toml
+[course_flags]
+in_person_class = true
+hybrid          = false
+```
+
+then gate regions of any Markdown body with HTML-comment directives, each alone
+on its own line:
+
+```markdown
+<!-- #if in_person_class -->
+Bring your laptop to Room 302.
+
+We will pair up during the first hour.
+<!-- #elif hybrid -->
+Attend in person **or** on Zoom — your choice this week.
+<!-- #else -->
+Join the Zoom link posted in the module.
+<!-- #endif -->
+```
+
+Switching offerings is then a one-line change in `course_settings.toml`
+followed by an `update` run.
+
+**Condition syntax.** `#if`/`#elif` take exactly one flag name, optionally
+preceded by the word `not` (`<!-- #if not in_person_class -->`). There is no
+`and`/`or`/parentheses and no `!` operator. `#if flag` is true when the flag is
+defined **and** `true`; `#if not flag` when defined and `false`. A flag that is
+not defined in `[course_flags]` is a **hard error** in both forms — there is no
+"undefined means false" — so a typo'd flag name can never silently hide
+content. The file with the error is skipped (not uploaded / not staged) and the
+run reports the error. Nesting is supported; `#elif`/`#else`/`#endif` bind to
+the innermost open `#if`.
+
+**Where it works.** Directives are evaluated in the body of every Markdown file
+the tool processes: pages, assignments, discussions, announcements, the
+syllabus, quizzes (description **and** the numbered question list — so a whole
+question can be conditional), question files, question banks, module files (so
+a module item can be conditional), and snippets. Excluding a quiz question or
+module item behaves exactly as if you had deleted that line: the question /
+module item is removed from Canvas on the next sync. Frontmatter is never
+processed — flags gate body content only. `publish` applies the **same** flag
+values, so the static site matches the Canvas variant.
+
+**Blank lines matter.** Directive lines are removed entirely (no blank line
+left behind), so adjacent text can merge into one paragraph — which is exactly
+what keeps a conditional list item inside a single tight list:
+
+```markdown
+- Always shown
+<!-- #if in_person_class -->
+- In-person only item
+<!-- #endif -->
+- Also always shown
+```
+
+If you want the conditional text to be its own paragraph, put blank lines
+*inside* the branch.
+
+**Notes and gotchas:**
+
+- In GitHub/VSCode *preview*, **all** branches render — nothing evaluates the
+  flags there. The markers themselves are invisible in preview and show as
+  grey comments in the editor; the enclosed content stays fully
+  highlighted/rendered Markdown (unlike `{=comment}` blocks).
+- Directives inside fenced code blocks are literal example text; the block as
+  a whole is kept or dropped by the surrounding conditional.
+- Other HTML comments (`<!-- #region -->`, `<!-- published:false -->`,
+  ordinary comments) pass through untouched. The misspellings `#ifdef`,
+  `#ifndef`, `#elseif`, `#elsif`, and `#fi` are caught with a
+  "did you mean" error.
+- Directives must be balanced within each file, and within each snippet file
+  independently (an `#if` opened in a page can't be closed inside an included
+  snippet).
+- The flag values each file used are cached in `.canvas-manifest.toml`
+  (`flags_used`), so flipping a flag re-syncs **only** the files whose output
+  could change — not the whole course. With `-v` the tool prints why:
+  `re-syncing: flag 'in_person_class' changed true → false`.
+- A flag defined in `[course_flags]` but used by no content file produces a
+  warning (never an error). Deleting a flag that files still reference makes
+  those files re-sync and fail loudly with the undefined-flag error.
+- A file whose entire body is excluded still exists on Canvas, just with an
+  empty body — whole-resource exclusion is a possible future feature (see
+  TODO.md).
 
 ---
 

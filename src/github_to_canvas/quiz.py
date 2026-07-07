@@ -5,6 +5,7 @@ import re
 from pathlib import Path
 from typing import Any
 
+from .conditionals import apply_conditionals
 from .convert import (
     expand_frontmatter_snippets,
     iter_lines_with_fence_info,
@@ -22,20 +23,35 @@ _SUBSECTION_HEADING_RE = re.compile(r"^###\s+(.+)$", re.MULTILINE)
 
 
 def parse_quiz_file(
-    quiz_md: Path, snippets_dir: Path | None = None
+    quiz_md: Path,
+    snippets_dir: Path | None = None,
+    flags: dict[str, bool] | None = None,
+    source_desc: str | None = None,
+    errors: list[str] | None = None,
 ) -> tuple[dict[str, Any], str, list[Path]]:
     """Parse a quiz-level .md file.
 
     Returns (frontmatter, description_html, question_paths_in_order).
     question_paths_in_order is a list of absolute Paths to question files,
     in the order they appear in the numbered list.
+
+    When ``flags`` is given, course-flag conditionals are evaluated on the
+    body (so a whole question-list entry can be conditional). A directive
+    error is reported via ``errors`` and yields an empty body — callers
+    detect the new error and skip the quiz.
     """
     text = quiz_md.read_text(encoding="utf-8")
     frontmatter, body = _parse_frontmatter(text)
 
     if snippets_dir is not None:
         frontmatter, body = expand_frontmatter_snippets(frontmatter, body, quiz_md, snippets_dir)
-        body = preprocess_snippets(body, quiz_md, snippets_dir)
+    if flags is not None:
+        filtered = apply_conditionals(
+            body, flags, source_desc or quiz_md.name, errors
+        )
+        body = "" if filtered is None else filtered
+    if snippets_dir is not None:
+        body = preprocess_snippets(body, quiz_md, snippets_dir, errors, flags=flags)
 
     description_md, question_files = split_quiz_body(body, quiz_md)
     desc_html = markdown_to_html(description_md) if description_md else ""
@@ -127,7 +143,11 @@ def _parse_answers_section(answers_text: str, correct, question_type: str) -> li
 
 
 def parse_question_file(
-    q_path: Path, snippets_dir: Path | None = None
+    q_path: Path,
+    snippets_dir: Path | None = None,
+    flags: dict[str, bool] | None = None,
+    source_desc: str | None = None,
+    errors: list[str] | None = None,
 ) -> dict[str, Any]:
     """Parse a quiz question .md file.
 
@@ -135,13 +155,21 @@ def parse_question_file(
     answers (list of {text, weight} for MCQ/T-F/multiple_response; empty for essay),
     and optionally neutral_comments, correct_comments, incorrect_comments.
     rel_path is NOT set here — callers add it.
+
+    When ``flags`` is given, course-flag conditionals are evaluated on the
+    body. A directive error is reported via ``errors`` and yields an empty
+    body — callers detect the new error and skip the quiz/bank.
     """
     text = q_path.read_text(encoding="utf-8")
     frontmatter, body = _parse_frontmatter(text)
 
     if snippets_dir is not None:
         frontmatter, body = expand_frontmatter_snippets(frontmatter, body, q_path, snippets_dir)
-        body = preprocess_snippets(body, q_path, snippets_dir)
+    if flags is not None:
+        filtered = apply_conditionals(body, flags, source_desc or q_path.name, errors)
+        body = "" if filtered is None else filtered
+    if snippets_dir is not None:
+        body = preprocess_snippets(body, q_path, snippets_dir, errors, flags=flags)
     # Commented-out sections/answers (```{=comment} …) must not be parsed.
     body = strip_raw_nonhtml_blocks(body)
 

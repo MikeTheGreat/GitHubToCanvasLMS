@@ -19,6 +19,7 @@ from typing import Any
 
 import yaml
 
+from .conditionals import apply_conditionals
 from .convert import (
     apply_outside_fences,
     expand_frontmatter_snippets,
@@ -26,7 +27,13 @@ from .convert import (
     strip_raw_nonhtml_blocks,
 )
 from .quiz import parse_question_file, split_quiz_body
-from .sync import _content_default_published, parse_frontmatter, parse_module_body
+from .sync import (
+    _content_default_published,
+    check_course_flags_coverage,
+    load_course_flags,
+    parse_frontmatter,
+    parse_module_body,
+)
 
 
 def _item_published(item: dict, repo: Path) -> bool:
@@ -338,11 +345,17 @@ def extract_local_refs(text: str, source_file: Path, repo: Path) -> set[str]:
     return refs
 
 
-def collect_reachable(repo: Path, seed_paths: set[str]) -> set[str]:
+def collect_reachable(
+    repo: Path, seed_paths: set[str], flags: dict[str, bool] | None = None
+) -> set[str]:
     """BFS from seed paths to find all locally-referenced content.
 
     Excludes anything under ``quizzes/`` or ``snippets/`` (snippets are
-    inlined during staging, not linked).
+    inlined during staging, not linked). When ``flags`` is given, course-flag
+    conditionals are applied before extracting refs, so content referenced
+    only from a false branch is not pulled into the public site. Directive
+    errors are silent here (quiet probe) — the same file errors loudly when
+    staged.
     """
     visited: set[str] = set()
     queue = list(seed_paths)
@@ -360,6 +373,10 @@ def collect_reachable(repo: Path, seed_paths: set[str]) -> set[str]:
             continue
 
         _, body = parse_frontmatter(src.read_text())
+        if flags is not None:
+            filtered = apply_conditionals(body, flags, repo_rel, quiet=True)
+            if filtered is not None:
+                body = filtered
 
         if repo_rel.startswith("modules/"):
             for item in parse_module_body(body, src, repo):
@@ -429,16 +446,28 @@ def _has_leading_h1(body: str) -> bool:
     return False
 
 
-def stage_content_markdown(md_path: Path, repo: Path) -> str:
+def stage_content_markdown(
+    md_path: Path,
+    repo: Path,
+    flags: dict[str, bool] | None = None,
+    errors: list[str] | None = None,
+) -> str | None:
     """Return the published Markdown for a page/assignment/discussion file.
 
-    Strips the tool-specific frontmatter, expands snippet includes, rewrites
-    quiz links to the flattened study-guide path, and ensures the document has
-    an H1 heading (used as the page title).
+    Strips the tool-specific frontmatter, evaluates course-flag conditionals
+    (when ``flags`` is given), expands snippet includes, rewrites quiz links
+    to the flattened study-guide path, and ensures the document has an H1
+    heading (used as the page title). Returns None on a conditional-directive
+    error (reported via ``errors``); the caller must skip the file.
     """
     frontmatter, body = parse_frontmatter(md_path.read_text())
     frontmatter, body = expand_frontmatter_snippets(frontmatter, body, md_path, repo / "snippets")
-    body = preprocess_snippets(body, md_path, repo / "snippets")
+    if flags is not None:
+        source_desc = md_path.relative_to(repo).as_posix() if md_path.is_relative_to(repo) else md_path.name
+        body = apply_conditionals(body, flags, source_desc, errors)
+        if body is None:
+            return None
+    body = preprocess_snippets(body, md_path, repo / "snippets", errors, flags=flags)
     body = apply_outside_fences(body, _rewrite_quiz_links)
     body = _strip_pandoc_syntax(body)
     title = frontmatter.get("title", md_path.stem)
@@ -447,7 +476,9 @@ def stage_content_markdown(md_path: Path, repo: Path) -> str:
     return body.rstrip() + "\n"
 
 
-def render_quiz_study_guide(quiz_folder: Path) -> str:
+def render_quiz_study_guide(
+    quiz_folder: Path, flags: dict[str, bool] | None = None
+) -> str:
     """Render a quiz folder as a single readable Markdown study guide.
 
     Shows the quiz description, then each question with its prompt and answer
@@ -456,6 +487,11 @@ def render_quiz_study_guide(quiz_folder: Path) -> str:
     quiz_md = quiz_folder / f"{quiz_folder.name}.md"
     frontmatter, body = parse_frontmatter(quiz_md.read_text())
     title = frontmatter.get("title", quiz_folder.name)
+
+    if flags is not None:
+        filtered = apply_conditionals(body, flags, quiz_md.name, quiet=True)
+        if filtered is not None:
+            body = filtered
 
     # Description = quiz body minus the numbered question-link list.
     # Shared with the update pipeline so commented-out questions
@@ -470,7 +506,7 @@ def render_quiz_study_guide(quiz_folder: Path) -> str:
     for n, q_path in enumerate(question_files, start=1):
         if not q_path.exists():
             continue
-        q = parse_question_file(q_path)
+        q = parse_question_file(q_path, flags=flags)
         out.append(f"## Question {n}: {q['title']}")
         out.append("")
         if q.get("question_text"):
@@ -491,10 +527,24 @@ def _render_module_li(title: str, href: str, indent: int) -> str:
     return f'<li{style}><a href="{href}">{title}</a></li>'
 
 
-def render_module_overview(module_md: Path, repo: Path) -> str:
-    """Render a module .md file as a clickable overview/index page."""
+def render_module_overview(
+    module_md: Path,
+    repo: Path,
+    flags: dict[str, bool] | None = None,
+    errors: list[str] | None = None,
+) -> str | None:
+    """Render a module .md file as a clickable overview/index page.
+
+    Returns None on a conditional-directive error (reported via ``errors``);
+    the caller must skip the file.
+    """
     frontmatter, body = parse_frontmatter(module_md.read_text())
     title = frontmatter.get("title", module_md.stem)
+    if flags is not None:
+        source_desc = module_md.relative_to(repo).as_posix() if module_md.is_relative_to(repo) else module_md.name
+        body = apply_conditionals(body, flags, source_desc, errors)
+        if body is None:
+            return None
     items = parse_module_body(body, module_md, repo)
 
     out: list[str] = [f"# {title}", ""]
@@ -573,13 +623,15 @@ def _render_index(
     repo: Path,
     syllabus: tuple[str, str] | None,
     nav_sections: dict[str, list[tuple[str, str]]],
+    flags: dict[str, bool] | None = None,
+    errors: list[str] | None = None,
 ) -> str:
     front_page_path = _load_front_page(repo)
     front_page_body = ""
     if front_page_path:
         fp = repo / front_page_path
         if fp.exists() and fp.suffix == ".md":
-            front_page_body = stage_content_markdown(fp, repo)
+            front_page_body = stage_content_markdown(fp, repo, flags, errors) or ""
 
     if front_page_body:
         return front_page_body
@@ -624,6 +676,8 @@ def stage(repo: Path, staging_dir: Path) -> dict[str, Any]:
     (staging_dir / "overrides").mkdir(parents=True, exist_ok=True)
 
     site_name = load_site_name(repo)
+    flags = load_course_flags(repo)
+    errors: list[str] = []
 
     syllabus = _find_syllabus(repo)
     assignments = _discover_type(repo, "assignments")
@@ -639,7 +693,7 @@ def stage(repo: Path, staging_dir: Path) -> dict[str, Any]:
     for _, path in modules:
         seed_paths.add(path)
 
-    reachable = collect_reachable(repo, seed_paths)
+    reachable = collect_reachable(repo, seed_paths, flags)
 
     nav_sections: dict[str, list[tuple[str, str]]] = {}
     if assignments:
@@ -651,7 +705,7 @@ def stage(repo: Path, staging_dir: Path) -> dict[str, Any]:
     (staging_dir / "overrides" / "main.html").write_text(OVERRIDES_MAIN)
     (docs / f"{QUIZ_NOT_PUBLISHED_PAGE}.md").write_text(QUIZ_NOT_PUBLISHED_MD)
     (docs / "index.md").write_text(
-        _render_index(site_name, repo, syllabus, nav_sections)
+        _render_index(site_name, repo, syllabus, nav_sections, flags, errors)
     )
 
     staged_files: list[str] = []
@@ -667,20 +721,28 @@ def stage(repo: Path, staging_dir: Path) -> dict[str, Any]:
 
         if src.suffix != ".md":
             shutil.copy2(src, dest)
-        elif repo_rel.startswith("modules/"):
-            dest.write_text(render_module_overview(src, repo))
         else:
-            dest.write_text(stage_content_markdown(src, repo))
+            if repo_rel.startswith("modules/"):
+                staged = render_module_overview(src, repo, flags, errors)
+            else:
+                staged = stage_content_markdown(src, repo, flags, errors)
+            if staged is None:
+                print(f"  Skipping (conditional-directive errors): {repo_rel}")
+                continue
+            dest.write_text(staged)
 
         staged_files.append(dest_rel)
         print(f"  Staging: {dest_rel}")
 
     (staging_dir / "mkdocs.yml").write_text(render_mkdocs_yml(site_name, nav))
 
+    check_course_flags_coverage(flags, repo)
+
     return {
         "site_name": site_name,
         "module_count": len(modules),
         "staged_files": staged_files,
+        "errors": errors,
     }
 
 
@@ -818,6 +880,15 @@ def run_publish(
         info = stage(repo, staging_dir)
         print(f"Site: {info['site_name']}  ({info['module_count']} module(s), "
               f"{len(info['staged_files'])} content file(s))")
+
+        errors = info.get("errors", [])
+        if errors:
+            print(f"\nThe following errors occurred while staging ({len(errors)} total):")
+            for msg in errors:
+                print(f"  {msg.strip()}")
+            raise ValueError(
+                f"{len(errors)} error(s) while staging content; fix them and re-run publish."
+            )
 
         out = Path(output_dir).resolve()
         _run_mkdocs(["build", "--site-dir", str(out)], staging_dir, cwd=repo)
