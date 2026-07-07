@@ -12,7 +12,6 @@ from .convert import (
     markdown_to_html,
     parse_frontmatter as _parse_frontmatter,
     preprocess_snippets,
-    strip_raw_nonhtml_blocks,
 )
 
 _QUIZ_LINK_RE = re.compile(r"^\s*\d+\.\s+\[([^\]]+)\]\(([^)]+\.md)\)")
@@ -62,13 +61,10 @@ def parse_quiz_file(
 def split_quiz_body(body: str, quiz_md: Path) -> tuple[str, list[Path]]:
     """Separate a quiz-level body into (description_md, question_paths).
 
-    Raw-attribute fences (```{=comment} …) are the documented way to comment
-    out questions, so they are stripped first; a numbered link inside a
-    regular fenced code block is literal example text, not a question.
-    Shared by the update pipeline (parse_quiz_file) and the publish study
-    guide so both agree on what counts as a question.
+    A numbered link inside a fenced code block is literal example text, not a
+    question. Shared by the update pipeline (parse_quiz_file) and the publish
+    study guide so both agree on what counts as a question.
     """
-    body = strip_raw_nonhtml_blocks(body)
     question_files: list[Path] = []
     description_lines: list[str] = []
     for line, is_fenced in iter_lines_with_fence_info(body):
@@ -170,8 +166,6 @@ def parse_question_file(
         body = "" if filtered is None else filtered
     if snippets_dir is not None:
         body = preprocess_snippets(body, q_path, snippets_dir, errors, flags=flags)
-    # Commented-out sections/answers (```{=comment} …) must not be parsed.
-    body = strip_raw_nonhtml_blocks(body)
 
     question_type = frontmatter.get("question_type", "essay_question")
     points = frontmatter.get("points_possible", 0)

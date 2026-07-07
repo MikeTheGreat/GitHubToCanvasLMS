@@ -500,32 +500,13 @@ omitted fields are simply left unchanged in Canvas (and `title` falls back to th
 filename). All dates are ISO 8601 strings; include a timezone offset (e.g. `-08:00`)
 to avoid surprises.
 
-> **Tip — adding comments to Markdown files:** Pandoc's raw attribute block syntax
-> lets you embed text that is completely ignored during conversion and will never
-> appear in Canvas output:
->
-> ````markdown
-> ```{=comment}
-> This text is completely ignored by Pandoc.
-> It will never appear in any output format.
-> ```
-> ````
->
-> This works everywhere, including the structured lists the tool parses itself:
-> quiz question links, module items, and question `## Answers` entries inside a
-> `{=comment}` block are commented out (not uploaded, not published). Any word
-> works after the `=` (e.g. `{=comment-until-fall}`) — everything except
-> `{=html}` is treated as a comment.
->
-> If you find yourself using ad-hoc labels like `{=comment-until-fall}` to
-> toggle content between course offerings (in-person vs. online, one quarter
-> vs. the next), use **course flags** instead — a better fit: boolean flags
-> defined once in `course_settings.toml` conditionally include or exclude
-> Markdown regions via `<!-- #if flag -->` … `<!-- #endif -->` directives, so
-> switching offerings is a one-line config change instead of editing every
-> file. One difference to be aware of: content inside a `{=comment}` block
-> renders as monospace code in VSCode, while content inside an `#if` region
-> stays fully rendered/highlighted Markdown. See
+> **Tip — commenting out content:** to exclude content from Canvas — temporarily,
+> or per course offering — use **course flags**: wrap the region in
+> `<!-- #if flag -->` … `<!-- #endif -->` with a flag defined in
+> `course_settings.toml`. This works everywhere, including the structured lists
+> the tool parses itself: quiz question links, module items, and question
+> `## Answers` entries inside a false branch are skipped (not uploaded, not
+> published). See
 > [Course flags — conditional content](#course-flags--conditional-content-if--elif--else--endif).
 >
 > Relatedly, regular fenced code blocks are always literal: links, headings,
@@ -1266,19 +1247,19 @@ Read each question carefully.   <!-- optional description; everything that isn't
 2. [Explain gravity](questions/explain-gravity.md)
 ```
 
-**Commenting out questions:** wrap question links in a raw-attribute block (the
-same [comment trick](#course_settingstoml) that works everywhere else) and they
-are skipped — not uploaded, not shown in the description. The numbers on the
-remaining links don't need to be renumbered; question order comes from list
-order, not the numbers.
+**Commenting out questions:** wrap question links in a
+[course-flag conditional](#course-flags--conditional-content-if--elif--else--endif)
+and they are skipped when the branch is false — not uploaded, not shown in the
+description. The numbers on the remaining links don't need to be renumbered;
+question order comes from list order, not the numbers.
 
-````markdown
+```markdown
 1. [What is 2+2?](questions/what-is-2-plus-2.md)
-```{=comment}
-2. [Skipped this quarter](questions/skipped.md)
+<!-- #if include_gravity -->
+2. [Explain gravity](questions/explain-gravity.md)
+<!-- #endif -->
+3. [Explain magnets](questions/explain-magnets.md)
 ```
-3. [Explain gravity](questions/explain-gravity.md)
-````
 
 **Assignment group:** `assignment_group_id` works the same way as it does for
 [assignments](#assignment-assignments) — a group name resolved via
@@ -1633,7 +1614,7 @@ If you want the conditional text to be its own paragraph, put blank lines
 - In GitHub/VSCode *preview*, **all** branches render — nothing evaluates the
   flags there. The markers themselves are invisible in preview and show as
   grey comments in the editor; the enclosed content stays fully
-  highlighted/rendered Markdown (unlike `{=comment}` blocks).
+  highlighted/rendered Markdown.
 - Directives inside fenced code blocks are literal example text; the block as
   a whole is kept or dropped by the surrounding conditional.
 - Other HTML comments (`<!-- #region -->`, `<!-- published:false -->`,

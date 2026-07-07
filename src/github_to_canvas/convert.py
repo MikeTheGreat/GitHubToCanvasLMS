@@ -27,7 +27,6 @@ _IMG_TAG_RE = re.compile(r"<img\b[^>]*/?>", re.IGNORECASE)
 _ALT_ATTR_RE = re.compile(r'\balt="([^"]*)"')
 _ROLE_ATTR_RE = re.compile(r'\brole="[^"]*"')
 _FENCE_DELIM_RE = re.compile(r"^\s{0,3}(`{3,}|~{3,})(.*)$")
-_RAW_NONHTML_INFO_RE = re.compile(r"^\{=(?!html\})[\w-]+\}\s*$")
 
 
 def split_fenced_segments(text: str) -> list[tuple[bool, str]]:
@@ -37,8 +36,8 @@ def split_fenced_segments(text: str) -> list[tuple[bool, str]]:
     closing line (same fence character, at least as long, nothing else on the
     line); an unclosed fence runs to the end of the text. Fence-lookalikes
     *inside* a fenced segment are plain content, so a block nested in a longer
-    outer fence (e.g. a ```{=comment} example shown inside a ````markdown
-    block) stays part of the outer block.
+    outer fence (e.g. a ``` example shown inside a ````markdown block) stays
+    part of the outer block.
     """
     segments: list[tuple[bool, str]] = []
     plain: list[str] = []
@@ -91,25 +90,6 @@ def apply_outside_fences(text: str, transform) -> str:
         seg if is_fenced else transform(seg)
         for is_fenced, seg in split_fenced_segments(text)
     )
-
-
-def strip_raw_nonhtml_blocks(text: str) -> str:
-    """Remove raw-attribute fenced blocks (```{=comment} …) except {=html}.
-
-    Pandoc drops these from converted output, so this is a no-op for prose —
-    but the line-based parsers (module items, quiz question lists, question
-    sections) must strip them first, or "commented-out" content inside them
-    would still be uploaded.
-    """
-    out: list[str] = []
-    for is_fenced, seg in split_fenced_segments(text):
-        if is_fenced:
-            opener = seg.split("\n", 1)[0]
-            m = _FENCE_DELIM_RE.match(opener)
-            if m and _RAW_NONHTML_INFO_RE.match(m.group(2).strip()):
-                continue
-        out.append(seg)
-    return "".join(out)
 
 
 def warn(msg: str, errors: list[str] | None) -> None:

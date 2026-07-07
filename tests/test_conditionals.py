@@ -193,8 +193,8 @@ class TestFences:
         # The #endif inside the fence is literal; the real #endif closes the if.
         assert _apply(text) == "```python\n<!-- #endif -->\n```\nend\n"
 
-    def test_directive_lookalike_in_comment_block_untouched(self) -> None:
-        text = "```{=comment}\n<!-- #if hybrid -->\nhidden note\n```\nend\n"
+    def test_directive_lookalike_in_raw_attribute_block_untouched(self) -> None:
+        text = "```{=html}\n<!-- #if hybrid -->\nhidden note\n```\nend\n"
         assert _apply(text) == text
 
 

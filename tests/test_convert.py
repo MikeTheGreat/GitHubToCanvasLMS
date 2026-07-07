@@ -12,7 +12,6 @@ from github_to_canvas.convert import (
     markdown_to_html,
     preprocess_snippets,
     split_fenced_segments,
-    strip_raw_nonhtml_blocks,
 )
 
 # ---------------------------------------------------------------------------
@@ -574,7 +573,7 @@ def test_mark_decorative_images_existing_role_untouched() -> None:
 
 
 # ---------------------------------------------------------------------------
-# split_fenced_segments / strip_raw_nonhtml_blocks
+# split_fenced_segments
 # ---------------------------------------------------------------------------
 
 def test_split_fenced_segments_roundtrip_and_flags() -> None:
@@ -597,29 +596,10 @@ def test_split_fenced_segments_tilde_fences() -> None:
 
 def test_split_fenced_segments_longer_outer_fence_swallows_inner() -> None:
     """A ``` block shown inside a ````markdown block is content, not a fence."""
-    text = "````markdown\n```{=comment}\nhi\n```\n````\nafter\n"
+    text = "````markdown\n```python\nhi\n```\n````\nafter\n"
     segs = split_fenced_segments(text)
-    assert segs[0] == (True, "````markdown\n```{=comment}\nhi\n```\n````\n")
+    assert segs[0] == (True, "````markdown\n```python\nhi\n```\n````\n")
     assert segs[1] == (False, "after\n")
-
-
-def test_strip_raw_nonhtml_blocks_removes_comment_block() -> None:
-    text = "keep\n```{=comment-for-in-person-sections}\ndrop me\n```\nkeep too\n"
-    result = strip_raw_nonhtml_blocks(text)
-    assert "drop me" not in result
-    assert "keep" in result and "keep too" in result
-
-
-def test_strip_raw_nonhtml_blocks_keeps_html_and_code_blocks() -> None:
-    text = "```{=html}\n<b>hi</b>\n```\n```python\nx = 1\n```\n"
-    assert strip_raw_nonhtml_blocks(text) == text
-
-
-def test_strip_raw_nonhtml_blocks_keeps_example_inside_outer_fence() -> None:
-    """A ```{=comment} example nested in a longer outer fence is literal
-    documentation (as in the README's comment tip) and must survive."""
-    text = "````markdown\n```{=comment}\nexample\n```\n````\n"
-    assert strip_raw_nonhtml_blocks(text) == text
 
 
 def test_snippet_refs_inside_code_fences_stay_literal(tmp_path: Path) -> None:

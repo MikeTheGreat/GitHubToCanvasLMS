@@ -25,7 +25,6 @@ from .convert import (
     markdown_to_html,
     parse_frontmatter,
     preprocess_snippets,
-    strip_raw_nonhtml_blocks,
     warn,
 )
 from .ignore import IgnoreMatcher, load_ignore_matcher
@@ -568,7 +567,6 @@ def parse_module_body(
     body: str, module_file: Path, course_root: Path
 ) -> list[dict[str, Any]]:
     """Parse a module body into an ordered list of item dicts."""
-    body = strip_raw_nonhtml_blocks(body)
     items: list[dict[str, Any]] = []
     for line, is_fenced in iter_lines_with_fence_info(body):
         if is_fenced:

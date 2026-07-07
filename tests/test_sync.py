@@ -1589,29 +1589,8 @@ def test_parse_module_body_indented_plain_text_subheader(tmp_path: Path) -> None
 
 
 # ---------------------------------------------------------------------------
-# parse_module_body — Pandoc raw attribute blocks
+# parse_module_body — fenced blocks
 # ---------------------------------------------------------------------------
-
-
-def test_parse_module_body_strips_raw_attribute_blocks(tmp_path: Path) -> None:
-    """Pandoc raw-attribute blocks (e.g. {=comment-for-in-person-sections}) are removed."""
-    course_root = tmp_path / "course"
-    course_root.mkdir()
-    (course_root / "modules").mkdir()
-    (course_root / "assignments").mkdir()
-    (course_root / "pages").mkdir()
-    module_file = course_root / "modules" / "unit-01.md"
-    body = (
-        "- [Visible](../pages/foo.md)\n"
-        "```{=comment-for-in-person-sections}\n"
-        "- [Hidden](../assignments/hidden.md)\n"
-        "```\n"
-        "- [Also Visible](../pages/bar.md)\n"
-    )
-    items = parse_module_body(body, module_file, course_root)
-    assert len(items) == 2
-    assert items[0]["title"] == "Visible"
-    assert items[1]["title"] == "Also Visible"
 
 
 def test_parse_module_body_ignores_lines_inside_fenced_blocks(tmp_path: Path) -> None:

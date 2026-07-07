@@ -285,29 +285,6 @@ def test_strip_pandoc_attrs_raw_html_block():
     assert "after" in result
 
 
-def test_strip_pandoc_raw_nonhtml_block_removed():
-    text = "before\n\n```{=comment-for-in-person-sections}\nTHIS SHOULD NOT APPEAR\n```\n\nafter\n"
-    result = publish._strip_pandoc_syntax(text)
-    assert "SHOULD NOT APPEAR" not in result
-    assert "```" not in result
-    assert "before" in result
-    assert "after" in result
-
-
-def test_strip_pandoc_raw_comment_block_removed():
-    text = "before\n\n```{=comment}\nignored text\n```\n\nafter\n"
-    result = publish._strip_pandoc_syntax(text)
-    assert "ignored text" not in result
-    assert "before" in result
-    assert "after" in result
-
-
-def test_strip_pandoc_raw_nonhtml_preserves_html_block():
-    text = "```{=html}\n<div>keep</div>\n```\n"
-    result = publish._strip_pandoc_syntax(text)
-    assert "<div>keep</div>" in result
-
-
 def test_strip_pandoc_escapes_apostrophe():
     result = publish._strip_pandoc_syntax("you\\'ll need this\n")
     assert result == "you'll need this\n"
@@ -348,32 +325,6 @@ def test_render_quiz_study_guide():
     assert "- 3\n" in guide
     # Essay question has a prompt but no answer choices.
     assert "## Question 2: Explain something" in guide
-
-
-def test_render_quiz_study_guide_skips_commented_out_questions(tmp_path: Path) -> None:
-    """Questions inside ```{=comment} blocks are excluded from the study guide,
-    matching what the update pipeline uploads."""
-    quiz_dir = tmp_path / "quizzes" / "my-quiz"
-    q_dir = quiz_dir / "questions"
-    q_dir.mkdir(parents=True)
-    (quiz_dir / "my-quiz.md").write_text(
-        "---\ntitle: My Quiz\n---\n\n"
-        "Study hard.\n\n"
-        "1. [Kept](questions/kept.md)\n"
-        "```{=comment}\n"
-        "2. [Dropped](questions/dropped.md)\n"
-        "```\n"
-    )
-    (q_dir / "kept.md").write_text(
-        "---\ntitle: Kept\nquestion_type: essay_question\npoints_possible: 1\n---\n\nExplain.\n"
-    )
-    (q_dir / "dropped.md").write_text(
-        "---\ntitle: Dropped\nquestion_type: essay_question\npoints_possible: 1\n---\n\nNope.\n"
-    )
-    guide = publish.render_quiz_study_guide(quiz_dir)
-    assert "## Question 1: Kept" in guide
-    assert "Dropped" not in guide
-    assert "{=comment}" not in guide
 
 
 # ---------------------------------------------------------------------------

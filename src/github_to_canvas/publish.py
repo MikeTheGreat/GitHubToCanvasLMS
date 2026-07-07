@@ -24,7 +24,6 @@ from .convert import (
     apply_outside_fences,
     expand_frontmatter_snippets,
     preprocess_snippets,
-    strip_raw_nonhtml_blocks,
 )
 from .quiz import parse_question_file, split_quiz_body
 from .sync import (
@@ -215,7 +214,6 @@ def _strip_pandoc_syntax(text: str) -> str:
     Handles raw-HTML blocks, attribute blocks, Pandoc spans, and backslash
     escapes while leaving real fenced code blocks untouched.
     """
-    text = strip_raw_nonhtml_blocks(text)
     text = _RAW_HTML_BLOCK_RE.sub(r"\1", text)
 
     def _clean(segment: str) -> str:
@@ -494,8 +492,8 @@ def render_quiz_study_guide(
             body = filtered
 
     # Description = quiz body minus the numbered question-link list.
-    # Shared with the update pipeline so commented-out questions
-    # (```{=comment} blocks) are excluded here too.
+    # Shared with the update pipeline so both agree on what counts as
+    # a question.
     desc, question_files = split_quiz_body(body, quiz_md)
 
     out: list[str] = [f"# {title}", ""]

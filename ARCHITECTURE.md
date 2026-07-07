@@ -50,10 +50,8 @@ git clone (local)
        f. update manifest dict and flush to disk
 4b. for each quiz folder in quizzes/ alphabetically:
      → skip if quiz .md AND all question files have mtime ≤ manifest last_synced
-     → parse quiz-level .md (frontmatter + ordered question list); raw-attribute
-       blocks (```{=comment} …) are stripped first — question links inside them are
-       "commented out" (shared strip_raw_nonhtml_blocks in convert.py, same as module
-       items) — and numbered links inside regular code fences are not questions
+     → parse quiz-level .md (frontmatter + ordered question list); numbered
+       links inside code fences are literal text, not questions
      → parse each question .md file
      → run rewrite_links() on quiz description HTML and each question_text HTML (same as step 4d)
      → create or update quiz in Canvas (Classic Quizzes API), WITHOUT the publish state
@@ -92,15 +90,14 @@ What the tool does instead (`_sync_quiz` in `sync.py` + `finalize_quiz_publish_s
 - The publish state from frontmatter is applied **last** (with `notify_of_update: false`). For a quiz being published this run (new, or previously unpublished), the unpublished→published transition regenerates the snapshot — no banner, no manual step.
 - If the quiz was **already published and stays published**, nothing programmatic can absorb the question changes: the tool prints a warning (also collected into the end-of-run error summary) with the quiz's `html_url` telling the user to open it and click "Save It Now".
 
-**Fenced code blocks and `{=comment}` blocks in Markdown input:**
+**Fenced code blocks in Markdown input:**
 
-All Markdown-input parsing respects fenced code blocks, built on shared primitives in `convert.py` (`split_fenced_segments`, `iter_lines_with_fence_info`, `apply_outside_fences`, `strip_raw_nonhtml_blocks`):
+All Markdown-input parsing respects fenced code blocks, built on shared primitives in `convert.py` (`split_fenced_segments`, `iter_lines_with_fence_info`, `apply_outside_fences`):
 
-- **Raw-attribute blocks** (```` ```{=comment} ````, or any non-`html` format) are the documented way to comment content out. They are stripped before every line-based scan, so commented-out quiz question links, module items, question answers, and `## sections` are genuinely ignored — by `update` and by `publish` (study guide, staging). `{=html}` blocks are always preserved.
-- **Regular code fences** are literal text: numbered `[x](y.md)` links inside them are not quiz questions (`quiz.split_quiz_body`, shared by sync and the publish study guide), `- [x](y.md)` / `# heading` lines are not module items (`parse_module_body`), `## Answers`-lookalikes do not split question files (`_split_on_headings`), and numbered lines are not answers.
+- **Code fences** are literal text: numbered `[x](y.md)` links inside them are not quiz questions (`quiz.split_quiz_body`, shared by sync and the publish study guide), `- [x](y.md)` / `# heading` lines are not module items (`parse_module_body`), `## Answers`-lookalikes do not split question files (`_split_on_headings`), and numbered lines are not answers. Raw-attribute blocks (```` ```{=html} ```` etc.) are fences like any other; there is no special handling beyond what Pandoc itself does with them. (Content is *excluded* via course-flag conditionals, not via raw-attribute "comment" blocks — that older convention has been removed.)
 - **Snippet expansion** (`preprocess_snippets`) and the staleness probe (`find_referenced_snippets`) skip fence content, so `$path.md$` / snippet links in a code block stay literal.
 - **publish's Pandoc-syntax cleanup** (`_strip_pandoc_syntax`, `_rewrite_quiz_links`) applies only outside fences, so literal `{#id}` / span / quiz-link examples in code blocks survive staging.
-- Fence matching follows CommonMark closely enough for course content: ` ``` ` or `~~~` (3+, up to 3 leading spaces), closed by an equal-or-longer fence of the same character; an unclosed fence runs to end of file; fence-lookalikes inside a longer outer fence (e.g. a ```` ```{=comment} ```` example shown inside a ` ````markdown ` block) are content, not fences. Indented (4-space) code blocks and inline backtick spans are *not* considered fences by these parsers.
+- Fence matching follows CommonMark closely enough for course content: ` ``` ` or `~~~` (3+, up to 3 leading spaces), closed by an equal-or-longer fence of the same character; an unclosed fence runs to end of file; fence-lookalikes inside a longer outer fence (e.g. a ``` ``` ``` example shown inside a ` ````markdown ` block) are content, not fences. Indented (4-space) code blocks and inline backtick spans are *not* considered fences by these parsers.
 
 Not fence-aware by design: `mv`'s link updating (renames also fix example links in code blocks, keeping them valid), orphan detection's "in use" scan (a Canvas URL in a code block still protects content from `prune` — conservative), and `link_rewrite.py` (operates on Pandoc's HTML output, where code content is already escaped).
 
@@ -1135,7 +1132,7 @@ Boolean flags in the optional `[course_flags]` table of `course_settings.toml` g
 
 **Parsing rules:** only a line that is *nothing but* an HTML comment is considered, and only when its content starts with `#` followed by one of the four keywords or the five reserved misspellings (`#ifdef`, `#ifndef`, `#elseif`, `#elsif`, `#fi` — each a hard error with a "did you mean" hint). Everything else (`<!-- #region -->`, `<!-- published:false -->`, ordinary comments, directive-lookalikes not alone on their line) passes through untouched. Conditions are one flag name, optionally preceded by `not`; an undefined flag is a hard error in **any** directive, taken branch or not (the point of hard errors is catching typos *before* the flag flip that would expose them). Nesting is a plain stack; evaluation is standard preprocessor logic (`parent_active` captured at `#if`, `any_taken` across `#elif` arms, at most one `#else`, last).
 
-**Fence-awareness:** processing iterates `split_fenced_segments()` output. Plain segments are scanned line by line; fenced segments are never scanned and are kept/dropped wholesale by the conditional state in force when the fence opened. This also covers ```` ```{=comment} ```` blocks (a directive inside one is literal; the block as a whole follows the enclosing conditional).
+**Fence-awareness:** processing iterates `split_fenced_segments()` output. Plain segments are scanned line by line; fenced segments are never scanned and are kept/dropped wholesale by the conditional state in force when the fence opened. This also covers raw-attribute blocks such as ```` ```{=html} ```` (a directive inside one is literal; the block as a whole follows the enclosing conditional).
 
 **Pipeline placement:** the pass runs on each body immediately after `parse_frontmatter`/`expand_frontmatter_snippets` and **before** `preprocess_snippets` — so a snippet ref inside a false branch is removed before snippet expansion (a broken snippet path in a dormant branch reports nothing), and before all structural line parsers (module items, quiz question lists, question sections), which is what makes conditional module items / quiz questions work with no parser changes. `preprocess_snippets()` additionally takes a `flags` param and applies the pass to each snippet's content at insertion time (both block and `$inline.md$` forms; a snippet whose directives error contributes an error and the ref is left unexpanded). Consequence: directives must be balanced within each file and within each snippet file independently. Frontmatter is never processed (YAML; no use case). Loaded once per run by `load_course_flags(repo_path, settings=None)` in `sync.py` (mirrors `load_due_dates`; invalid flag name or non-boolean value raises `ValueError` → `die()`), threaded through `SyncContext.flags`.
 
