@@ -16,6 +16,7 @@ from github_to_canvas.imscc_import import (
     run_import,
 )
 from github_to_canvas.sync import (
+    filter_due_dates_by_flags,
     find_due_date_override,
     load_due_dates,
     resolve_dates_symbolic,
@@ -81,6 +82,50 @@ class TestFindDueDateOverride:
     def test_no_type_matches_any(self) -> None:
         due_dates = [{"name": "HW1", "due_at": "2025-02-01T23:59:00"}]
         assert find_due_date_override(due_dates, "HW1", "discussion") is not None
+
+
+class TestFilterDueDatesByFlags:
+    def test_no_only_if_key_always_kept(self) -> None:
+        due_dates = [{"name": "HW1", "due_at": "2025-02-01T23:59:00"}]
+        assert filter_due_dates_by_flags(due_dates, {}) == due_dates
+
+    def test_only_if_true_keeps_entry(self) -> None:
+        due_dates = [{"name": "HW1", "only_if": "in_person"}]
+        result = filter_due_dates_by_flags(due_dates, {"in_person": True})
+        assert result == due_dates
+
+    def test_only_if_false_drops_entry(self) -> None:
+        due_dates = [{"name": "HW1", "only_if": "in_person"}]
+        assert filter_due_dates_by_flags(due_dates, {"in_person": False}) == []
+
+    def test_only_if_not_negates(self) -> None:
+        due_dates = [{"name": "HW1", "only_if": "not in_person"}]
+        assert filter_due_dates_by_flags(due_dates, {"in_person": False}) == due_dates
+        assert filter_due_dates_by_flags(due_dates, {"in_person": True}) == []
+
+    def test_mixed_entries_only_filters_ones_with_the_key(self) -> None:
+        due_dates = [
+            {"name": "Always"},
+            {"name": "OnlyOn", "only_if": "in_person"},
+            {"name": "OnlyOff", "only_if": "not in_person"},
+        ]
+        result = filter_due_dates_by_flags(due_dates, {"in_person": True})
+        assert [e["name"] for e in result] == ["Always", "OnlyOn"]
+
+    def test_undefined_flag_raises(self) -> None:
+        due_dates = [{"name": "HW1", "only_if": "no_such_flag"}]
+        with pytest.raises(ValueError, match="undefined course flag 'no_such_flag'"):
+            filter_due_dates_by_flags(due_dates, {})
+
+    def test_malformed_condition_raises(self) -> None:
+        due_dates = [{"name": "HW1", "only_if": "a and b"}]
+        with pytest.raises(ValueError, match="invalid 'only_if' value"):
+            filter_due_dates_by_flags(due_dates, {"a": True, "b": True})
+
+    def test_non_string_value_raises(self) -> None:
+        due_dates = [{"name": "HW1", "only_if": True}]
+        with pytest.raises(ValueError, match="must be a flag name string"):
+            filter_due_dates_by_flags(due_dates, {})
 
 
 class TestResolveDatesSymbolic:
@@ -800,6 +845,88 @@ def test_dates_pass_updates_only_changed_item(course_root: Path, mocker) -> None
     }
 
 
+def test_due_dates_only_if_false_entry_not_applied(course_root: Path, mocker) -> None:
+    """A due_dates entry gated by a false `only_if` flag is filtered out before
+    the dates pass runs, so it never produces an API call."""
+    _write_settings(
+        course_root,
+        'due_dates = [\n'
+        '    {name = "Week 1 Problem Set", due_at = "2099-12-31T23:59:00", '
+        'unlock_at = "NONE", lock_at = "NONE", only_if = "in_person_class"},\n'
+        ']\n\n'
+        '[course_flags]\n'
+        'in_person_class = false\n',
+    )
+    preloaded = {
+        "course_settings/course_settings.toml": _fresh_settings_entry(),
+        "assignments/week1.md": {
+            "canvas_id": 98765,
+            "canvas_type": "assignment",
+            "last_synced": _FUTURE,
+        },
+        "discussions/week1-intro.md": {
+            "canvas_id": 55555,
+            "canvas_type": "discussion",
+            "last_synced": _FUTURE,
+        },
+    }
+    course = _setup_cached_dates_run(course_root, mocker, preloaded)
+
+    run_sync(_cfg(), course_root)
+
+    course.get_assignment.assert_not_called()
+
+
+def test_due_dates_only_if_true_entry_applied(course_root: Path, mocker) -> None:
+    """The same entry, with the flag on, is kept and applied normally."""
+    _write_settings(
+        course_root,
+        'due_dates = [\n'
+        '    {name = "Week 1 Problem Set", due_at = "2099-12-31T23:59:00", '
+        'unlock_at = "NONE", lock_at = "NONE", only_if = "in_person_class"},\n'
+        ']\n\n'
+        '[course_flags]\n'
+        'in_person_class = true\n',
+    )
+    preloaded = {
+        "course_settings/course_settings.toml": _fresh_settings_entry(),
+        "assignments/week1.md": {
+            "canvas_id": 98765,
+            "canvas_type": "assignment",
+            "last_synced": _FUTURE,
+        },
+        "discussions/week1-intro.md": {
+            "canvas_id": 55555,
+            "canvas_type": "discussion",
+            "last_synced": _FUTURE,
+        },
+    }
+    course = _setup_cached_dates_run(course_root, mocker, preloaded)
+    assignment = _mock_assignment(98765)
+    course.get_assignment.return_value = assignment
+
+    run_sync(_cfg(), course_root)
+
+    assignment.edit.assert_called_once()
+    assert assignment.edit.call_args[1]["assignment"]["due_at"] == "2099-12-31T23:59:00"
+
+
+def test_due_dates_only_if_undefined_flag_dies(course_root: Path, mocker, capsys) -> None:
+    """An undefined flag in `only_if` is a whole-run config error (die())."""
+    _write_settings(
+        course_root,
+        'due_dates = [\n'
+        '    {name = "Week 1 Problem Set", due_at = "2099-12-31T23:59:00", '
+        'unlock_at = "NONE", lock_at = "NONE", only_if = "no_such_flag"},\n'
+        ']\n',
+    )
+    preloaded = {"course_settings/course_settings.toml": _fresh_settings_entry()}
+    _setup_cached_dates_run(course_root, mocker, preloaded)
+
+    with pytest.raises(ValueError, match="undefined course flag 'no_such_flag'"):
+        run_sync(_cfg(), course_root)
+
+
 def test_removed_entry_notice_and_cache_drop(course_root: Path, mocker, capsys) -> None:
     """Deleting a due_dates entry leaves Canvas alone, prints a one-time notice,
     and drops the cached resolution; the following run is silent."""
@@ -957,6 +1084,67 @@ def test_full_sync_records_resolved_dates(course_root: Path) -> None:
         "unlock_at": "KEEP",
         "lock_at": "KEEP",
     }
+
+
+# ---------------------------------------------------------------------------
+# _check_due_dates_coverage: published_if-excluded items expected to have no entry
+# ---------------------------------------------------------------------------
+
+
+def test_coverage_skips_published_if_excluded_item(tmp_path: Path, capsys) -> None:
+    """An assignment excluded from this offering by `published_if` (flag off)
+    should not trigger the "no due_dates entry" warning, but an otherwise
+    identical assignment without `published_if` still should."""
+    from github_to_canvas.sync import _check_due_dates_coverage
+
+    repo = tmp_path / "course"
+    (repo / "assignments").mkdir(parents=True)
+    (repo / "assignments" / "excluded.md").write_text(
+        "---\ntitle: Excluded\npublished_if: hybrid\n---\n\nBody.\n"
+    )
+    (repo / "assignments" / "included.md").write_text(
+        "---\ntitle: Included\npublished: true\n---\n\nBody.\n"
+    )
+    flags = {"hybrid": False}
+
+    _check_due_dates_coverage([], repo, flags=flags)
+
+    out = capsys.readouterr().out
+    assert "assignment: Excluded" not in out
+    assert "assignment: Included" in out
+
+
+def test_coverage_reports_published_if_item_when_flag_is_on(tmp_path: Path, capsys) -> None:
+    """The same file, with the flag on (so the item IS offered this run),
+    should get the normal "no due_dates entry" warning."""
+    from github_to_canvas.sync import _check_due_dates_coverage
+
+    repo = tmp_path / "course"
+    (repo / "assignments").mkdir(parents=True)
+    (repo / "assignments" / "included.md").write_text(
+        "---\ntitle: Included\npublished_if: hybrid\n---\n\nBody.\n"
+    )
+    flags = {"hybrid": True}
+
+    _check_due_dates_coverage([], repo, flags=flags)
+
+    assert "assignment: Included" in capsys.readouterr().out
+
+
+def test_coverage_without_flags_treats_published_if_normally(tmp_path: Path, capsys) -> None:
+    """When flags is None (caller didn't thread them through), published_if
+    items are not specially excluded — same as before this feature existed."""
+    from github_to_canvas.sync import _check_due_dates_coverage
+
+    repo = tmp_path / "course"
+    (repo / "assignments").mkdir(parents=True)
+    (repo / "assignments" / "excluded.md").write_text(
+        "---\ntitle: Excluded\npublished_if: hybrid\n---\n\nBody.\n"
+    )
+
+    _check_due_dates_coverage([], repo)
+
+    assert "assignment: Excluded" in capsys.readouterr().out
 
 
 # ---------------------------------------------------------------------------

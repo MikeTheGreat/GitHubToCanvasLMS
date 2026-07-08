@@ -12,7 +12,12 @@ import tomli_w
 
 from github_to_canvas import manifest as manifest_lib
 from github_to_canvas import publish
-from github_to_canvas.conditionals import apply_conditionals, find_referenced_flags
+from github_to_canvas.conditionals import (
+    apply_conditionals,
+    find_referenced_flags,
+    find_referenced_flags_in_frontmatter,
+    resolve_published_if,
+)
 from github_to_canvas.config import Config
 from github_to_canvas.convert import preprocess_snippets
 from github_to_canvas.mv import run_mv
@@ -343,6 +348,110 @@ class TestFindReferencedFlags:
 
     def test_never_errors_on_garbage(self) -> None:
         assert find_referenced_flags("<!-- #endif -->\n<!-- #fi -->\n") == set()
+
+
+# ---------------------------------------------------------------------------
+# resolve_published_if / find_referenced_flags_in_frontmatter
+# ---------------------------------------------------------------------------
+
+
+class TestResolvePublishedIf:
+    def test_no_published_if_returns_literal_published(self) -> None:
+        assert resolve_published_if({"published": True}, FLAGS, "x") is True
+        assert resolve_published_if({"published": False}, FLAGS, "x") is False
+        assert resolve_published_if({}, FLAGS, "x") is False
+
+    def test_true_flag(self) -> None:
+        assert resolve_published_if({"published_if": "in_person_class"}, FLAGS, "x") is True
+
+    def test_false_flag(self) -> None:
+        assert resolve_published_if({"published_if": "hybrid"}, FLAGS, "x") is False
+
+    def test_not_negates(self) -> None:
+        assert resolve_published_if({"published_if": "not hybrid"}, FLAGS, "x") is True
+        assert resolve_published_if(
+            {"published_if": "not in_person_class"}, FLAGS, "x"
+        ) is False
+
+    def test_combined_with_published_is_error(self) -> None:
+        errors: list[str] = []
+        result = resolve_published_if(
+            {"published": True, "published_if": "hybrid"}, FLAGS, "pages/x.md", errors
+        )
+        assert result is None
+        assert any("cannot be combined" in e for e in errors)
+        assert any("pages/x.md" in e for e in errors)
+
+    def test_undefined_flag_is_error(self) -> None:
+        errors: list[str] = []
+        result = resolve_published_if(
+            {"published_if": "no_such_flag"}, FLAGS, "pages/x.md", errors
+        )
+        assert result is None
+        assert any("undefined course flag 'no_such_flag'" in e for e in errors)
+
+    def test_malformed_condition_is_error(self) -> None:
+        errors: list[str] = []
+        result = resolve_published_if(
+            {"published_if": "a and b"}, FLAGS, "x", errors
+        )
+        assert result is None
+        assert any("invalid 'published_if' value" in e for e in errors)
+
+    def test_missing_value_is_error(self) -> None:
+        errors: list[str] = []
+        result = resolve_published_if({"published_if": ""}, FLAGS, "x", errors)
+        assert result is None
+        assert any("requires a flag name" in e for e in errors)
+
+    def test_non_string_value_is_error(self) -> None:
+        errors: list[str] = []
+        result = resolve_published_if({"published_if": True}, FLAGS, "x", errors)
+        assert result is None
+        assert any("must be a flag name string" in e for e in errors)
+
+    def test_forbid_is_error(self) -> None:
+        errors: list[str] = []
+        result = resolve_published_if(
+            {"published_if": "hybrid"}, FLAGS, "announcements/x.md", errors,
+            forbid=True, forbid_reason="announcements",
+        )
+        assert result is None
+        assert any("not supported for announcements" in e for e in errors)
+
+    def test_forbid_without_published_if_is_fine(self) -> None:
+        result = resolve_published_if(
+            {"published": True}, FLAGS, "announcements/x.md", forbid=True,
+        )
+        assert result is True
+
+    def test_quiet_suppresses_reporting(self, capsys: pytest.CaptureFixture) -> None:
+        errors: list[str] = []
+        result = resolve_published_if(
+            {"published_if": "no_such_flag"}, FLAGS, "x", errors, quiet=True
+        )
+        assert result is None
+        assert errors == []
+        assert capsys.readouterr().out == ""
+
+
+class TestFindReferencedFlagsInFrontmatter:
+    def test_finds_published_if_flag(self) -> None:
+        assert find_referenced_flags_in_frontmatter(
+            {"published_if": "in_person_class"}
+        ) == {"in_person_class"}
+
+    def test_finds_negated_flag(self) -> None:
+        assert find_referenced_flags_in_frontmatter(
+            {"published_if": "not hybrid"}
+        ) == {"hybrid"}
+
+    def test_no_published_if_key(self) -> None:
+        assert find_referenced_flags_in_frontmatter({"title": "X"}) == set()
+
+    def test_malformed_contributes_nothing(self) -> None:
+        assert find_referenced_flags_in_frontmatter({"published_if": "a and b"}) == set()
+        assert find_referenced_flags_in_frontmatter({"published_if": 5}) == set()
 
 
 # ---------------------------------------------------------------------------
@@ -866,6 +975,205 @@ def test_unused_flag_warning_in_run_sync(mock_course, tmp_path, capsys) -> None:
     assert had_errors is False  # warning only — never an error
 
 
+# ---------------------------------------------------------------------------
+# Integration: published_if frontmatter
+# ---------------------------------------------------------------------------
+
+
+def test_published_if_true_publishes_page(mock_course, tmp_path) -> None:
+    root = tmp_path / "course"
+    _write(root / "course_settings" / "course_settings.toml", _FLAGS_TOML)
+    _write(
+        root / "pages" / "p.md",
+        "---\ntitle: P\npublished_if: in_person_class\n---\n\nBody.\n",
+    )
+    pages = {}
+    mock_course.create_page.side_effect = lambda wiki_page: (
+        pages.__setitem__("P", wiki_page) or _mock_page(1, "p")
+    )
+
+    had_errors = run_sync(_config(), root)
+
+    assert had_errors is False
+    assert pages["P"]["published"] is True
+
+
+def test_published_if_false_leaves_page_unpublished(mock_course, tmp_path) -> None:
+    root = tmp_path / "course"
+    _write(root / "course_settings" / "course_settings.toml", _FLAGS_TOML)
+    _write(
+        root / "pages" / "p.md",
+        "---\ntitle: P\npublished_if: hybrid\n---\n\nBody.\n",
+    )
+    pages = {}
+    mock_course.create_page.side_effect = lambda wiki_page: (
+        pages.__setitem__("P", wiki_page) or _mock_page(1, "p")
+    )
+
+    had_errors = run_sync(_config(), root)
+
+    assert had_errors is False
+    assert pages["P"]["published"] is False
+
+
+def test_published_if_not_negates(mock_course, tmp_path) -> None:
+    root = tmp_path / "course"
+    _write(root / "course_settings" / "course_settings.toml", _FLAGS_TOML)
+    _write(
+        root / "pages" / "p.md",
+        "---\ntitle: P\npublished_if: not hybrid\n---\n\nBody.\n",
+    )
+    pages = {}
+    mock_course.create_page.side_effect = lambda wiki_page: (
+        pages.__setitem__("P", wiki_page) or _mock_page(1, "p")
+    )
+
+    run_sync(_config(), root)
+
+    assert pages["P"]["published"] is True
+
+
+def test_published_if_combined_with_published_is_error(mock_course, tmp_path, capsys) -> None:
+    root = tmp_path / "course"
+    _write(root / "course_settings" / "course_settings.toml", _FLAGS_TOML)
+    _write(
+        root / "pages" / "bad.md",
+        "---\ntitle: Bad\npublished: true\npublished_if: hybrid\n---\n\nBody.\n",
+    )
+    _write(
+        root / "pages" / "good.md",
+        "---\ntitle: Good\npublished: true\n---\n\nBody.\n",
+    )
+    mock_course.create_page.side_effect = [_mock_page(1, "good")]
+
+    had_errors = run_sync(_config(), root)
+
+    out = capsys.readouterr().out
+    assert had_errors is True
+    assert "cannot be combined" in out
+    assert "Skipping upload due to errors: pages/bad.md" in out
+    manifest = manifest_lib.load(root / ".canvas-manifest.toml")
+    assert "pages/bad.md" not in manifest
+    assert "pages/good.md" in manifest
+
+
+def test_published_if_undefined_flag_is_error(mock_course, tmp_path, capsys) -> None:
+    root = tmp_path / "course"
+    _write(root / "course_settings" / "course_settings.toml", _FLAGS_TOML)
+    _write(
+        root / "pages" / "bad.md",
+        "---\ntitle: Bad\npublished_if: no_such_flag\n---\n\nBody.\n",
+    )
+
+    had_errors = run_sync(_config(), root)
+
+    out = capsys.readouterr().out
+    assert had_errors is True
+    assert "undefined course flag 'no_such_flag'" in out
+    mock_course.create_page.assert_not_called()
+
+
+def test_published_if_forbidden_for_announcements(mock_course, tmp_path, capsys) -> None:
+    root = tmp_path / "course"
+    _write(root / "course_settings" / "course_settings.toml", _FLAGS_TOML)
+    _write(
+        root / "announcements" / "a.md",
+        "---\ntitle: A\npublished_if: in_person_class\n---\n\nBody.\n",
+    )
+
+    had_errors = run_sync(_config(), root)
+
+    out = capsys.readouterr().out
+    assert had_errors is True
+    assert "not supported for announcements" in out
+    for call in mock_course.create_discussion_topic.call_args_list:
+        assert not call.kwargs.get("is_announcement")
+
+
+def test_published_if_flags_used_recorded_and_flag_flip_republishes(
+    mock_course, tmp_path, capsys
+) -> None:
+    root = tmp_path / "course"
+    _write(root / "course_settings" / "course_settings.toml", _FLAGS_TOML)
+    _write(
+        root / "pages" / "p.md",
+        "---\ntitle: P\npublished_if: in_person_class\n---\n\nBody.\n",
+    )
+    real_page = _mock_page(1, "p")
+    mock_course.create_page.return_value = real_page
+
+    run_sync(_config(), root)
+
+    manifest = manifest_lib.load(root / ".canvas-manifest.toml")
+    assert manifest["pages/p.md"]["flags_used"] == {"in_person_class": True}
+    real_page.edit.assert_not_called()
+
+    # Flip the flag; the page's own mtime is unchanged, so only the recorded
+    # flags_used mismatch should trigger a re-sync.
+    _write(
+        root / "course_settings" / "course_settings.toml",
+        "[course_flags]\nin_person_class = false\nhybrid = false\n",
+    )
+    _make_old(root / "pages" / "p.md")
+    mock_course.get_page.return_value = real_page
+
+    capsys.readouterr()
+    run_sync(_config(), root, verbose=True)
+
+    out = capsys.readouterr().out
+    assert "re-syncing: flag 'in_person_class' changed true → false" in out
+    assert real_page.edit.call_args[1]["wiki_page"]["published"] is False
+    manifest = manifest_lib.load(root / ".canvas-manifest.toml")
+    assert manifest["pages/p.md"]["flags_used"] == {"in_person_class": False}
+
+
+def test_published_if_module_item_default(mock_course, tmp_path) -> None:
+    """A module item with no explicit published override defers to the
+    referenced page's `published_if` (via _content_default_published)."""
+    root = tmp_path / "course"
+    _write(root / "course_settings" / "course_settings.toml", _FLAGS_TOML)
+    _write(
+        root / "pages" / "on.md",
+        "---\ntitle: On\npublished_if: in_person_class\n---\n\nBody.\n",
+    )
+    _write(
+        root / "pages" / "off.md",
+        "---\ntitle: Off\npublished_if: hybrid\n---\n\nBody.\n",
+    )
+    _write(
+        root / "modules" / "week-1.md",
+        "---\ntitle: Week 1\n---\n\n"
+        "- [On](../pages/on.md)\n"
+        "- [Off](../pages/off.md)\n",
+    )
+    mock_course.create_page.side_effect = [_mock_page(1, "on"), _mock_page(2, "off")]
+    module = _mock_module(66)
+    mock_course.create_module.return_value = module
+
+    run_sync(_config(), root)
+
+    item_calls = module.create_module_item.call_args_list
+    by_title = {c[1]["module_item"]["title"]: c[1]["module_item"] for c in item_calls}
+    assert by_title["On"]["published"] is True
+    assert by_title["Off"]["published"] is False
+
+
+def test_published_if_quiz(mock_course, tmp_path) -> None:
+    root = tmp_path / "course"
+    _write(root / "course_settings" / "course_settings.toml", _FLAGS_TOML)
+    _write(
+        root / "quizzes" / "q1" / "q1.md",
+        "---\ntitle: Quiz 1\npublished_if: in_person_class\n---\n\nIntro.\n",
+    )
+    quiz = _mock_quiz(42)
+    mock_course.create_quiz.return_value = quiz
+    mock_course.get_quiz.return_value = quiz
+
+    run_sync(_config(), root)
+
+    assert quiz.edit.call_args[1]["quiz"]["published"] is True
+
+
 def test_mv_preserves_flags_used(tmp_path) -> None:
     root = _basic_repo(tmp_path)
     manifest_path = root / ".canvas-manifest.toml"
@@ -954,3 +1262,22 @@ def test_publish_stage_reports_directive_errors(tmp_path, capsys) -> None:
     assert not (staging / "docs" / "assignments" / "broken.md").exists()
     # The healthy assignment still staged.
     assert (staging / "docs" / "assignments" / "hw1.md").exists()
+
+
+def test_publish_stage_respects_published_if(tmp_path) -> None:
+    root = _publish_repo(tmp_path)
+    _write(
+        root / "assignments" / "hw2.md",
+        "---\ntitle: HW 2\npublished_if: hybrid\n---\n\nOnly for hybrid offerings.\n",
+    )
+    staging = tmp_path / "staging"
+
+    info = publish.stage(root, staging)
+
+    assert info["errors"] == []
+    # hybrid = false in _FLAGS_TOML, so HW 2 is excluded from discovery/nav
+    # and never staged.
+    assert not (staging / "docs" / "assignments" / "hw2.md").exists()
+    mkdocs_yml = (staging / "mkdocs.yml").read_text()
+    assert "HW 2" not in mkdocs_yml
+    assert "HW 1" in mkdocs_yml

@@ -16,7 +16,13 @@ import yaml
 
 from . import canvas_api as capi
 from . import manifest as manifest_lib
-from .conditionals import apply_conditionals, find_referenced_flags
+from .conditionals import (
+    apply_conditionals,
+    find_referenced_flags,
+    find_referenced_flags_in_frontmatter,
+    parse_condition,
+    resolve_published_if,
+)
 from .config import Config
 from .convert import (
     expand_frontmatter_snippets,
@@ -122,24 +128,71 @@ def load_course_flags(repo_path: Path, settings: dict | None = None) -> dict[str
     return dict(table)
 
 
+def filter_due_dates_by_flags(
+    due_dates: list[dict[str, Any]], flags: dict[str, bool]
+) -> list[dict[str, Any]]:
+    """Drop due_dates entries whose ``only_if`` condition is not met.
+
+    ``only_if = "flag_name"`` (or ``"not flag_name"``) is an optional
+    per-entry key, evaluated against ``[course_flags]`` right after
+    ``load_due_dates()`` — no TOML preprocessing, entries without the key are
+    always kept. An undefined flag or malformed condition is a whole-run
+    config error: raises ValueError, which the CLI reports via die() (same
+    convention as ``load_course_flags``).
+    """
+    filtered: list[dict[str, Any]] = []
+    for entry in due_dates:
+        if "only_if" not in entry:
+            filtered.append(entry)
+            continue
+        name_for_errors = entry.get("name", "?")
+        value = entry["only_if"]
+        if not isinstance(value, str):
+            raise ValueError(
+                f"due_dates entry {name_for_errors!r}: 'only_if' must be a "
+                f"flag name string, optionally preceded by 'not', got {value!r}"
+            )
+        cond = parse_condition(value)
+        if cond in ("missing", "malformed"):
+            raise ValueError(
+                f"due_dates entry {name_for_errors!r}: invalid 'only_if' "
+                f"value {value!r} — expected a single flag name, optionally "
+                f"preceded by 'not' (no and/or/parentheses)"
+            )
+        negate, name = cond
+        if name not in flags:
+            raise ValueError(
+                f"due_dates entry {name_for_errors!r}: undefined course flag "
+                f"'{name}' in 'only_if' — flags must be defined under "
+                f"[course_flags] in course_settings.toml"
+            )
+        keep = (not flags[name]) if negate else flags[name]
+        if keep:
+            filtered.append(entry)
+    return filtered
+
+
 def _flags_used_for(
     paths: Iterable[Path], snippets_dir: Path, flags: dict[str, bool]
 ) -> dict[str, bool]:
     """Flag values to record in a manifest entry's ``flags_used`` sub-table.
 
     Unions every flag referenced by any of the given files' bodies (all
-    branches, taken or not) or by any snippet they reference — the same
-    snippet enumeration the snippet-mtime staleness path uses — and maps each
-    to its current value.
+    branches, taken or not), by ``published_if`` in their (snippet-expanded)
+    frontmatter, or by any snippet they reference — the same snippet
+    enumeration the snippet-mtime staleness path uses — and maps each to its
+    current value.
     """
     names: set[str] = set()
     snippet_paths: set[Path] = set()
     for path in paths:
         try:
-            _, body = parse_frontmatter(path.read_text())
+            fm, body = parse_frontmatter(path.read_text())
         except yaml.YAMLError:
             continue
+        fm, body = expand_frontmatter_snippets(fm, body, path, snippets_dir)
         names |= find_referenced_flags(body)
+        names |= find_referenced_flags_in_frontmatter(fm)
         snippet_paths |= find_referenced_snippets(body, path, snippets_dir)
     for snippet_path in snippet_paths:
         names |= find_referenced_flags(snippet_path.read_text())
@@ -172,10 +225,11 @@ def check_course_flags_coverage(
         except UnicodeDecodeError:
             continue
         try:
-            _, body = parse_frontmatter(text)
+            fm, body = parse_frontmatter(text)
         except yaml.YAMLError:
-            body = text  # malformed frontmatter — probe the raw text instead
+            fm, body = {}, text  # malformed frontmatter — probe the raw text instead
         used |= find_referenced_flags(body)
+        used |= find_referenced_flags_in_frontmatter(fm)
         if used >= flags.keys():
             return
     for name in flags:
@@ -280,21 +334,29 @@ def _check_due_dates_coverage(
     due_dates: list[dict[str, Any]],
     repo_path: Path,
     matcher: IgnoreMatcher | None = None,
+    flags: dict[str, bool] | None = None,
 ) -> None:
     """Scan all content files and print warnings for due_dates mismatches.
 
     - A due_dates entry whose name doesn't match any content file.
-    - A content file (assignment/discussion/quiz) with no due_dates entry.
+    - A content file (assignment/discussion/quiz) with no due_dates entry —
+      except one excluded from this offering by ``published_if`` (evaluates
+      to False), which is expected to have no entry.
     """
     print("Checking due_dates coverage...")
     all_content: list[tuple[str, str]] = []  # (title, canvas_type)
+    published_if_excluded: set[tuple[str, str]] = set()
 
-    for _local_key, md_path, ctype in iter_gradeable_content(repo_path, matcher):
+    for local_key, md_path, ctype in iter_gradeable_content(repo_path, matcher):
         try:
             fm, _ = parse_frontmatter(md_path.read_text())
         except Exception:
             fm = {}
-        all_content.append((fm.get("title", md_path.stem), ctype))
+        title = fm.get("title", md_path.stem)
+        all_content.append((title, ctype))
+        if flags is not None and "published_if" in fm:
+            if resolve_published_if(fm, flags, local_key, quiet=True) is not True:
+                published_if_excluded.add((title, ctype))
 
     # Check each due_dates entry against all content
     for entry in due_dates:
@@ -311,6 +373,8 @@ def _check_due_dates_coverage(
     # Check each content file against due_dates
     without_entry: list[tuple[str, str]] = []
     for title, ctype in all_content:
+        if (title, ctype) in published_if_excluded:
+            continue
         if find_due_date_override(due_dates, title, ctype) is None:
             without_entry.append((title, ctype))
     if without_entry:
@@ -642,13 +706,21 @@ def parse_module_body(
     return items
 
 
-def _content_default_published(repo_root: Path, local_path: str, snippets_dir: Path) -> bool:
+def _content_default_published(
+    repo_root: Path,
+    local_path: str,
+    snippets_dir: Path,
+    flags: dict[str, bool] | None = None,
+) -> bool:
     """Published default for a module item with no explicit override.
 
-    Mirrors content files' own `published` frontmatter so that re-syncing a
-    module doesn't republish content the user explicitly unpublished.  Assets
-    (non-.md targets, e.g. File items) have no such frontmatter, so they keep
-    the historical default of True.
+    Mirrors content files' own `published` (or `published_if`) frontmatter so
+    that re-syncing a module doesn't republish content the user explicitly
+    unpublished.  Assets (non-.md targets, e.g. File items) have no such
+    frontmatter, so they keep the historical default of True. A
+    `published_if` problem (undefined flag, ambiguous with `published`) is
+    resolved quietly — it is loudly reported when the referenced file syncs
+    on its own — and defaults to not-published.
     """
     ref_path = repo_root / local_path
     if ref_path.suffix != ".md" or not ref_path.exists():
@@ -660,7 +732,9 @@ def _content_default_published(repo_root: Path, local_path: str, snippets_dir: P
         )
     except yaml.YAMLError:
         return True
-    return bool(ref_frontmatter.get("published", False))
+    return bool(
+        resolve_published_if(ref_frontmatter, flags or {}, local_path, quiet=True)
+    )
 
 
 def check_title_collisions(
@@ -1249,7 +1323,7 @@ def _phase_due_dates(ctx: SyncContext, due_dates: list) -> None:
     if due_dates or have_cached:
         _apply_due_dates_only(ctx)
     if due_dates:
-        _check_due_dates_coverage(due_dates, ctx.repo_path, ctx.matcher)
+        _check_due_dates_coverage(due_dates, ctx.repo_path, ctx.matcher, ctx.flags)
 
 
 def run_sync(
@@ -1287,8 +1361,8 @@ def run_sync(
 
     assignment_group_ids = capi.get_assignment_group_ids(course)
 
-    due_dates = load_due_dates(repo_path, _settings_dict)
     course_flags = load_course_flags(repo_path, _settings_dict)
+    due_dates = filter_due_dates_by_flags(load_due_dates(repo_path, _settings_dict), course_flags)
 
     ctx = SyncContext(
         course=course,
@@ -1888,6 +1962,8 @@ def _sync_content_file(ctx: SyncContext, md_file: Path) -> None:
 
     print(f"Processing: {local_key}")
 
+    canvas_type = infer_canvas_type(local_key)
+
     parsed = _parse_frontmatter_or_warn(md_file, local_key, errors)
     if parsed is None:
         return
@@ -1897,6 +1973,20 @@ def _sync_content_file(ctx: SyncContext, md_file: Path) -> None:
     if errors is not None and len(errors) > error_count_before_frontmatter_snippets:
         print(f"  Skipping upload due to errors: {local_key}")
         return
+
+    # Canvas has no unpublished/draft state for announcements — an announcement
+    # is posted the moment it is created and can never be un-posted via the
+    # API, so `published_if` (which implies flipping publish state on a later
+    # sync) is disallowed there; use a literal `published:` instead.
+    published = resolve_published_if(
+        frontmatter, ctx.flags, local_key, errors,
+        forbid=(canvas_type == "announcement"),
+        forbid_reason="announcements (Canvas cannot un-post one once created)",
+    )
+    if published is None:
+        print(f"  Skipping upload due to errors: {local_key}")
+        return
+
     body = apply_conditionals(body, ctx.flags, local_key, errors)
     if body is None:
         print(f"  Skipping upload due to errors: {local_key}")
@@ -1917,14 +2007,12 @@ def _sync_content_file(ctx: SyncContext, md_file: Path) -> None:
         warn(msg, errors)
         return
 
-    canvas_type = infer_canvas_type(local_key)
-
     # Canvas has no unpublished/draft state for announcements — an announcement
     # is posted the moment it is created. So an announcement marked
     # `published: false` is intentionally NOT sent to Canvas: it stays staged in
     # the repo until you set `published: true` (then it posts). Skip it here,
     # before link rewriting could stub-create content it merely references.
-    if canvas_type == "announcement" and not frontmatter.get("published", False):
+    if canvas_type == "announcement" and not published:
         if verbose:
             if manifest.get(local_key) is not None:
                 print(
@@ -1955,7 +2043,6 @@ def _sync_content_file(ctx: SyncContext, md_file: Path) -> None:
 
     existing = manifest.get(local_key)
     title = frontmatter.get("title", md_file.stem)
-    published = frontmatter.get("published", False)
     flags_used = _flags_used_for([md_file], snippets_dir, ctx.flags)
 
     print(f"  Uploading: {local_key}")
@@ -2058,7 +2145,9 @@ def _sync_module(
     items = parse_module_body(body, md_file, repo_root)
     for item in items:
         if item.get("type") == "content" and item.get("published") is None:
-            item["published"] = _content_default_published(repo_root, item["local_path"], snippets_dir)
+            item["published"] = _content_default_published(
+                repo_root, item["local_path"], snippets_dir, ctx.flags
+            )
 
     existing = manifest.get(local_key)
     title = frontmatter.get("title", md_file.stem)
@@ -2195,7 +2284,10 @@ def _sync_quiz(ctx: SyncContext, quiz_folder: Path, quiz_md: Path) -> None:
         print(f"  Skipping upload due to errors: {local_key}")
         return
     title = frontmatter.get("title", quiz_folder.name)
-    published = frontmatter.get("published", False)
+    published = resolve_published_if(frontmatter, ctx.flags, local_key, errors)
+    if published is None:
+        print(f"  Skipping upload due to errors: {local_key}")
+        return
 
     quiz_kwargs: dict[str, Any] = {}
     for key in (
@@ -2493,8 +2585,8 @@ def run_targeted_sync(
     assignment_group_ids = capi.get_assignment_group_ids(course)
     rubric_ids = capi.get_rubric_ids(course)
     _targeted_position_map = _load_module_order(repo_path)
-    due_dates = load_due_dates(repo_path)
     course_flags = load_course_flags(repo_path)
+    due_dates = filter_due_dates_by_flags(load_due_dates(repo_path), course_flags)
 
     ctx = SyncContext(
         course=course,
@@ -2606,7 +2698,7 @@ def run_targeted_sync(
         _process(local_key)
 
     if due_dates:
-        _check_due_dates_coverage(due_dates, repo_path)
+        _check_due_dates_coverage(due_dates, repo_path, flags=course_flags)
 
     check_course_flags_coverage(course_flags, repo_path)
 

@@ -53,6 +53,8 @@ Write your course content as Markdown files in a Git repository. Run this tool t
       - [Inline snippets and the `CANVAS_COURSE_REFERENCE` snippet](#inline-snippets-and-the-canvas_course_reference-snippet)
       - [Shared frontmatter via `PASTE_SNIPPET_INTO_FRONTMATTER`](#shared-frontmatter-via-paste_snippet_into_frontmatter)
     - [Course flags — conditional content (`#if` / `#elif` / `#else` / `#endif`)](#course-flags--conditional-content-if--elif--else--endif)
+      - [`published_if`: gating a whole item by flag](#published_if-gating-a-whole-item-by-flag)
+      - [`only_if`: excluding a `due_dates` entry by flag](#only_if-excluding-a-due_dates-entry-by-flag)
   - [Manifest file](#manifest-file)
     - [Deleting a file in Canvas](#deleting-a-file-in-canvas)
   - [IMSCC import](#imscc-import)
@@ -1634,6 +1636,58 @@ If you want the conditional text to be its own paragraph, put blank lines
 - A file whose entire body is excluded still exists on Canvas, just with an
   empty body — whole-resource exclusion is a possible future feature (see
   TODO.md).
+
+#### `published_if`: gating a whole item by flag
+
+For the common case of hiding a whole page/assignment/discussion/quiz from
+one offering rather than conditionally emptying its body, set `published_if`
+in frontmatter instead of a literal `published:`:
+
+```yaml
+---
+title: "Lab 3 (in-person only)"
+published_if: in_person_class   # or: published_if: not hybrid
+---
+```
+
+`published_if` computes the effective `published` value from a course flag —
+same condition syntax as `#if` (one flag name, optionally preceded by `not`).
+An undefined flag is a hard error, same as `#if`; combining `published_if`
+with a literal `published:` key on the same file is also a hard error
+(ambiguous — remove one). The content stays synced and visible to
+instructors either way; only its Canvas publish state toggles, so flipping
+the flag and re-running `update` unpublishes/republishes it. **Announcements
+are excluded** — Canvas has no way to un-post one once created, so
+`published_if` on an announcement is a hard error; use a literal `published:`
+there.
+
+Like body directives, the flag `published_if` referenced is recorded in
+`flags_used`, so flipping it re-syncs exactly the files that need it. A
+module item with no explicit `{published:false}` override still defers to
+the referenced file's own `published`/`published_if` frontmatter, exactly as
+it does today for a literal `published:`.
+
+#### `only_if`: excluding a `due_dates` entry by flag
+
+A `due_dates` entry (see [Centralized due dates](#centralized-due-dates)) can
+carry an optional `only_if` key so a date override only applies to one
+offering:
+
+```toml
+due_dates = [
+    { name = "Lab 3", due_at = "2025-03-01T23:59:00", unlock_at = "KEEP", lock_at = "KEEP", only_if = "in_person_class" },
+]
+```
+
+`only_if` takes the same `flag_name` / `not flag_name` syntax and is
+evaluated once, right after the `due_dates` table is loaded — an entry whose
+condition is false is dropped before anything else sees it (no API call, and
+it won't produce a "changed" cache update). An undefined flag or malformed
+condition is a whole-run configuration error, same as an invalid
+`[course_flags]` entry. The due-dates coverage warning ("no due_dates entry
+for …") is not affected by `only_if` on its own — but an item that is itself
+excluded via `published_if` for this offering is treated as expected to have
+no `due_dates` entry, so it doesn't produce a spurious warning.
 
 ---
 

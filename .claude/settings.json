@@ -11,7 +11,10 @@
       "Bash(grep -n \"Quiz \\(\\\\`quizzes/\\\\`\\)\" README.md)",
       "Bash(awk 'NR<1900 && /^def /{name=$0; line=NR} END{}' src/github_to_canvas/sync.py)",
       "Bash(uv tool *)",
-      "Bash(grep -n \"^$\" /home/mike/Dropbox/Personal/Tech/GitHubToCanvasLMS/GitHubToCanvasLMS/TODO.md)"
+      "Bash(grep -n \"^$\" /home/mike/Dropbox/Personal/Tech/GitHubToCanvasLMS/GitHubToCanvasLMS/TODO.md)",
+      "Bash(python -m pytest tests/test_conditionals.py -q)",
+      "Bash(python -m pytest tests/test_due_dates.py tests/test_conditionals.py -q)",
+      "Bash(python -m ruff check src/github_to_canvas/conditionals.py src/github_to_canvas/sync.py src/github_to_canvas/publish.py src/github_to_canvas/cli.py)"
     ],
     "defaultMode": "bypassPermissions",
     "additionalDirectories": [

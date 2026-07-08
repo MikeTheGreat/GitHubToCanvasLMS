@@ -442,14 +442,19 @@ def list_titles(repo: Path) -> None:
     a due date are listed alphabetically by title.
     """
     from .sync import (
+        filter_due_dates_by_flags,
         find_due_date_override,
         iter_gradeable_content,
+        load_course_flags,
         load_due_dates,
         parse_frontmatter,
     )
 
     repo = repo.resolve()
-    due_dates = load_due_dates(repo)
+    try:
+        due_dates = filter_due_dates_by_flags(load_due_dates(repo), load_course_flags(repo))
+    except ValueError as e:
+        die(str(e))
 
     items: list[tuple[str | None, str, str]] = []  # (due_at, title, path)
 

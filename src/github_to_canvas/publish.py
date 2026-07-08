@@ -19,7 +19,7 @@ from typing import Any
 
 import yaml
 
-from .conditionals import apply_conditionals
+from .conditionals import apply_conditionals, resolve_published_if
 from .convert import (
     apply_outside_fences,
     expand_frontmatter_snippets,
@@ -35,7 +35,9 @@ from .sync import (
 )
 
 
-def _item_published(item: dict, repo: Path) -> bool:
+def _item_published(
+    item: dict, repo: Path, flags: dict[str, bool] | None = None
+) -> bool:
     """Resolve a module item's effective published state.
 
     `parse_module_body` leaves "published" as None for content items with no
@@ -45,7 +47,7 @@ def _item_published(item: dict, repo: Path) -> bool:
     """
     published = item.get("published", True)
     if published is None:
-        return _content_default_published(repo, item["local_path"], repo / "snippets")
+        return _content_default_published(repo, item["local_path"], repo / "snippets", flags)
     return bool(published)
 
 
@@ -236,20 +238,29 @@ def _strip_pandoc_syntax(text: str) -> str:
 CONTENT_DIRS = ["assignments", "discussions", "modules", "pages"]
 
 
-def _published_title(md_file: Path, repo: Path) -> str | None:
+def _published_title(
+    md_file: Path, repo: Path, flags: dict[str, bool] | None = None
+) -> str | None:
     """Return the title of ``md_file`` if it is published, else None.
 
-    Reads the file once. As before, the ``published`` flag is read from the
-    snippet-expanded frontmatter while the title comes from the raw frontmatter."""
+    Reads the file once. As before, the ``published``/``published_if`` flag
+    is read from the snippet-expanded frontmatter while the title comes from
+    the raw frontmatter. A ``published_if`` problem (undefined flag,
+    ambiguous with ``published``) is resolved quietly — it is loudly
+    reported when the file syncs on its own via `update` — and treated as
+    not published."""
     frontmatter, body = parse_frontmatter(md_file.read_text())
     title = frontmatter.get("title", md_file.stem)
     expanded, _ = expand_frontmatter_snippets(frontmatter, body, md_file, repo / "snippets")
-    if expanded.get("published", False) is not True:
+    source_desc = md_file.relative_to(repo).as_posix() if md_file.is_relative_to(repo) else md_file.name
+    if resolve_published_if(expanded, flags or {}, source_desc, quiet=True) is not True:
         return None
     return title
 
 
-def discover_published(repo: Path) -> dict[str, list[tuple[str, str]]]:
+def discover_published(
+    repo: Path, flags: dict[str, bool] | None = None
+) -> dict[str, list[tuple[str, str]]]:
     """Discover all published content grouped by content type.
 
     Returns ``{type_label: [(title, repo_relative_path), ...]}`` for each
@@ -260,7 +271,7 @@ def discover_published(repo: Path) -> dict[str, list[tuple[str, str]]]:
     """
     result: dict[str, list[tuple[str, str]]] = {}
     for content_type in CONTENT_DIRS:
-        items = _discover_type(repo, content_type)
+        items = _discover_type(repo, content_type, flags)
         if items:
             label = content_type.replace("_", " ").title()
             result[label] = items
@@ -271,14 +282,16 @@ def discover_published(repo: Path) -> dict[str, list[tuple[str, str]]]:
 # Selective discovery (Syllabus / Assignments / Modules only)
 # ---------------------------------------------------------------------------
 
-def _discover_type(repo: Path, content_type: str) -> list[tuple[str, str]]:
+def _discover_type(
+    repo: Path, content_type: str, flags: dict[str, bool] | None = None
+) -> list[tuple[str, str]]:
     """Discover published items of a single content type."""
     content_dir = repo / content_type
     if not content_dir.exists():
         return []
     items: list[tuple[str, str]] = []
     for md_file in sorted(content_dir.rglob("*.md")):
-        title = _published_title(md_file, repo)
+        title = _published_title(md_file, repo, flags)
         if title is None:
             continue
         rel = md_file.relative_to(repo).as_posix()
@@ -286,7 +299,9 @@ def _discover_type(repo: Path, content_type: str) -> list[tuple[str, str]]:
     return items
 
 
-def _find_syllabus(repo: Path) -> tuple[str, str] | None:
+def _find_syllabus(
+    repo: Path, flags: dict[str, bool] | None = None
+) -> tuple[str, str] | None:
     """Find the published syllabus page.
 
     Checks ``course_settings/syllabus.md`` first, then falls back to any
@@ -306,7 +321,7 @@ def _find_syllabus(repo: Path) -> tuple[str, str] | None:
         )
 
     for md_file in candidates:
-        title = _published_title(md_file, repo)
+        title = _published_title(md_file, repo, flags)
         if title is None:
             continue
         rel = md_file.relative_to(repo).as_posix()
@@ -378,7 +393,7 @@ def collect_reachable(
 
         if repo_rel.startswith("modules/"):
             for item in parse_module_body(body, src, repo):
-                if not _item_published(item, repo):
+                if not _item_published(item, repo, flags):
                     continue
                 if item["type"] == "content" and item["local_path"] not in visited:
                     queue.append(item["local_path"])
@@ -402,7 +417,7 @@ def discover_modules(repo: Path) -> list[Path]:
     return sorted(modules_dir.glob("*.md"))
 
 
-def build_nav(repo: Path) -> list[Any]:
+def build_nav(repo: Path, flags: dict[str, bool] | None = None) -> list[Any]:
     """Build the MkDocs nav tree: Syllabus, Assignments, Modules.
 
     Only these three categories appear in the navigation.  Other content
@@ -411,17 +426,17 @@ def build_nav(repo: Path) -> list[Any]:
     """
     nav: list[Any] = [{"Home": "index.md"}]
 
-    syllabus = _find_syllabus(repo)
+    syllabus = _find_syllabus(repo, flags)
     if syllabus:
         title, path = syllabus
         nav.append({"Syllabus": [{title: staged_path(path)}]})
 
-    assignments = _discover_type(repo, "assignments")
+    assignments = _discover_type(repo, "assignments", flags)
     if assignments:
         children = [{t: staged_path(p)} for t, p in assignments]
         nav.append({"Assignments": children})
 
-    modules = _discover_type(repo, "modules")
+    modules = _discover_type(repo, "modules", flags)
     if modules:
         children = [{t: staged_path(p)} for t, p in modules]
         nav.append({"Modules": children})
@@ -548,7 +563,7 @@ def render_module_overview(
     out: list[str] = [f"# {title}", ""]
     in_list = False
     for item in items:
-        if not _item_published(item, repo):
+        if not _item_published(item, repo, flags):
             continue
         indent = item.get("indent", 0)
         if item["type"] == "SubHeader":
@@ -677,11 +692,11 @@ def stage(repo: Path, staging_dir: Path) -> dict[str, Any]:
     flags = load_course_flags(repo)
     errors: list[str] = []
 
-    syllabus = _find_syllabus(repo)
-    assignments = _discover_type(repo, "assignments")
-    modules = _discover_type(repo, "modules")
+    syllabus = _find_syllabus(repo, flags)
+    assignments = _discover_type(repo, "assignments", flags)
+    modules = _discover_type(repo, "modules", flags)
 
-    nav = build_nav(repo)
+    nav = build_nav(repo, flags)
 
     seed_paths: set[str] = set()
     if syllabus:

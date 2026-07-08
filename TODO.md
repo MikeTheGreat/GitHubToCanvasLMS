@@ -2,14 +2,18 @@
 
 ## Course flags: follow-on features beyond the shipped v1
 
-Course flags themselves are implemented (see README "Course flags — conditional
-content" and ARCHITECTURE "Course flags (conditional content)"). These
-extensions are sketched in **[DESIGN-course-flags.md](DESIGN-course-flags.md)
-§12** and remain future work:
+Course flags themselves, `published_if` (frontmatter), and due_dates
+`only_if` are all implemented (see README "Course flags — conditional
+content" and its `published_if`/`only_if` subsections; ARCHITECTURE "Course
+flags (conditional content)" and its `published_if` (frontmatter) and
+due_dates `only_if` follow-up section). These extensions are sketched in
+**[DESIGN-course-flags.md](DESIGN-course-flags.md) §12** and remain future
+work:
 
-- **Whole-resource exclusion** (`only_if:` frontmatter) — exclude an entire
-  page/assignment/quiz from the course when a flag is off, not just empty its
-  body; needs delete-vs-unpublish semantics, likely via the prune machinery.
+- **Whole-resource exclusion via delete/prune** — go further than
+  `published_if`'s unpublish semantics and actually remove a
+  page/assignment/quiz from Canvas (via the prune machinery) when a flag is
+  off, rather than leaving it synced-but-unpublished.
 - **CLI flag overrides** — repeatable `--flag name=true/false` on
   `update`/`publish` to preview the other variant without editing the TOML
   (with care around what gets written to `flags_used`).
@@ -19,75 +23,13 @@ extensions are sketched in **[DESIGN-course-flags.md](DESIGN-course-flags.md)
 - **`list-flags` report** — each flag, its value, and the files referencing it
   (the unused-flag scan already computes the data).
 
-## Course flags in frontmatter/config: `published_if` and due_dates `only_if` (recommended), not general `#if` (assessed 2026-07-06)
-
-Motivating use cases: hide an assignment from one offering (conditionally set
-`published: true`), and exclude some files' `due_dates` entries so they don't
-show up as due in that offering.
-
-### Recommended approach: structured per-key evaluation (~a day of work)
-
-Both use cases are "conditionally set one value," not "conditionally include
-arbitrary text," so evaluate structured keys against the loaded flags instead
-of text-preprocessing YAML/TOML:
-
-- **`published_if: flag_name`** (also accepting `not flag_name`) in
-  frontmatter. Evaluate at the existing sync choke points; undefined flag →
-  the same hard error; record the flag in `flags_used` so a flip re-syncs
-  exactly the right files and unpublishes/republishes on Canvas. Content stays
-  synced and instructor-visible. Exclude announcements (Canvas can't unpublish
-  them). This is a natural stepping stone to §12.1 whole-resource exclusion —
-  same frontmatter shape, unpublish semantics now, delete/prune later if ever
-  wanted.
-- **`only_if = "flag_name"`** as an optional key on each `due_dates` entry,
-  filtered right after `load_due_dates()`. No TOML preprocessing, no separate
-  flags file, file stays valid TOML in every variant. Per-entry rather than
-  per-span, which matches the use case.
-- The due-dates coverage warnings must treat `published_if`-excluded items as
-  expected-to-have-no-entry (both checks live in `sync.py`, so this is easy).
-- No flags-file migration needed: everything is evaluated post-parse from the
-  same settings dict, so there is no chicken-and-egg with
-  `course_settings.toml`.
-
-### Why a general `#if` in YAML frontmatter / TOML config was assessed as not worth it
-
-A full "process `#if` everywhere" design (flags moved to their own config
-file; directives allowed in frontmatter and config, with an `#if` opened in
-frontmatter required to close in frontmatter) was considered and deliberately
-deferred. The problems, roughly in order of severity:
-
-- **User-error surface (worst problem).** Conditional YAML must produce valid
-  YAML under *every* flag combination — indentation-sensitive, and nothing
-  checks the combinations not currently selected; breakage surfaces a quarter
-  later when the other variant is enabled. Conditional `title` is a special
-  footgun: pages are keyed by title slug on Canvas and `due_dates` match by
-  title, so a flag flip that changes a title silently creates a *new* Canvas
-  page and orphans the old one.
-- **Call-site sprawl (the destabilizing part).** `apply_conditionals` runs at
-  a handful of body choke points, but `parse_frontmatter` is called from
-  dozens of places including passive probes (title-collision check, due-dates
-  coverage, `_published_title`/reachability in publish,
-  `_content_default_published`, `list-titles`, `mv`). Every site must see the
-  *same filtered view* of frontmatter or `update`/`publish` drift apart
-  quietly — one missed site is a subtle bug, the opposite failure mode of the
-  shipped design where every error is loud.
-- **Syntax problem.** `<!-- #if flag -->` is invalid YAML and invalid TOML;
-  even though the tool filters directive lines before parsing, VSCode's
-  YAML/TOML highlighting would flag conditional frontmatter as broken —
-  violating the same stays-editable-in-VSCode requirement that drove the
-  HTML-comment choice for bodies. The fix (native-comment dialect `# #if
-  flag` in YAML/TOML) works but means two directive syntaxes for one feature.
-- **Flags-file migration.** `#if` inside `course_settings.toml` requires
-  moving `[course_flags]` to its own file (chicken-and-egg), plus a
-  back-compat story and teaching the settings staleness check (mtime +
-  section hashes, see DESIGN-settings-caching.md) to also watch the flags
-  file.
-
-Net: a multi-day change touching most frontmatter read sites, with quiet
-inconsistency as the main risk and a permanently higher support burden from
-per-variant YAML breakage. Revisit only if a case appears that genuinely needs
-conditional *text* in frontmatter (not just conditional booleans/entries) —
-and then scope the dialect to that case.
+A full "process `#if` everywhere in YAML/TOML" design (flags moved to their
+own config file; directives allowed in frontmatter and config) was considered
+and deliberately rejected in favor of the shipped `published_if`/`only_if`
+structured-key approach — see ARCHITECTURE.md's `published_if`/`only_if`
+section for why (call-site sprawl, per-variant YAML breakage, invalid-YAML
+directive syntax). Revisit only if a case appears that genuinely needs
+conditional *text* in frontmatter, not just conditional booleans/entries.
 
 ## Show due dates in the published MkDocs site
 

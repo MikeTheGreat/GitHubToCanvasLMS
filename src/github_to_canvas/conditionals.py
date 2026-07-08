@@ -82,6 +82,13 @@ def _parse_condition(rest: str) -> tuple[bool, str] | str:
     return (negate, name)
 
 
+def parse_condition(text: str) -> tuple[bool, str] | str:
+    """Public entry point to ``_parse_condition``, for callers outside this
+    module that need to evaluate a single ``flag_name`` / ``not flag_name``
+    string against the same grammar as ``#if`` (e.g. due_dates ``only_if``)."""
+    return _parse_condition(text)
+
+
 @dataclass
 class _Frame:
     """One open #if … #endif region on the nesting stack."""
@@ -226,6 +233,93 @@ def apply_conditionals(
     if problems:
         return None
     return "".join(out)
+
+
+def resolve_published_if(
+    frontmatter: dict,
+    flags: dict[str, bool],
+    source_desc: str,
+    errors: list[str] | None = None,
+    *,
+    quiet: bool = False,
+    forbid: bool = False,
+    forbid_reason: str = "",
+) -> bool | None:
+    """Resolve the effective ``published`` boolean for a content file.
+
+    Honors an optional ``published_if: flag_name`` (or ``published_if: not
+    flag_name``) frontmatter key, which computes ``published`` from a course
+    flag instead of a literal ``true``/``false``. Same condition syntax as
+    ``#if`` (single flag name, optionally preceded by ``not``).
+
+    Returns ``None`` if any problem occurred (caller must skip the file):
+    ``published_if`` combined with an explicit ``published`` key (ambiguous),
+    a malformed/missing condition, an undefined flag, or ``forbid=True`` (set
+    by callers — announcements — for which Canvas has no way to unpublish
+    once posted, so the whole feature is disallowed there).
+
+    When ``published_if`` is absent, simply returns
+    ``frontmatter.get("published", False)``.
+    """
+    if "published_if" not in frontmatter:
+        return bool(frontmatter.get("published", False))
+
+    def report(msg: str) -> None:
+        if not quiet:
+            warn(f"ERROR: {source_desc}: {msg}", errors)
+
+    if forbid:
+        report(
+            f"'published_if' is not supported for {forbid_reason} "
+            f"— use a literal 'published:' instead"
+        )
+        return None
+    if "published" in frontmatter:
+        report(
+            "'published_if' cannot be combined with an explicit 'published' "
+            "key — remove one"
+        )
+        return None
+    value = frontmatter["published_if"]
+    if not isinstance(value, str):
+        report(
+            f"'published_if' must be a flag name string, optionally preceded "
+            f"by 'not' (e.g. 'published_if: my_flag'), got {value!r}"
+        )
+        return None
+    cond = _parse_condition(value)
+    if cond == "missing":
+        report("'published_if' requires a flag name")
+        return None
+    if cond == "malformed":
+        report(
+            f"invalid 'published_if' value {value!r} — expected a single "
+            f"flag name, optionally preceded by 'not' (no and/or/parentheses)"
+        )
+        return None
+    negate, name = cond
+    if name not in flags:
+        report(
+            f"undefined course flag '{name}' in 'published_if' — flags must "
+            f"be defined under [course_flags] in course_settings.toml"
+        )
+        return None
+    return (not flags[name]) if negate else flags[name]
+
+
+def find_referenced_flags_in_frontmatter(frontmatter: dict) -> set[str]:
+    """Lexical probe: the flag name referenced by ``published_if``, if any.
+
+    Never errors (passive, like ``find_referenced_flags``) — a malformed
+    value contributes nothing.
+    """
+    value = frontmatter.get("published_if")
+    if not isinstance(value, str):
+        return set()
+    cond = _parse_condition(value)
+    if isinstance(cond, tuple):
+        return {cond[1]}
+    return set()
 
 
 def find_referenced_flags(text: str) -> set[str]:
