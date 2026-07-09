@@ -13,6 +13,9 @@ from canvasapi.exceptions import ResourceDoesNotExist
 from github_to_canvas.config import Config
 from github_to_canvas.sync import (
     check_title_collisions,
+    compute_settings_section_hashes,
+    find_pinned_match,
+    load_pinned_resources,
     parse_frontmatter,
     parse_module_body,
     run_prune,
@@ -3713,6 +3716,157 @@ def test_sync_rubrics_omits_reusable_when_absent() -> None:
     assert "read_only" not in call_kwargs["rubric"]
 
 
+def test_failed_rubric_sync_is_retried_next_run(mock_course, mocker, tmp_path) -> None:
+    """If sync_rubrics() raises (e.g. Canvas rejects the create), rubrics.toml
+    keeps no last_synced stamp, so needs_sync() retries it on the next update
+    instead of silently treating the rubric as if it were created."""
+    manifest: dict = {}
+    mocker.patch("github_to_canvas.manifest.load", return_value=manifest)
+    mocker.patch("github_to_canvas.manifest.flush")
+    root = tmp_path / "course"
+    cs_dir = root / "course_settings"
+    cs_dir.mkdir(parents=True)
+    (cs_dir / "rubrics.toml").write_text(
+        '[[rubrics]]\n'
+        'title = "115 Assignments Rubric"\n'
+        '\n'
+        '[[rubrics.criteria]]\n'
+        'description = "Correctness"\n'
+        'points = 10.0\n'
+    )
+    mock_course.get_rubrics.return_value = []
+    mock_course.create_rubric.side_effect = Exception("422 Unprocessable Entity")
+
+    run_sync(_config(), root)
+
+    entry = manifest["course_settings/rubrics.toml"]
+    assert "last_synced" not in entry
+
+
+def test_single_target_rubrics_toml_syncs_rubrics_not_page(
+    mock_course, course_root, mocker
+) -> None:
+    """-s course_settings/rubrics.toml runs the rubric sync — it must not be
+    uploaded as a wiki page (regression: the TOML file used to fall through
+    to the generic content handler and get created as a Canvas page)."""
+    manifest: dict = {}
+    mocker.patch("github_to_canvas.manifest.load", return_value=manifest)
+    mocker.patch("github_to_canvas.manifest.flush")
+    cs_dir = course_root / "course_settings"
+    cs_dir.mkdir()
+    rubrics_toml = cs_dir / "rubrics.toml"
+    rubrics_toml.write_text(
+        '[[rubrics]]\n'
+        'title = "115 Assignments Rubric"\n'
+        '\n'
+        '[[rubrics.criteria]]\n'
+        'description = "Correctness"\n'
+        'points = 10.0\n'
+    )
+    mock_course.get_rubrics.return_value = []
+    mock_course.create_rubric.return_value = {
+        "rubric": _mock_rubric(42, "115 Assignments Rubric")
+    }
+
+    run_targeted_sync(
+        _config(), course_root,
+        recursive_targets=[],
+        single_targets=[str(rubrics_toml)],
+    )
+
+    mock_course.create_rubric.assert_called_once()
+    mock_course.create_page.assert_not_called()
+    entry = manifest["course_settings/rubrics.toml"]
+    assert entry["canvas_type"] == "rubrics"
+
+
+def test_single_target_syllabus_syncs_syllabus_not_page(
+    mock_course, course_root, mocker
+) -> None:
+    """-s course_settings/syllabus.md updates the course syllabus body — it
+    must not be uploaded as a wiki page."""
+    manifest: dict = {}
+    mocker.patch("github_to_canvas.manifest.load", return_value=manifest)
+    mocker.patch("github_to_canvas.manifest.flush")
+    cs_dir = course_root / "course_settings"
+    cs_dir.mkdir()
+    syllabus_md = cs_dir / "syllabus.md"
+    syllabus_md.write_text("---\n---\n\nWelcome to the course.\n")
+
+    run_targeted_sync(
+        _config(), course_root,
+        recursive_targets=[],
+        single_targets=[str(syllabus_md)],
+    )
+
+    mock_course.create_page.assert_not_called()
+    syllabus_calls = [
+        c for c in mock_course.update.call_args_list
+        if "syllabus_body" in c[1].get("course", {})
+    ]
+    assert len(syllabus_calls) == 1
+    assert "Welcome to the course." in syllabus_calls[0][1]["course"]["syllabus_body"]
+    assert manifest["course_settings/syllabus.md"]["canvas_type"] == "syllabus"
+
+
+def test_single_target_module_order_repositions_modules(
+    mock_course, mocker, tmp_path
+) -> None:
+    """-s course_settings/module_order.toml repositions synced modules without
+    re-syncing their content."""
+    root = tmp_path / "course"
+    _make_minimal_module_repo(root, ["week-1.md"])
+    (root / "course_settings").mkdir()
+    order_path = root / "course_settings" / "module_order.toml"
+    order_path.write_text('order = ["week-1.md"]\n')
+    preloaded = {
+        "modules/week-1.md": {
+            "canvas_id": 101, "canvas_type": "module",
+            "canvas_item_ids": {},
+            "last_synced": _FUTURE_SYNCED,
+        },
+        # order file has no manifest entry → needs_sync returns True
+    }
+    mocker.patch("github_to_canvas.manifest.load", return_value=preloaded)
+    mocker.patch("github_to_canvas.manifest.flush")
+    module = _mock_module(101)
+    mock_course.get_module.return_value = module
+
+    run_targeted_sync(
+        _config(), root,
+        recursive_targets=[],
+        single_targets=[str(order_path)],
+    )
+
+    mock_course.create_module.assert_not_called()
+    mock_course.create_page.assert_not_called()
+    edit_kwargs = module.edit.call_args[1]["module"]
+    assert edit_kwargs == {"position": 1}
+    assert preloaded["course_settings/module_order.toml"]["canvas_type"] == "module_order"
+
+
+def test_single_target_other_course_settings_file_warns(
+    mock_course, course_root, mocker, capsys
+) -> None:
+    """-s on a course_settings file the tool doesn't recognize warns instead
+    of uploading it as content."""
+    mocker.patch("github_to_canvas.manifest.flush")
+    cs_dir = course_root / "course_settings"
+    cs_dir.mkdir()
+    stray = cs_dir / "notes.md"
+    stray.write_text("# Private planning notes\n")
+
+    run_targeted_sync(
+        _config(), course_root,
+        recursive_targets=[],
+        single_targets=[str(stray)],
+    )
+
+    mock_course.create_page.assert_not_called()
+    out = capsys.readouterr().out
+    assert "cannot be targeted" in out
+
+
 # ---------------------------------------------------------------------------
 # Rubric-assignment association via frontmatter
 # ---------------------------------------------------------------------------
@@ -4412,3 +4566,286 @@ def test_single_target_does_not_pull_in_other_files_via_snippet_change(
     # snippet, a narrow -s run must never reach outside its target set.
     mock_course.get_page.assert_not_called()
     mock_course.create_page.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# pinned_resources: never upload pinned content (soft warning)
+# ---------------------------------------------------------------------------
+
+
+def _write_pinned(root: Path, entries: list[str]) -> None:
+    """Write a course_settings.toml whose only content is pinned_resources."""
+    cs_dir = root / "course_settings"
+    cs_dir.mkdir(parents=True, exist_ok=True)
+    listed = ", ".join(f'"{e}"' for e in entries)
+    (cs_dir / "course_settings.toml").write_text(f"pinned_resources = [{listed}]\n")
+
+
+def test_load_pinned_resources_normalizes_entries() -> None:
+    settings = {"pinned_resources": ["quizzes/a-quiz/", " pages/one.md "]}
+    assert load_pinned_resources(Path("."), settings) == [
+        "quizzes/a-quiz",
+        "pages/one.md",
+    ]
+
+
+def test_load_pinned_resources_missing_key_is_empty() -> None:
+    assert load_pinned_resources(Path("."), {}) == []
+
+
+def test_load_pinned_resources_rejects_absolute_path() -> None:
+    settings = {"pinned_resources": ["/home/mike/repo/quizzes/a-quiz"]}
+    with pytest.raises(ValueError, match="absolute path"):
+        load_pinned_resources(Path("."), settings)
+
+
+def test_load_pinned_resources_rejects_non_list() -> None:
+    with pytest.raises(ValueError, match="array of"):
+        load_pinned_resources(Path("."), {"pinned_resources": "quizzes/a-quiz"})
+
+
+def test_load_pinned_resources_rejects_non_string_entry() -> None:
+    with pytest.raises(ValueError, match="array of"):
+        load_pinned_resources(Path("."), {"pinned_resources": ["quizzes/a", 3]})
+
+
+def test_find_pinned_match_exact_and_folder_prefix() -> None:
+    pinned = ["quizzes/a-quiz", "pages/one.md"]
+    assert find_pinned_match(pinned, "quizzes/a-quiz/a-quiz.md") == "quizzes/a-quiz"
+    assert find_pinned_match(pinned, "quizzes/a-quiz") == "quizzes/a-quiz"
+    assert find_pinned_match(pinned, "pages/one.md") == "pages/one.md"
+    # A folder pin must not match a sibling that merely shares the prefix text.
+    assert find_pinned_match(pinned, "quizzes/a-quiz-2/a-quiz-2.md") is None
+    assert find_pinned_match(pinned, "pages/one.md.bak") is None
+
+
+def test_pinned_resources_excluded_from_metadata_section_hash() -> None:
+    """Editing the pin list must not trigger a spurious course-metadata sync."""
+    without = compute_settings_section_hashes({"title": "X"})
+    with_pins = compute_settings_section_hashes(
+        {"title": "X", "pinned_resources": ["quizzes/a-quiz"]}
+    )
+    assert with_pins["metadata"] == without["metadata"]
+
+
+def test_pinned_quiz_stale_is_not_uploaded_and_warns(
+    mock_course, mocker, tmp_path, capsys
+) -> None:
+    """A pinned quiz with local changes is skipped entirely — no quiz edit, no
+    question delete/re-create — with a soft warning (run still succeeds)."""
+    root = _quiz_course_root(tmp_path)
+    _write_pinned(root, ["quizzes/a-quiz"])
+    preloaded = {
+        "quizzes/a-quiz/a-quiz.md": {
+            "canvas_id": 12345, "canvas_type": "quiz",
+            "last_synced": "2025-01-01T00:00:00+00:00",
+            "canvas_question_ids": {},
+        },
+    }
+    mocker.patch("github_to_canvas.manifest.load", return_value=preloaded)
+    mocker.patch("github_to_canvas.manifest.flush")
+
+    had_errors = run_sync(_config(), root)
+
+    assert had_errors is False
+    mock_course.get_quiz.assert_not_called()
+    mock_course.create_quiz.assert_not_called()
+    out = capsys.readouterr().out
+    assert (
+        "WARNING: quizzes/a-quiz/a-quiz.md: pinned (pinned_resources in "
+        "course_settings.toml); NOT uploaded" in out
+    )
+    # End-of-run summary lists the skipped resource.
+    assert "Remove them from pinned_resources" in out
+
+
+def test_pinned_quiz_md_file_entry_also_matches(mock_course, mocker, tmp_path) -> None:
+    root = _quiz_course_root(tmp_path)
+    _write_pinned(root, ["quizzes/a-quiz/a-quiz.md"])
+    mocker.patch("github_to_canvas.manifest.flush")
+
+    run_sync(_config(), root)
+
+    mock_course.create_quiz.assert_not_called()
+    mock_course.get_quiz.assert_not_called()
+
+
+def test_pinned_wins_over_force_uploads(mock_course, mocker, tmp_path, capsys) -> None:
+    root = _quiz_course_root(tmp_path)
+    _write_pinned(root, ["quizzes/a-quiz"])
+    quiz_dir = root / "quizzes" / "a-quiz"
+    for f in [quiz_dir / "a-quiz.md",
+              quiz_dir / "questions" / "what-is-2-plus-2.md",
+              quiz_dir / "questions" / "explain-something.md"]:
+        _make_old(f)
+    preloaded = {
+        "quizzes/a-quiz/a-quiz.md": {
+            "canvas_id": 12345, "canvas_type": "quiz",
+            "last_synced": "2025-01-01T00:00:00+00:00",
+            "canvas_question_ids": {},
+        },
+    }
+    mocker.patch("github_to_canvas.manifest.load", return_value=preloaded)
+    mocker.patch("github_to_canvas.manifest.flush")
+
+    run_sync(_config(), root, force_uploads=True)
+
+    mock_course.get_quiz.assert_not_called()
+    mock_course.create_quiz.assert_not_called()
+    assert "NOT uploaded" in capsys.readouterr().out
+
+
+def test_pinned_up_to_date_quiz_stays_silent(
+    mock_course, mocker, tmp_path, capsys
+) -> None:
+    """The pin warning only fires when an upload would otherwise happen."""
+    root = _quiz_course_root(tmp_path)
+    _write_pinned(root, ["quizzes/a-quiz"])
+    quiz_dir = root / "quizzes" / "a-quiz"
+    for f in [quiz_dir / "a-quiz.md",
+              quiz_dir / "questions" / "what-is-2-plus-2.md",
+              quiz_dir / "questions" / "explain-something.md"]:
+        _make_old(f)
+    preloaded = {
+        "quizzes/a-quiz/a-quiz.md": {
+            "canvas_id": 12345, "canvas_type": "quiz",
+            "last_synced": "2025-01-01T00:00:00+00:00",
+            "canvas_question_ids": {},
+        },
+    }
+    mocker.patch("github_to_canvas.manifest.load", return_value=preloaded)
+    mocker.patch("github_to_canvas.manifest.flush")
+
+    run_sync(_config(), root, verbose=True)
+
+    out = capsys.readouterr().out
+    assert "Skipping (up-to-date): quizzes/a-quiz/a-quiz.md" in out
+    assert "NOT uploaded" not in out
+
+
+def test_pinned_page_is_not_uploaded(mock_course, mocker, tmp_path, capsys) -> None:
+    root = tmp_path / "course"
+    (root / "pages").mkdir(parents=True)
+    (root / "pages" / "one.md").write_text("---\ntitle: One\n---\nbody\n")
+    _write_pinned(root, ["pages/one.md"])
+    mocker.patch("github_to_canvas.manifest.flush")
+
+    had_errors = run_sync(_config(), root)
+
+    assert had_errors is False
+    mock_course.create_page.assert_not_called()
+    assert "pages/one.md: pinned" in capsys.readouterr().out
+
+
+def test_pinned_wins_over_explicit_target(mock_course, mocker, tmp_path, capsys) -> None:
+    """Naming a pinned quiz with -s (even with --force-uploads) still skips it."""
+    root = _quiz_course_root(tmp_path)
+    _write_pinned(root, ["quizzes/a-quiz"])
+    mocker.patch("github_to_canvas.manifest.flush")
+
+    run_targeted_sync(
+        _config(), root,
+        recursive_targets=[],
+        single_targets=[str(root / "quizzes" / "a-quiz" / "a-quiz.md")],
+        force_uploads=True,
+    )
+
+    mock_course.create_quiz.assert_not_called()
+    mock_course.get_quiz.assert_not_called()
+    assert "NOT uploaded" in capsys.readouterr().out
+
+
+def test_pinned_entry_matching_nothing_warns(
+    mock_course, mocker, tmp_path, capsys
+) -> None:
+    root = tmp_path / "course"
+    (root / "pages").mkdir(parents=True)
+    (root / "pages" / "one.md").write_text("---\ntitle: One\n---\nbody\n")
+    _write_pinned(root, ["quizzes/no-such-quiz"])
+    mocker.patch("github_to_canvas.manifest.flush")
+    mock_course.create_page.return_value = _mock_page(1, "one")
+
+    run_sync(_config(), root)
+
+    assert (
+        "WARNING: pinned_resources entry 'quizzes/no-such-quiz' does not match"
+        in capsys.readouterr().out
+    )
+
+
+def test_prune_delete_skips_pinned_orphan(mock_course, mocker, tmp_path, capsys) -> None:
+    """A deleted-but-pinned local file must not delete the live Canvas object."""
+    root = _prune_repo(tmp_path)
+    _write_pinned(root, ["quizzes/gone"])
+    manifest = {
+        "quizzes/gone/gone.md": {"canvas_type": "quiz", "canvas_id": 44},
+        "pages/gone.md": {"canvas_type": "page", "canvas_id": 11, "canvas_url": "gone"},
+    }
+    mocker.patch("github_to_canvas.manifest.load", return_value=manifest)
+    mocker.patch("github_to_canvas.manifest.flush")
+
+    had_errors = run_prune(_config(), root, "delete")
+
+    assert had_errors is False
+    # The pinned quiz is untouched on Canvas and keeps its manifest entry...
+    mock_course.get_quiz.assert_not_called()
+    assert "quizzes/gone/gone.md" in manifest
+    assert "Skipping (pinned via pinned_resources): quizzes/gone/gone.md" in (
+        capsys.readouterr().out
+    )
+    # ...while the unpinned orphan is still pruned normally.
+    mock_course.get_page.return_value.delete.assert_called_once()
+    assert "pages/gone.md" not in manifest
+
+
+def test_load_pinned_resources_rejects_file_inside_quiz_folder() -> None:
+    """A quiz syncs as one unit; a pin on an individual question would be
+    silently ineffective, so it is a hard config error."""
+    settings = {"pinned_resources": ["quizzes/a-quiz/questions/q1.md"]}
+    with pytest.raises(ValueError, match='Pin the whole quiz instead: "quizzes/a-quiz"'):
+        load_pinned_resources(Path("."), settings)
+
+
+def test_load_pinned_resources_rejects_questions_folder_inside_quiz() -> None:
+    settings = {"pinned_resources": ["quizzes/a-quiz/questions"]}
+    with pytest.raises(ValueError, match="inside a quiz folder"):
+        load_pinned_resources(Path("."), settings)
+
+
+def test_load_pinned_resources_rejects_file_inside_question_bank() -> None:
+    settings = {"pinned_resources": ["question_banks/bank-1/questions/q1.md"]}
+    with pytest.raises(
+        ValueError, match='Pin the whole question bank instead: "question_banks/bank-1"'
+    ):
+        load_pinned_resources(Path("."), settings)
+
+
+def test_load_pinned_resources_accepts_quiz_folder_md_and_bank_toml() -> None:
+    settings = {
+        "pinned_resources": [
+            "quizzes/a-quiz",
+            "quizzes/a-quiz/a-quiz.md",
+            "question_banks/bank-1",
+            "question_banks/bank-1/bank-1.toml",
+        ]
+    }
+    assert load_pinned_resources(Path("."), settings) == settings["pinned_resources"]
+
+
+def test_pinned_question_file_stops_update_before_any_upload(
+    mock_course, mocker, tmp_path
+) -> None:
+    """An ineffective pin on a single question is a hard error: run_sync raises
+    (the CLI turns it into die()) before anything is applied to Canvas."""
+    root = _quiz_course_root(tmp_path)
+    _write_pinned(root, ["quizzes/a-quiz/questions/what-is-2-plus-2.md"])
+    mocker.patch("github_to_canvas.manifest.flush")
+
+    with pytest.raises(ValueError, match="Pin the whole quiz instead"):
+        run_sync(_config(), root)
+
+    # Validation runs before phase 0, so course settings were never applied...
+    mock_course.update.assert_not_called()
+    # ...and no quiz was touched.
+    mock_course.create_quiz.assert_not_called()
+    mock_course.get_quiz.assert_not_called()

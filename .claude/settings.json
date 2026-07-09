@@ -14,7 +14,12 @@
       "Bash(grep -n \"^$\" /home/mike/Dropbox/Personal/Tech/GitHubToCanvasLMS/GitHubToCanvasLMS/TODO.md)",
       "Bash(python -m pytest tests/test_conditionals.py -q)",
       "Bash(python -m pytest tests/test_due_dates.py tests/test_conditionals.py -q)",
-      "Bash(python -m ruff check src/github_to_canvas/conditionals.py src/github_to_canvas/sync.py src/github_to_canvas/publish.py src/github_to_canvas/cli.py)"
+      "Bash(python -m ruff check src/github_to_canvas/conditionals.py src/github_to_canvas/sync.py src/github_to_canvas/publish.py src/github_to_canvas/cli.py)",
+      "Bash(awk '/title = \"115 Assignments Rubric\"/{f=1} f{print} f && /^\\\\[\\\\[rubrics\\\\]\\\\]/ && !/115 Assignments/ && NR>1 && p{exit} {p=1}' \"/home/mike/Dropbox/Work/Courses/_IT_CS_115/IT-CS-115-mpanitz-repo/course_settings/rubrics.toml\")",
+      "Bash(python -m pytest tests/test_sync.py -k \"rubric\" -q)",
+      "Bash(python -m pytest tests/test_sync.py -q)",
+      "Bash(grep -n \"^#\\\\{2,4\\\\} \" /home/mike/Dropbox/Personal/Tech/GitHubToCanvasLMS/GitHubToCanvasLMS/README.md)",
+      "Bash(grep -n \"^#\\\\{1,3\\\\} \" /home/mike/Dropbox/Personal/Tech/GitHubToCanvasLMS/GitHubToCanvasLMS/ARCHITECTURE.md)"
     ],
     "defaultMode": "bypassPermissions",
     "additionalDirectories": [

@@ -67,6 +67,11 @@ class SyncContext:
     due_dates: list[dict[str, Any]] = field(default_factory=list)
     # [course_flags] values driving #if/#elif/#else/#endif conditionals.
     flags: dict[str, bool] = field(default_factory=dict)
+    # Normalized pinned_resources entries; matching resources are never
+    # uploaded (see _skip_if_pinned). pinned_skips accumulates the local keys
+    # skipped this run for the end-of-run summary.
+    pinned: list[str] = field(default_factory=list)
+    pinned_skips: list[str] = field(default_factory=list)
     assignment_group_ids: dict[str, int] = field(default_factory=dict)
     rubric_ids: dict[str, int] = field(default_factory=dict)
     synced_keys: set[str] = field(default_factory=set)
@@ -126,6 +131,103 @@ def load_course_flags(repo_path: Path, settings: dict | None = None) -> dict[str
                 f"boolean (true/false), got {value!r}"
             )
     return dict(table)
+
+
+def load_pinned_resources(repo_path: Path, settings: dict | None = None) -> list[str]:
+    """Load the top-level ``pinned_resources`` array from course_settings.toml.
+
+    If settings dict is provided (pre-loaded), use it; otherwise read from
+    disk. Entries are repo-relative paths naming a content file or a folder;
+    a pinned resource is never uploaded to Canvas (the pin wins over
+    --force-uploads and explicit -t/-s targeting). A non-string entry, an
+    absolute path, or a path inside a quiz/question-bank folder (other than
+    the folder itself or its main file — those sync as one unit, so a pin on
+    an individual question would be silently ineffective while the question
+    still gets deleted and re-created) is a whole-run config error: raises
+    ValueError, which the CLI reports via die().
+    """
+    if settings is None:
+        settings_path = repo_path / "course_settings" / "course_settings.toml"
+        if not settings_path.exists():
+            return []
+        with settings_path.open("rb") as fh:
+            settings = tomllib.load(fh)
+    raw = settings.get("pinned_resources", [])
+    if not isinstance(raw, list) or not all(isinstance(e, str) for e in raw):
+        raise ValueError(
+            "pinned_resources in course_settings.toml must be an array of "
+            "repo-relative path strings"
+        )
+    pinned: list[str] = []
+    for entry in raw:
+        normalized = entry.strip().replace("\\", "/").rstrip("/")
+        if not normalized:
+            raise ValueError("pinned_resources contains an empty entry")
+        if normalized.startswith("/") or re.match(r"[A-Za-z]:/", normalized):
+            raise ValueError(
+                f"pinned_resources entry {entry!r} is an absolute path — use "
+                f'a path relative to the repo root, e.g. "quizzes/my-quiz" '
+                f'or "quizzes/my-quiz/my-quiz.md"'
+            )
+        parts = normalized.split("/")
+        if parts[0] in ("quizzes", "question_banks") and len(parts) >= 3:
+            folder = "/".join(parts[:2])
+            unit, main_suffix = (
+                ("quiz", ".md") if parts[0] == "quizzes"
+                else ("question bank", ".toml")
+            )
+            if normalized != f"{folder}/{parts[1]}{main_suffix}":
+                raise ValueError(
+                    f"pinned_resources entry {entry!r} points inside a {unit} "
+                    f"folder — a {unit} syncs as a single unit, so files "
+                    f"inside it cannot be pinned individually (the pin would "
+                    f"be ignored and the questions still re-created). Pin "
+                    f'the whole {unit} instead: "{folder}"'
+                )
+        pinned.append(normalized)
+    return pinned
+
+
+def find_pinned_match(pinned: list[str], local_key: str) -> str | None:
+    """Return the pinned_resources entry covering local_key, or None.
+
+    An entry matches the file it names exactly, or every file under it when
+    it names a folder (so "quizzes/my-quiz" covers the quiz .md and all of
+    its question files)."""
+    for entry in pinned:
+        if local_key == entry or local_key.startswith(entry + "/"):
+            return entry
+    return None
+
+
+def _skip_if_pinned(ctx: SyncContext, local_key: str) -> bool:
+    """Pin check, run only after the staleness check says an upload would
+    happen — an up-to-date pinned resource stays silent.
+
+    Soft warning by design: printed inline (and summarized at end of run via
+    ctx.pinned_skips) but never added to ctx.errors, so a pinned-and-stale
+    resource does not fail the run."""
+    if find_pinned_match(ctx.pinned, local_key) is None:
+        return False
+    print(
+        f"  WARNING: {local_key}: pinned (pinned_resources in "
+        f"course_settings.toml); NOT uploaded"
+    )
+    ctx.pinned_skips.append(local_key)
+    return True
+
+
+def check_pinned_resources_coverage(pinned: list[str], repo_path: Path) -> None:
+    """Warn (never error) about pinned_resources entries matching nothing on
+    disk — usually a typo or a path gone stale after a rename, but a pin may
+    also deliberately outlive its local file to keep `prune` away from the
+    Canvas object."""
+    for entry in pinned:
+        if not (repo_path / entry).exists():
+            print(
+                f"WARNING: pinned_resources entry '{entry}' does not match "
+                f"any file or folder in the repo"
+            )
 
 
 def filter_due_dates_by_flags(
@@ -819,6 +921,8 @@ def sync_syllabus(ctx: SyncContext) -> None:
         if ctx.verbose:
             print(f"Skipping (up-to-date): {local_key}")
         return
+    if _skip_if_pinned(ctx, local_key):
+        return
     print("Syncing syllabus...")
     try:
         frontmatter, body = parse_frontmatter(syllabus_md.read_text())
@@ -860,8 +964,13 @@ _SETTINGS_SECTION_KEYS = (
 )
 # Excluded from the metadata section but with no section of their own:
 # due_dates changes are handled per-item by the dates pass (which runs every
-# update), and course_flags changes are handled per-file via flags_used.
-_NON_METADATA_SETTINGS_KEYS = _SETTINGS_SECTION_KEYS + ("due_dates", "course_flags")
+# update), course_flags changes are handled per-file via flags_used, and
+# pinned_resources only gates uploads locally (nothing on Canvas to update).
+_NON_METADATA_SETTINGS_KEYS = _SETTINGS_SECTION_KEYS + (
+    "due_dates",
+    "course_flags",
+    "pinned_resources",
+)
 
 
 def _section_hash(value: Any) -> str:
@@ -1127,6 +1236,7 @@ def sync_course_settings(
         with rubrics_path.open("rb") as fh:
             rubrics_data = tomllib.load(fh)
         rubrics = rubrics_data.get("rubrics", [])
+        rubrics_failed = False
         if rubrics:
             try:
                 rubric_ids, created = capi.sync_rubrics(course, rubrics)
@@ -1139,7 +1249,11 @@ def sync_course_settings(
                     )
             except Exception as exc:
                 print(f"  WARNING: rubrics sync failed: {exc}")
-        manifest_lib.record(manifest, manifest_path, rubrics_key, 0, "rubrics")
+                rubrics_failed = True
+        manifest_lib.record(
+            manifest, manifest_path, rubrics_key, 0, "rubrics",
+            mark_synced=not rubrics_failed,
+        )
     if not rubric_ids:
         try:
             rubric_ids = capi.get_rubric_ids(course)
@@ -1353,6 +1467,10 @@ def run_sync(
             _settings_dict = tomllib.load(_fh)
             _front_page_path = _settings_dict.get("front_page")
 
+    # An invalid pinned_resources entry is a hard config error; validate it
+    # before phase 0 so nothing is applied to Canvas first.
+    pinned = load_pinned_resources(repo_path, _settings_dict)
+
     # 0. Course settings (metadata, grading standards, assignment groups, policies, rubrics)
     rubric_ids, changed_sections, deferred_ag_rules = sync_course_settings(
         course, repo_path, manifest, manifest_path, force_uploads,
@@ -1379,6 +1497,7 @@ def run_sync(
         errors=errors,
         due_dates=due_dates,
         flags=course_flags,
+        pinned=pinned,
         assignment_group_ids=assignment_group_ids,
         rubric_ids=rubric_ids,
         synced_keys=synced_content_keys,
@@ -1422,7 +1541,11 @@ def run_sync(
     # 5. Unused course flags (warning only, once per flag)
     check_course_flags_coverage(course_flags, repo_path, matcher)
 
+    # 5.5. Pinned entries that match nothing on disk (warning only)
+    check_pinned_resources_coverage(pinned, repo_path)
+
     _print_newer_on_canvas_summary(newer_on_canvas)
+    _print_pinned_summary(ctx.pinned_skips)
     _print_unpublishable_summary(unpublishable_items)
     _print_ignored_fields_summary(ignored_fields)
     _print_errors_summary(errors)
@@ -1524,6 +1647,9 @@ def run_prune(config: Config, repo_path: Path, mode: str) -> bool:
 
     course = capi.get_course(config)
     in_use = _in_use_resources(course)
+    # "manifest" mode is exempt on purpose: it never contacts Canvas, and it
+    # is the documented escape hatch for stranded entries.
+    pinned = load_pinned_resources(repo_path)
 
     pruned: list[str] = []
     skipped: list[str] = []
@@ -1531,6 +1657,10 @@ def run_prune(config: Config, repo_path: Path, mode: str) -> bool:
     errors: list[str] = []
 
     for key, entry in orphans:
+        if find_pinned_match(pinned, key) is not None:
+            print(f"  Skipping (pinned via pinned_resources): {key}")
+            protected.append(key)
+            continue
         canvas_type = entry.get("canvas_type", "")
         resource_key = _entry_resource_key(canvas_type, entry)
         reason = in_use.get(resource_key) if resource_key is not None else None
@@ -1559,7 +1689,7 @@ def run_prune(config: Config, repo_path: Path, mode: str) -> bool:
 
     print(
         f"\nPrune complete: {len(pruned)} {past}, "
-        f"{len(protected)} kept (in use), "
+        f"{len(protected)} kept (in use or pinned), "
         f"{len(skipped)} skipped, {len(errors)} errors."
     )
     _print_errors_summary(errors)
@@ -1580,6 +1710,8 @@ def _walk_assets(ctx: SyncContext, dir_path: Path, assets_root: Path) -> None:
         if entry.is_file():
             local_key = entry.relative_to(repo_root).as_posix()
             if not manifest_lib.needs_sync(manifest, local_key, entry, ctx.force_uploads):
+                continue
+            if _skip_if_pinned(ctx, local_key):
                 continue
             if not ctx.force_overwrite:
                 local_mtime = datetime.fromtimestamp(
@@ -1955,6 +2087,9 @@ def _sync_content_file(ctx: SyncContext, md_file: Path) -> None:
             print(f"Skipping (up-to-date): {local_key}")
         return
 
+    if _skip_if_pinned(ctx, local_key):
+        return
+
     if not force_overwrite:
         local_mtime = _effective_mtime([md_file], snippets_dir)
         if _canvas_is_newer(course, local_key, local_mtime, manifest, newer_on_canvas):
@@ -2125,6 +2260,9 @@ def _sync_module(
             print(f"Skipping (up-to-date): {local_key}")
         return False
 
+    if _skip_if_pinned(ctx, local_key):
+        return False
+
     if not force_overwrite:
         local_mtime = _effective_mtime([md_file], snippets_dir)
         if _canvas_is_newer(course, local_key, local_mtime, manifest, newer_on_canvas):
@@ -2262,6 +2400,9 @@ def _sync_quiz(ctx: SyncContext, quiz_folder: Path, quiz_md: Path) -> None:
     ):
         if verbose:
             print(f"Skipping (up-to-date): {local_key}")
+        return
+
+    if _skip_if_pinned(ctx, local_key):
         return
 
     if not force_overwrite:
@@ -2442,6 +2583,8 @@ def _sync_question_banks(ctx: SyncContext) -> None:
             if verbose:
                 print(f"Skipping (up-to-date): {local_key}")
             continue
+        if _skip_if_pinned(ctx, local_key):
+            continue
         with toml_path.open("rb") as fh:
             bank_meta = tomllib.load(fh)
         bank_title = bank_meta.get("bank_title", bank_folder.name)
@@ -2486,7 +2629,7 @@ def _get_file_refs(
         body = preprocess_snippets(body, file_path, snippets_dir)
         items = parse_module_body(body, file_path, repo_root)
         return {item["local_path"] for item in items if item["type"] == "content"}
-    if folder in ("assets", "snippets"):
+    if folder in ("assets", "snippets", "course_settings"):
         return set()
     if folder == "quizzes":
         # TODO: quiz description HTML and question text can contain links to other Canvas
@@ -2524,6 +2667,18 @@ def _print_newer_on_canvas_summary(newer_on_canvas: list[str]) -> None:
         "Review these files and re-upload manually if needed (use --force-overwrite to skip this check):"
     )
     for key in newer_on_canvas:
+        print(f"  {key}")
+
+
+def _print_pinned_summary(pinned_skips: list[str]) -> None:
+    if not pinned_skips:
+        return
+    print(
+        "\nThe following resources were NOT uploaded because they are pinned"
+        " (pinned_resources in course_settings.toml).\n"
+        "Remove them from pinned_resources to sync them again:"
+    )
+    for key in pinned_skips:
         print(f"  {key}")
 
 
@@ -2587,6 +2742,7 @@ def run_targeted_sync(
     _targeted_position_map = _load_module_order(repo_path)
     course_flags = load_course_flags(repo_path)
     due_dates = filter_due_dates_by_flags(load_due_dates(repo_path), course_flags)
+    pinned = load_pinned_resources(repo_path)
 
     ctx = SyncContext(
         course=course,
@@ -2602,6 +2758,7 @@ def run_targeted_sync(
         errors=errors,
         due_dates=due_dates,
         flags=course_flags,
+        pinned=pinned,
         assignment_group_ids=assignment_group_ids,
         rubric_ids=rubric_ids,
         unpublishable_items=unpublishable_items,
@@ -2610,11 +2767,51 @@ def run_targeted_sync(
 
     visited: set[str] = set()
 
+    # course_settings.toml and rubrics.toml sync as one unit (with per-file
+    # staleness checks inside sync_course_settings), so targeting either runs
+    # the settings pass at most once per invocation.
+    _settings_state: dict[str, Any] = {"ran": False, "deferred_ag_rules": []}
+
+    def _sync_settings_once() -> None:
+        if _settings_state["ran"]:
+            return
+        _settings_state["ran"] = True
+        new_rubric_ids, _, deferred = sync_course_settings(
+            course, repo_path, manifest, manifest_path, force_uploads,
+            verbose=verbose, errors=errors,
+        )
+        _settings_state["deferred_ag_rules"] = deferred
+        ctx.rubric_ids.update(new_rubric_ids)
+
     def _process(local_key: str) -> None:
         file_path = repo_path / local_key
         folder = local_key.split("/")[0]
-        if folder == "assets":
+        if folder == "course_settings":
+            if file_path.name in ("course_settings.toml", "rubrics.toml"):
+                _sync_settings_once()
+            elif file_path.name == "syllabus.md":
+                sync_syllabus(ctx)
+            elif file_path.name == "module_order.toml":
+                if manifest_lib.needs_sync(
+                    manifest, local_key, file_path, force_uploads
+                ):
+                    _reorder_modules(
+                        course, _targeted_position_map, repo_path, manifest, errors
+                    )
+                    manifest_lib.record(
+                        manifest, manifest_path, local_key, 0, "module_order"
+                    )
+                elif verbose:
+                    print(f"Skipping (up-to-date): {local_key}")
+            else:
+                print(
+                    f"  WARNING: {local_key}: cannot be targeted with -t/-s; "
+                    "this file is applied during a full update"
+                )
+        elif folder == "assets":
             if manifest_lib.needs_sync(manifest, local_key, file_path, force_uploads):
+                if _skip_if_pinned(ctx, local_key):
+                    return
                 if not force_overwrite:
                     local_mtime = datetime.fromtimestamp(
                         file_path.stat().st_mtime, tz=timezone.utc
@@ -2697,12 +2894,28 @@ def run_targeted_sync(
             continue
         _process(local_key)
 
+    # Assignment-group drop rules deferred from the course-settings sync
+    # (mirrors run_sync step 2.65: the groups may have gained their
+    # assignments this run, so Canvas may accept the rules now).
+    if _settings_state["deferred_ag_rules"]:
+        settings_path = repo_path / "course_settings" / "course_settings.toml"
+        if settings_path.exists():
+            with settings_path.open("rb") as fh:
+                _settings = tomllib.load(fh)
+            capi.apply_assignment_group_rules(
+                course,
+                _settings.get("assignment_groups", []),
+                _settings_state["deferred_ag_rules"],
+            )
+
     if due_dates:
         _check_due_dates_coverage(due_dates, repo_path, flags=course_flags)
 
     check_course_flags_coverage(course_flags, repo_path)
+    check_pinned_resources_coverage(pinned, repo_path)
 
     _print_newer_on_canvas_summary(newer_on_canvas)
+    _print_pinned_summary(ctx.pinned_skips)
     _print_unpublishable_summary(unpublishable_items)
     _print_ignored_fields_summary(ignored_fields)
     _print_errors_summary(errors)

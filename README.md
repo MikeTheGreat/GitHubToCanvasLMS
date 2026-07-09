@@ -39,6 +39,7 @@ Write your course content as Markdown files in a Git repository. Run this tool t
   - [Content file format](#content-file-format)
     - [`course_settings.toml`](#course_settingstoml)
       - [Centralized due dates](#centralized-due-dates)
+      - [Pinned resources (`pinned_resources`)](#pinned-resources-pinned_resources)
     - [Syllabus (`course_settings/syllabus.md`)](#syllabus-course_settingssyllabusmd)
     - [Rubrics (`course_settings/rubrics.toml`)](#rubrics-course_settingsrubricstoml)
     - [Other `course_settings/` files (import-only)](#other-course_settings-files-import-only)
@@ -757,6 +758,55 @@ During `update`, the tool prints warnings for:
 Use [`list-titles`](#listing-content-titles-list-titles) to see all available
 titles and their current due dates.
 
+#### Pinned resources (`pinned_resources`)
+
+Re-syncing a quiz **deletes and re-creates every question**, which disconnects
+existing student submissions from the questions. Once students have started a
+quiz, you usually never want the tool to touch it again. The top-level
+`pinned_resources` array freezes content so it is **never uploaded**:
+
+```toml
+pinned_resources = [
+    "quizzes/01-getting-to-know-you",           # a folder pins everything inside it
+    "pages/exam-instructions.md",               # or pin a single file
+]
+```
+
+Paths are **relative to the repo root**. A folder entry covers every file
+under it (for a quiz: the quiz `.md` and all its question files); pinning the
+quiz's `.md` file directly works too. Any content type can be pinned — pages,
+assignments, discussions, quizzes, question banks, modules, assets, the
+syllabus.
+
+While a resource is pinned:
+
+- **It is never uploaded.** The pin wins over `--force-uploads` and over
+  naming the file explicitly with `-t`/`-s`. The *only* way to sync it again
+  is to remove it from `pinned_resources`.
+- **You get a soft warning, not an error.** When the resource has local
+  changes that would otherwise upload, `update` prints
+  `WARNING: … pinned (pinned_resources in course_settings.toml); NOT uploaded`,
+  lists the skipped resources in an end-of-run summary, and continues; the run
+  still succeeds. An up-to-date pinned resource stays silent.
+- **`prune` won't delete or unpublish it**, even if you delete the local file
+  (`prune --manifest`, which never contacts Canvas, is exempt).
+- **`mv` keeps the pin attached**: moving or renaming a pinned resource
+  rewrites its `pinned_resources` entry along with the manifest and links.
+
+A `pinned_resources` entry that matches nothing in the repo produces a warning
+(typo protection); it is not an error, since a pin may deliberately outlive
+its local file to keep `prune` away from the Canvas object.
+
+**You cannot pin an individual quiz question.** A quiz (or question bank)
+syncs as a single unit, so a pin on a file inside its folder — e.g.
+`"quizzes/my-quiz/questions/q1.md"` — could not be honored: the quiz would
+still sync and still delete/re-create that question. Rather than silently
+ignore the pin, the tool treats it as a config error and **stops the entire
+update immediately** (before anything is uploaded), telling you to pin the
+whole quiz folder instead. Only the quiz folder or its main `.md` file (the
+bank folder or its main `.toml`) are valid pin targets under `quizzes/` and
+`question_banks/`.
+
 ### Syllabus (`course_settings/syllabus.md`)
 
 The Markdown body of this file is uploaded as the course's **syllabus** (the
@@ -1206,6 +1256,12 @@ When this file is modified, the tool repositions the listed modules on Canvas wi
 Each quiz lives in its own sub-folder. The folder name becomes the quiz slug.
 
 **Sync behavior:** When a quiz is synced, the quiz itself is updated in place on Canvas, but all of its questions are deleted and re-created from the question files. The publish state is applied after the questions, so a quiz that becomes published during the sync goes live with its new questions — no manual step needed.
+
+> **Once students have started a quiz, pin it.** Deleting and re-creating the
+> questions disconnects existing submissions from them. Add the quiz folder to
+> [`pinned_resources`](#pinned-resources-pinned_resources) in
+> `course_settings.toml` and the tool will never touch it again (warning you
+> if it otherwise would have), no matter what flags you pass.
 
 > **Updating an already-published quiz:** Canvas holds question changes to a
 > published quiz as a pending draft — students keep seeing the old questions,

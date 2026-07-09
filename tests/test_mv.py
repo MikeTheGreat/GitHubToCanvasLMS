@@ -14,6 +14,7 @@ from github_to_canvas.mv import (
     compute_file_updates,
     compute_manifest_updates,
     compute_module_order_updates,
+    compute_pinned_resources_updates,
     find_repo_root,
     run_mv,
     transform_links,
@@ -405,6 +406,56 @@ class TestComputeCourseSettingsUpdates:
         assert compute_course_settings_updates(repo, {"a": "b"}) is None
 
 
+class TestComputePinnedResourcesUpdates:
+    def _write_settings(self, repo: Path, pinned: list) -> None:
+        settings_path = repo / "course_settings" / "course_settings.toml"
+        with settings_path.open("wb") as f:
+            tomli_w.dump({"pinned_resources": pinned}, f)
+
+    def test_file_pin_follows_path_map(self, tmp_path: Path) -> None:
+        repo = _make_repo(tmp_path)
+        self._write_settings(repo, ["pages/old.md"])
+        assert compute_pinned_resources_updates(
+            repo, {"pages/old.md": "pages/new.md"}, "pages/old.md", "pages/new.md"
+        ) == {"pages/old.md": "pages/new.md"}
+
+    def test_folder_pin_follows_directory_move(self, tmp_path: Path) -> None:
+        repo = _make_repo(tmp_path)
+        self._write_settings(repo, ["quizzes/old-quiz"])
+        path_map = {
+            "quizzes/old-quiz/old-quiz.md": "quizzes/new-quiz/new-quiz.md",
+            "quizzes/old-quiz/questions/q1.md": "quizzes/new-quiz/questions/q1.md",
+        }
+        assert compute_pinned_resources_updates(
+            repo, path_map, "quizzes/old-quiz", "quizzes/new-quiz"
+        ) == {"quizzes/old-quiz": "quizzes/new-quiz"}
+
+    def test_quiz_md_pin_follows_inner_rename(self, tmp_path: Path) -> None:
+        """Renaming quizzes/old → quizzes/new also renames old.md → new.md
+        inside the folder; a pin on the .md must follow both renames."""
+        repo = _make_repo(tmp_path)
+        self._write_settings(repo, ["quizzes/old-quiz/old-quiz.md"])
+        path_map = {
+            "quizzes/old-quiz/old-quiz.md": "quizzes/new-quiz/new-quiz.md",
+        }
+        assert compute_pinned_resources_updates(
+            repo, path_map, "quizzes/old-quiz", "quizzes/new-quiz"
+        ) == {"quizzes/old-quiz/old-quiz.md": "quizzes/new-quiz/new-quiz.md"}
+
+    def test_unrelated_pins_untouched(self, tmp_path: Path) -> None:
+        repo = _make_repo(tmp_path)
+        self._write_settings(repo, ["quizzes/other-quiz"])
+        assert compute_pinned_resources_updates(
+            repo, {"pages/a.md": "pages/b.md"}, "pages/a.md", "pages/b.md"
+        ) is None
+
+    def test_returns_none_when_no_pins(self, tmp_path: Path) -> None:
+        repo = _make_repo(tmp_path)
+        assert compute_pinned_resources_updates(
+            repo, {"pages/a.md": "pages/b.md"}, "pages/a.md", "pages/b.md"
+        ) is None
+
+
 # ---------------------------------------------------------------------------
 # compute_file_updates
 # ---------------------------------------------------------------------------
@@ -569,6 +620,27 @@ class TestRunMv:
         with order_path.open("rb") as f:
             data = tomllib.load(f)
         assert data["order"] == ["intro.md", "new-mod.md", "outro.md"]
+
+    def test_quiz_folder_rename_updates_pinned_resources(self, tmp_path: Path) -> None:
+        """Moving a pinned quiz rewrites its pinned_resources entries so the pin
+        (and the student-progress protection it provides) survives the rename."""
+        repo = _make_repo(tmp_path, {
+            "quizzes/old-quiz/old-quiz.md": "---\ntitle: Quiz\n---\n",
+            "quizzes/old-quiz/questions/q1.md": "---\ntitle: Q1\n---\nQ1 body",
+        })
+        settings_path = repo / "course_settings" / "course_settings.toml"
+        settings_path.write_text(
+            "# keep this comment\n"
+            'pinned_resources = ["quizzes/old-quiz", "quizzes/other-quiz"]\n'
+        )
+
+        run_mv(repo / "quizzes/old-quiz", repo / "quizzes/new-quiz")
+
+        content = settings_path.read_text()
+        with settings_path.open("rb") as f:
+            data = tomllib.load(f)
+        assert data["pinned_resources"] == ["quizzes/new-quiz", "quizzes/other-quiz"]
+        assert "# keep this comment" in content
 
     def test_quiz_folder_rename(self, tmp_path: Path) -> None:
         repo = _make_repo(tmp_path, {

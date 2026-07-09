@@ -420,6 +420,53 @@ def compute_course_settings_updates(
     return updates or None
 
 
+def compute_pinned_resources_updates(
+    repo_root: Path,
+    path_map: dict[str, str],
+    src_rel: str,
+    dest_rel: str,
+) -> dict[str, str] | None:
+    """If pinned_resources entries point at (or under) the moved path, return
+    {old_entry_as_written: new_repo_relative_path}. None if no changes.
+
+    A stale pin would silently unpin the resource — the next update would then
+    re-upload it (for a quiz: delete and recreate its questions), which is the
+    exact thing the pin exists to prevent — so mv rewrites pin paths just like
+    it rewrites module_order and front_page/dashboard_image.
+
+    File pins resolve through path_map (which includes quiz/qbank inner-file
+    renames); folder pins resolve by prefix against the moved directory.
+    """
+    settings_path = repo_root / "course_settings" / "course_settings.toml"
+    if not settings_path.exists():
+        return None
+
+    with settings_path.open("rb") as f:
+        data = tomllib.load(f)
+
+    pinned = data.get("pinned_resources", [])
+    if not isinstance(pinned, list):
+        return None
+
+    updates: dict[str, str] = {}
+    for entry in pinned:
+        if not isinstance(entry, str):
+            continue
+        normalized = entry.strip().replace("\\", "/").rstrip("/")
+        if normalized in path_map:
+            new_value = path_map[normalized]
+        elif normalized == src_rel:
+            new_value = dest_rel
+        elif normalized.startswith(src_rel + "/"):
+            new_value = dest_rel + normalized[len(src_rel):]
+        else:
+            continue
+        if new_value != entry:
+            updates[entry] = new_value
+
+    return updates or None
+
+
 def compute_file_updates(
     repo_root: Path,
     path_map: dict[str, str],
@@ -471,6 +518,23 @@ def _set_toml_string_value(content: str, key: str, value: str) -> str:
     if count == 0:
         raise ValueError(f"Could not find top-level {key!r} assignment in course_settings.toml")
     return new_content
+
+
+def _replace_toml_quoted_string(content: str, old: str, new: str) -> str:
+    """Replace every quoted occurrence of `old` (either quote style) in raw
+    TOML text.
+
+    Same rationale as _set_toml_string_value: textual edit to preserve
+    comments and formatting. Used for pinned_resources entries, which live in
+    an array so there is no `key = "..."` line to anchor on. Matching the
+    fully quoted string keeps this from touching prose; the only other places
+    a repo-relative path appears quoted in course_settings.toml
+    (front_page/dashboard_image) would be rewritten to the same new value
+    anyway.
+    """
+    escaped_new = new.replace("\\", "\\\\").replace('"', '\\"')
+    content = content.replace(f'"{old}"', f'"{escaped_new}"')
+    return content.replace(f"'{old}'", f'"{escaped_new}"')
 
 
 def _move_one(src: Path, dest: Path, repo_root: Path, use_git: bool) -> None:
@@ -534,6 +598,7 @@ def _describe_changes(
     file_updates: dict[str, tuple[str, str]],
     module_order_updates: list[str] | None,
     course_settings_updates: dict[str, str] | None,
+    pinned_updates: dict[str, str] | None,
     noop: bool,
     verbose: bool,
 ) -> None:
@@ -577,6 +642,12 @@ def _describe_changes(
     if course_settings_updates:
         fields = ", ".join(sorted(course_settings_updates))
         parts.append(f"updated {fields} in course_settings.toml")
+    if pinned_updates:
+        noun = "entry" if len(pinned_updates) == 1 else "entries"
+        parts.append(
+            f"updated {len(pinned_updates)} pinned_resources {noun} "
+            f"in course_settings.toml"
+        )
 
     print(", ".join(parts) + ".")
 
@@ -617,6 +688,9 @@ def run_mv(src: Path, dest: Path, noop: bool = False, verbose: bool = False) -> 
 
     module_order_updates = compute_module_order_updates(repo_root, path_map)
     course_settings_updates = compute_course_settings_updates(repo_root, path_map)
+    pinned_updates = compute_pinned_resources_updates(
+        repo_root, path_map, src_rel, dest_rel
+    )
 
     inner_renames_paths: list[tuple[Path, Path]] = []
     if src.is_dir():
@@ -624,7 +698,8 @@ def run_mv(src: Path, dest: Path, noop: bool = False, verbose: bool = False) -> 
 
     _describe_changes(
         path_map, manifest_changed, file_updates,
-        module_order_updates, course_settings_updates, noop, verbose,
+        module_order_updates, course_settings_updates, pinned_updates,
+        noop, verbose,
     )
 
     if noop:
@@ -648,9 +723,11 @@ def run_mv(src: Path, dest: Path, noop: bool = False, verbose: bool = False) -> 
         with order_path.open("wb") as f:
             tomli_w.dump(data, f)
 
-    if course_settings_updates:
+    if course_settings_updates or pinned_updates:
         settings_path = repo_root / "course_settings" / "course_settings.toml"
         content = settings_path.read_text(encoding="utf-8")
-        for field, new_value in course_settings_updates.items():
+        for field, new_value in (course_settings_updates or {}).items():
             content = _set_toml_string_value(content, field, new_value)
+        for old_entry, new_value in (pinned_updates or {}).items():
+            content = _replace_toml_quoted_string(content, old_entry, new_value)
         settings_path.write_text(content, encoding="utf-8")
