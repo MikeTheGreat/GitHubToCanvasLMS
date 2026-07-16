@@ -1061,16 +1061,26 @@ def get_rubric_ids(course) -> dict[str, int]:
 
 def sync_rubrics(
     course, rubrics: list[dict[str, Any]]
-) -> tuple[dict[str, int], list[str]]:
+) -> tuple[dict[str, int], list[str], list[str], list[tuple[str, str]]]:
     """Create or update rubrics (matched by title).
 
-    Returns (id_mapping, created) where id_mapping is {title: canvas_id}
-    and created is a list of titles that were newly created (not updated).
+    Returns (id_mapping, created, updated, failed): id_mapping is
+    {title: canvas_id} covering every rubric Canvas lists for the course plus
+    any created here; created and updated are the titles created vs. updated
+    in place this call; failed is (title, error) pairs for rubrics whose API
+    call failed — a failure doesn't abort the remaining rubrics.
+
+    "Created" means Canvas didn't list the title at sync time. That's true
+    for a genuinely new rubric, but also for one that was soft-deleted on
+    Canvas (e.g. its last association was removed) — the create call then
+    restores the old rubric rather than making a duplicate.
     """
     existing = {r.title: r.id for r in course.get_rubrics()}
     if not rubrics:
-        return existing, []
+        return existing, [], [], []
     created: list[str] = []
+    updated: list[str] = []
+    failed: list[tuple[str, str]] = []
     for r in rubrics:
         title = r.get("title", "")
         criteria_dict = _build_criteria_dict(r.get("criteria", []))
@@ -1079,39 +1089,43 @@ def sync_rubrics(
             rubric_params["reusable"] = r["reusable"]
         if "read_only" in r:
             rubric_params["read_only"] = r["read_only"]
-        if title in existing:
-            flat = combine_kwargs(rubric=rubric_params)
-            course._requester.request(
-                "PUT",
-                f"courses/{course.id}/rubrics/{existing[title]}",
-                _kwargs=flat,
-            )
-        else:
-            result = course.create_rubric(
-                rubric=rubric_params,
-                rubric_association={
-                    "association_type": "Course",
-                    "association_id": course.id,
-                    "purpose": "grading",
-                },
-            )
-            if "rubric" in result:
-                new_id = result["rubric"].id
-                existing[title] = new_id
-                # Canvas may restore a soft-deleted rubric with stale
-                # attributes; follow up with a PUT to force them.
-                # NOTE: as of 2026-06, this does not fix read_only —
-                # Canvas still ignores the flag on re-created rubrics.
-                # See TODO.md for details.
-                if "read_only" in r or "reusable" in r:
-                    flat = combine_kwargs(rubric=rubric_params)
-                    course._requester.request(
-                        "PUT",
-                        f"courses/{course.id}/rubrics/{new_id}",
-                        _kwargs=flat,
-                    )
-            created.append(title)
-    return existing, created
+        try:
+            if title in existing:
+                flat = combine_kwargs(rubric=rubric_params)
+                course._requester.request(
+                    "PUT",
+                    f"courses/{course.id}/rubrics/{existing[title]}",
+                    _kwargs=flat,
+                )
+                updated.append(title)
+            else:
+                result = course.create_rubric(
+                    rubric=rubric_params,
+                    rubric_association={
+                        "association_type": "Course",
+                        "association_id": course.id,
+                        "purpose": "grading",
+                    },
+                )
+                if "rubric" in result:
+                    new_id = result["rubric"].id
+                    existing[title] = new_id
+                    # Canvas may restore a soft-deleted rubric with stale
+                    # attributes; follow up with a PUT to force them.
+                    # NOTE: as of 2026-06, this does not fix read_only —
+                    # Canvas still ignores the flag on re-created rubrics.
+                    # See TODO.md for details.
+                    if "read_only" in r or "reusable" in r:
+                        flat = combine_kwargs(rubric=rubric_params)
+                        course._requester.request(
+                            "PUT",
+                            f"courses/{course.id}/rubrics/{new_id}",
+                            _kwargs=flat,
+                        )
+                created.append(title)
+        except Exception as exc:
+            failed.append((title, str(exc)))
+    return existing, created, updated, failed
 
 
 def associate_rubric_with_assignment(

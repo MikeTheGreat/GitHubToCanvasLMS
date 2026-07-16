@@ -831,8 +831,17 @@ See the [Week 1 Assignment](../assignments/week1.md) and the
 
 Optional. Defines reusable grading rubrics for the course. Read during the same
 course-settings sync as `course_settings.toml`. Rubrics are matched **by title** —
-a rubric whose title already exists in Canvas is **updated in place**; missing
-rubrics are created.
+a rubric whose title already exists in Canvas is **updated in place** (reported as
+`Updated rubric: …`); missing rubrics are created (`Created (or restored) rubric: …`).
+
+Change detection is per rubric: when `rubrics.toml` changes, only the rubrics whose
+content actually changed are re-sent (each rubric's content hash is cached in
+`.canvas-manifest.toml`); use `--force-uploads` to re-send all of them. "Created
+(or restored)" means Canvas didn't list that title at sync time — either the rubric
+is genuinely new, or it was deleted on Canvas (deleting a rubric's last assignment
+association also deletes the rubric), in which case Canvas restores the old rubric
+rather than creating a duplicate. Note that a rubric deleted on Canvas but unchanged
+locally is only re-created when its content changes or with `--force-uploads`.
 
 ```toml
 # course_settings/rubrics.toml — array-of-tables, one [[rubrics]] block per rubric.

@@ -3642,13 +3642,15 @@ def test_sync_rubrics_creates_new() -> None:
     course.create_rubric.return_value = {"rubric": new_rubric}
 
     rubrics = [{"title": "Essay Rubric", "criteria": [{"description": "Thesis", "points": 5, "ratings": []}]}]
-    ids, created = sync_rubrics(course, rubrics)
+    ids, created, updated, failed = sync_rubrics(course, rubrics)
 
     course.create_rubric.assert_called_once()
     call_kwargs = course.create_rubric.call_args[1]
     assert call_kwargs["rubric"]["title"] == "Essay Rubric"
     assert ids == {"Essay Rubric": 42}
     assert created == ["Essay Rubric"]
+    assert updated == []
+    assert failed == []
 
 
 def test_sync_rubrics_updates_existing() -> None:
@@ -3660,7 +3662,7 @@ def test_sync_rubrics_updates_existing() -> None:
     course.get_rubrics.return_value = [existing]
 
     rubrics = [{"title": "Essay Rubric", "criteria": [{"description": "Thesis Updated", "points": 10, "ratings": []}]}]
-    ids, created = sync_rubrics(course, rubrics)
+    ids, created, updated, failed = sync_rubrics(course, rubrics)
 
     course.create_rubric.assert_not_called()
     course._requester.request.assert_called_once()
@@ -3669,6 +3671,8 @@ def test_sync_rubrics_updates_existing() -> None:
     assert "rubrics/42" in call_args[0][1]
     assert ids == {"Essay Rubric": 42}
     assert created == []
+    assert updated == ["Essay Rubric"]
+    assert failed == []
 
 
 def test_sync_rubrics_empty_returns_existing_ids() -> None:
@@ -3678,9 +3682,11 @@ def test_sync_rubrics_empty_returns_existing_ids() -> None:
     existing = _mock_rubric(42, "Essay Rubric")
     course.get_rubrics.return_value = [existing]
 
-    ids, created = sync_rubrics(course, [])
+    ids, created, updated, failed = sync_rubrics(course, [])
     assert ids == {"Essay Rubric": 42}
     assert created == []
+    assert updated == []
+    assert failed == []
     course.create_rubric.assert_not_called()
 
 
@@ -3714,6 +3720,181 @@ def test_sync_rubrics_omits_reusable_when_absent() -> None:
     call_kwargs = course.create_rubric.call_args[1]
     assert "reusable" not in call_kwargs["rubric"]
     assert "read_only" not in call_kwargs["rubric"]
+
+
+def test_sync_rubrics_partial_failure_continues() -> None:
+    """A rubric whose API call fails is reported in `failed` and doesn't
+    abort the remaining rubrics."""
+    from github_to_canvas.canvas_api import sync_rubrics
+
+    course = MagicMock()
+    course.get_rubrics.return_value = []
+    ok_rubric = _mock_rubric(43, "Good Rubric")
+
+    def _create(rubric, rubric_association):
+        if rubric["title"] == "Bad Rubric":
+            raise Exception("422 Unprocessable Entity")
+        return {"rubric": ok_rubric}
+
+    course.create_rubric.side_effect = _create
+
+    rubrics = [
+        {"title": "Bad Rubric", "criteria": []},
+        {"title": "Good Rubric", "criteria": []},
+    ]
+    ids, created, updated, failed = sync_rubrics(course, rubrics)
+
+    assert created == ["Good Rubric"]
+    assert updated == []
+    assert failed == [("Bad Rubric", "422 Unprocessable Entity")]
+    assert ids == {"Good Rubric": 43}
+
+
+def test_rubric_hashing_skips_unchanged_rubrics(
+    mock_course, mocker, tmp_path, capsys
+) -> None:
+    """When rubrics.toml is stale, only rubrics whose content changed are
+    re-sent; unchanged ones are skipped via the manifest's rubric_hashes."""
+    manifest: dict = {}
+    mocker.patch("github_to_canvas.manifest.load", return_value=manifest)
+    mocker.patch("github_to_canvas.manifest.flush")
+    root = tmp_path / "course"
+    cs_dir = root / "course_settings"
+    cs_dir.mkdir(parents=True)
+    rubrics_toml = cs_dir / "rubrics.toml"
+
+    def _write_rubrics(points_b: float) -> None:
+        rubrics_toml.write_text(
+            '[[rubrics]]\n'
+            'title = "Rubric A"\n'
+            '[[rubrics.criteria]]\n'
+            'description = "Correctness"\n'
+            'points = 10.0\n'
+            '\n'
+            '[[rubrics]]\n'
+            'title = "Rubric B"\n'
+            '[[rubrics.criteria]]\n'
+            'description = "Style"\n'
+            f'points = {points_b}\n'
+        )
+
+    _write_rubrics(5.0)
+    rubric_a = _mock_rubric(41, "Rubric A")
+    rubric_b = _mock_rubric(42, "Rubric B")
+    mock_course.get_rubrics.return_value = []
+    mock_course.create_rubric.side_effect = [
+        {"rubric": rubric_a},
+        {"rubric": rubric_b},
+    ]
+
+    run_sync(_config(), root)
+
+    entry = manifest["course_settings/rubrics.toml"]
+    assert set(entry["rubric_hashes"]) == {"Rubric A", "Rubric B"}
+    out = capsys.readouterr().out
+    assert "Created (or restored) rubric: Rubric A" in out
+    assert "Created (or restored) rubric: Rubric B" in out
+
+    # Second run: only Rubric B's content changes.
+    _write_rubrics(7.0)
+    future = os.stat(rubrics_toml).st_mtime + 60
+    os.utime(rubrics_toml, (future, future))
+    mock_course.get_rubrics.return_value = [rubric_a, rubric_b]
+    mock_course.create_rubric.reset_mock(side_effect=True)
+    mock_course._requester.request.reset_mock()
+
+    run_sync(_config(), root)
+
+    mock_course.create_rubric.assert_not_called()
+    put_calls = [
+        c for c in mock_course._requester.request.call_args_list
+        if c[0][0] == "PUT" and "rubrics/" in c[0][1]
+    ]
+    assert len(put_calls) == 1
+    assert "rubrics/42" in put_calls[0][0][1]
+    out = capsys.readouterr().out
+    assert "Updated rubric: Rubric B" in out
+    assert "Rubric A" not in out
+
+
+def test_rubric_removed_from_file_drops_out_of_hash_cache(
+    mock_course, mocker, tmp_path
+) -> None:
+    """Deleting a [[rubrics]] block removes its cached hash so the manifest
+    doesn't grow stale entries (the Canvas rubric itself is left alone)."""
+    manifest: dict = {}
+    mocker.patch("github_to_canvas.manifest.load", return_value=manifest)
+    mocker.patch("github_to_canvas.manifest.flush")
+    root = tmp_path / "course"
+    cs_dir = root / "course_settings"
+    cs_dir.mkdir(parents=True)
+    rubrics_toml = cs_dir / "rubrics.toml"
+    rubrics_toml.write_text(
+        '[[rubrics]]\ntitle = "Keep"\n\n[[rubrics]]\ntitle = "Drop"\n'
+    )
+    keep, drop = _mock_rubric(1, "Keep"), _mock_rubric(2, "Drop")
+    mock_course.get_rubrics.return_value = []
+    mock_course.create_rubric.side_effect = [{"rubric": keep}, {"rubric": drop}]
+
+    run_sync(_config(), root)
+
+    rubrics_toml.write_text('[[rubrics]]\ntitle = "Keep"\n')
+    future = os.stat(rubrics_toml).st_mtime + 60
+    os.utime(rubrics_toml, (future, future))
+    mock_course.get_rubrics.return_value = [keep, drop]
+
+    run_sync(_config(), root)
+
+    entry = manifest["course_settings/rubrics.toml"]
+    assert set(entry["rubric_hashes"]) == {"Keep"}
+
+
+def test_failed_rubric_keeps_old_hash_so_only_it_retries(
+    mock_course, mocker, tmp_path
+) -> None:
+    """A per-rubric failure leaves the entry unstamped and only the failed
+    rubric's hash un-updated, so the next run retries exactly that rubric."""
+    manifest: dict = {}
+    mocker.patch("github_to_canvas.manifest.load", return_value=manifest)
+    mocker.patch("github_to_canvas.manifest.flush")
+    root = tmp_path / "course"
+    cs_dir = root / "course_settings"
+    cs_dir.mkdir(parents=True)
+    (cs_dir / "rubrics.toml").write_text(
+        '[[rubrics]]\ntitle = "Good"\n\n[[rubrics]]\ntitle = "Bad"\n'
+    )
+    good = _mock_rubric(1, "Good")
+    mock_course.get_rubrics.return_value = []
+
+    def _create(rubric, rubric_association):
+        if rubric["title"] == "Bad":
+            raise Exception("422")
+        return {"rubric": good}
+
+    mock_course.create_rubric.side_effect = _create
+
+    run_sync(_config(), root)
+
+    entry = manifest["course_settings/rubrics.toml"]
+    assert "last_synced" not in entry
+    assert set(entry["rubric_hashes"]) == {"Good"}
+
+    # Next run (entry unstamped → stale): only "Bad" is retried.
+    mock_course.get_rubrics.return_value = [good]
+    mock_course.create_rubric.reset_mock(side_effect=True)
+    mock_course.create_rubric.return_value = {"rubric": _mock_rubric(2, "Bad")}
+    mock_course._requester.request.reset_mock()
+
+    run_sync(_config(), root)
+
+    mock_course.create_rubric.assert_called_once()
+    assert mock_course.create_rubric.call_args[1]["rubric"]["title"] == "Bad"
+    put_calls = [
+        c for c in mock_course._requester.request.call_args_list
+        if c[0][0] == "PUT" and "rubrics/" in c[0][1]
+    ]
+    assert put_calls == []
+    assert "last_synced" in manifest["course_settings/rubrics.toml"]
 
 
 def test_failed_rubric_sync_is_retried_next_run(mock_course, mocker, tmp_path) -> None:

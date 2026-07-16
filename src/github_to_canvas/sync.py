@@ -1013,7 +1013,9 @@ def sync_course_settings(
     Sections of the settings file are change-detected individually via hashes
     cached in the manifest entry's ``section_hashes`` sub-table, so editing
     one section (or [course_flags], or due_dates) re-runs only the affected
-    actions. If ``settings`` is provided (pre-loaded), the file is not re-read.
+    actions. Rubrics in rubrics.toml are likewise change-detected per rubric
+    via the ``rubric_hashes`` sub-table (keyed by title). If ``settings`` is
+    provided (pre-loaded), the file is not re-read.
 
     Returns ({rubric_title: canvas_id}, changed_sections, deferred_ag_rules):
     changed_sections is the set of section names actually (re)applied this run
@@ -1229,29 +1231,73 @@ def sync_course_settings(
             mark_synced=not section_failures,
         )
 
-    # §15: rubrics (tracked independently from course_settings.toml)
+    # §15: rubrics (tracked independently from course_settings.toml).
+    # Each rubric's canonical-JSON hash is cached in the manifest entry's
+    # rubric_hashes sub-table, so when the file's mtime is stale only rubrics
+    # whose content actually changed are re-sent.
     rubric_ids: dict[str, int] = {}
     if rubrics_stale:
-        print("Syncing rubrics...")
         with rubrics_path.open("rb") as fh:
             rubrics_data = tomllib.load(fh)
         rubrics = rubrics_data.get("rubrics", [])
+        entry = manifest.get(rubrics_key) or {}
+        recorded_rubric_hashes = entry.get("rubric_hashes")
+        current_rubric_hashes = {
+            r.get("title", ""): _section_hash(r) for r in rubrics
+        }
+        if force_uploads or recorded_rubric_hashes is None:
+            stale_rubrics = list(rubrics)
+        else:
+            stale_rubrics = [
+                r
+                for r in rubrics
+                if recorded_rubric_hashes.get(r.get("title", ""))
+                != current_rubric_hashes[r.get("title", "")]
+            ]
+        if stale_rubrics:
+            print("Syncing rubrics...")
+        elif verbose and rubrics:
+            print(f"Skipping (no rubric changed): {rubrics_key}")
+        if verbose:
+            stale_titles = {r.get("title", "") for r in stale_rubrics}
+            for t in sorted(set(current_rubric_hashes) - stale_titles):
+                print(f"  Skipping rubric (unchanged): {t}")
+        # Titles removed from the file drop out of the cache; successes below
+        # overwrite their old hash, failures keep it so the next run retries
+        # exactly the failed rubrics.
+        new_rubric_hashes = {
+            t: h
+            for t, h in (recorded_rubric_hashes or {}).items()
+            if t in current_rubric_hashes
+        }
         rubrics_failed = False
-        if rubrics:
+        if stale_rubrics:
             try:
-                rubric_ids, created = capi.sync_rubrics(course, rubrics)
+                rubric_ids, created, updated, failed = capi.sync_rubrics(
+                    course, stale_rubrics
+                )
+            except Exception as exc:
+                print(f"  WARNING: rubrics sync failed: {exc}")
+                rubrics_failed = True
+            else:
+                for t in updated:
+                    print(f"  Updated rubric: {t}")
+                for t in created:
+                    print(f"  Created (or restored) rubric: {t}")
                 if created:
-                    for t in created:
-                        print(f"  Created rubric: {t}")
                     print(
                         "  WARNING: Re-run with --force-uploads to re-create rubric "
                         "associations on assignments that reference these rubrics."
                     )
-            except Exception as exc:
-                print(f"  WARNING: rubrics sync failed: {exc}")
-                rubrics_failed = True
+                for t, err in failed:
+                    print(f"  WARNING: rubric '{t}' sync failed: {err}")
+                    rubrics_failed = True
+                for t in created + updated:
+                    if t in current_rubric_hashes:
+                        new_rubric_hashes[t] = current_rubric_hashes[t]
         manifest_lib.record(
             manifest, manifest_path, rubrics_key, 0, "rubrics",
+            extra={"rubric_hashes": new_rubric_hashes},
             mark_synced=not rubrics_failed,
         )
     if not rubric_ids:
