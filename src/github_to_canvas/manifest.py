@@ -96,21 +96,26 @@ def load(path: Path) -> ManifestDict:
         return dict(tomllib.load(f))
 
 
-def flush(path: Path, manifest: ManifestDict) -> None:
+def flush(path: Path | None, manifest: ManifestDict) -> None:
+    """Write the manifest to disk. path=None means in-memory only (used by
+    `update --check-all`, which must never touch .canvas-manifest.toml)."""
+    if path is None:
+        return
     with open(path, "wb") as f:
         tomli_w.dump(manifest, f)
 
 
 def record(
     manifest: ManifestDict,
-    manifest_path: Path,
+    manifest_path: Path | None,
     local_path: str,
     canvas_id: int,
     canvas_type: str,
     extra: dict[str, Any] | None = None,
     mark_synced: bool = True,
 ) -> None:
-    """Update an entry and immediately flush to disk.
+    """Update an entry and immediately flush to disk (unless manifest_path is
+    None — see flush()).
 
     mark_synced=False records the Canvas object (so a later run updates it
     instead of creating a duplicate) but omits ``last_synced``, leaving the

@@ -90,6 +90,39 @@ def _is_case_only_rename(src: Path, dest: Path) -> bool:
         return dest.exists() and src.stat().st_ino == dest.stat().st_ino
 
 
+def has_trailing_slash(dest: Path | str) -> bool:
+    """True if DEST was written with a trailing separator (e.g. "summer/").
+
+    Path() discards the separator, so this must be checked against the raw
+    string the user typed, before any Path conversion.
+    """
+    return isinstance(dest, str) and dest.endswith(("/", os.sep))
+
+
+def resolve_dest(src: Path, dest: Path, *, must_be_dir: bool = False) -> Path:
+    """Expand a directory destination into a full destination path.
+
+    Mirrors normal `mv`: when DEST is an existing directory, SRC is moved
+    into it keeping its own name. A case-only rename is left alone, since
+    on a case-insensitive filesystem the destination "already exists" as
+    the source itself.
+
+    `must_be_dir` (set when DEST had a trailing slash) rejects a
+    non-directory destination rather than silently renaming SRC to it,
+    again matching normal `mv`.
+    """
+    if must_be_dir and not dest.is_dir():
+        what = "is a file, not a directory" if dest.exists() else "does not exist"
+        raise ValueError(
+            f"Destination directory {what}: {dest}/\n"
+            f"The trailing '/' means DEST must be an existing directory.\n"
+            f"Create it first, or drop the trailing '/' to rename {src.name} to {dest.name}."
+        )
+    if dest.is_dir() and not _is_case_only_rename(src, dest):
+        return dest / src.name
+    return dest
+
+
 def validate_move(src: Path, dest: Path, repo_root: Path) -> None:
     """Validate the move. Raises ValueError on failure."""
     if not src.exists():
@@ -652,10 +685,16 @@ def _describe_changes(
     print(", ".join(parts) + ".")
 
 
-def run_mv(src: Path, dest: Path, noop: bool = False, verbose: bool = False) -> None:
-    """Move/rename a file or directory, updating manifest and all references."""
+def run_mv(
+    src: Path, dest: Path | str, noop: bool = False, verbose: bool = False
+) -> None:
+    """Move/rename a file or directory, updating manifest and all references.
+
+    DEST may be a str so a trailing separator survives to `resolve_dest`.
+    """
+    must_be_dir = has_trailing_slash(dest)
     src = src.absolute()
-    dest = dest.absolute()
+    dest = resolve_dest(src, Path(dest).absolute(), must_be_dir=must_be_dir)
 
     repo_root = find_repo_root(src)
     if repo_root is None:

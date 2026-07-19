@@ -218,6 +218,51 @@ Paths passed to `-t` and `-s` are resolved as follows:
 
 Paths that resolve outside the repo root print a warning and are skipped.
 
+### `--check-all` (offline dry run of a fresh full sync)
+
+Runs the **entire** `run_sync` pipeline as a dry run simulating a first sync
+to a brand-new empty Canvas course. Nothing is uploaded, nothing is written,
+Canvas is never contacted (no API token required — `config.load()` takes
+`require_token=False`). Exits nonzero if any errors/warnings were collected,
+so it can gate a deploy script. Rejected in combination with `-t`/`-s`
+(check-all always checks everything) and with `--force-uploads`/
+`--force-overwrite` (both meaningless: every file is already treated as new
+and Canvas timestamps are never consulted).
+
+Mechanism (see `run_sync(check_all=True)` in sync.py and `dryrun.py`):
+
+- **API indirection**: all Canvas traffic in the sync pipeline goes through
+  `SyncContext.api` (default: the real `canvas_api` module). Functions outside
+  the ctx graph (`sync_course_settings`, `_make_stub_creator`,
+  `_canvas_is_newer`, `_reorder_modules`) take an `api=capi` parameter.
+  Invariant: **no direct canvasapi calls in sync.py's run_sync graph** — the
+  one historical exception (syllabus `course.update(...)`) now goes through
+  `capi.update_syllabus_body`. (`course.get_quiz` in `_sync_quiz` is the
+  remaining pass-through; `DryRunCourse` implements it.)
+- **`dryrun.DryRunCanvas`** mirrors the canvas_api function signatures and
+  return shapes with fake ids. It is lightly stateful — assignment groups and
+  rubrics "created" by the settings phase are returned by the corresponding
+  `get_*_ids` calls — so name resolution (rubric references, assignment-group
+  names) behaves exactly like a real first sync. Its `add_module_item`
+  replicates the real function's *local* validation (manifest lookup,
+  supported-type check) so missing module items still warn. When the pipeline
+  grows a new canvas_api call, add its dry-run twin here; test_check_all's
+  full-fixture run catches a missing one as an AttributeError.
+- **Manifest**: the on-disk manifest is ignored — the run starts from an empty
+  in-memory dict, so every file takes the full first-sync path. The in-memory
+  manifest is still populated with fake entries during the run (link
+  rewriting, `annotatable_attachment` resolution, and module items read it),
+  but `manifest_path=None` makes `manifest_lib.flush()`/`record()` skip the
+  disk write, so `.canvas-manifest.toml` is byte-identical afterwards.
+- **Output**: a `CHECK MODE` banner, then the normal pipeline output with
+  action verbs softened via `ctx.check_only` ("Would upload:" instead of
+  "Uploading:", `Link:` lines suppressed — the fake URLs mean nothing).
+
+What it cannot validate: anything only the Canvas server decides (date
+rejections outside the term, quizzes needing a manual "Save It Now",
+publish-state rejections, permissions). `sync_tab_configuration` is a no-op in
+dry-run — tab ids/labels can only be checked against a live course.
+
 ## `prune` Subcommand
 
 ```text
@@ -527,6 +572,26 @@ internal references so nothing breaks on the next sync.
 ```text
 github-to-canvas mv [--noop/-n] [--verbose/-v] SRC DEST
 ```
+
+`resolve_dest()` runs first, before validation and before any path map is
+built: when DEST is an existing directory, it is expanded to `DEST/SRC.name`
+so the command matches normal `mv` (`gg mv pages/week-1.md pages/summer/`
+lands at `pages/summer/week-1.md` instead of erroring with "Destination
+already exists"). Case-only renames are exempt — on a case-insensitive
+filesystem `dest.is_dir()` is true of the source itself, so expanding would
+nest a directory inside its own rename. Everything downstream (`validate_move`,
+`build_path_map`, link rewriting) sees the fully expanded destination, so a
+real collision (`DEST/SRC.name` already exists) still fails the normal
+"Destination already exists" check.
+
+A trailing separator on DEST (`pages/summer/`) means "DEST must be an existing
+directory", also matching normal `mv`: `resolve_dest(..., must_be_dir=True)`
+rejects a missing or non-directory destination instead of silently renaming SRC
+to it. Since `Path()` discards the separator, the CLI declares DEST as
+`click.Path(path_type=str)` and `run_mv` accepts `Path | str`, calling
+`has_trailing_slash()` on the raw value *before* converting to `Path`. Callers
+passing a `Path` (all internal callers and most tests) can never trip the
+check, which is correct — only typed input carries the intent.
 
 **What it updates:**
 

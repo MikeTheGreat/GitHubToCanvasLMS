@@ -14,12 +14,14 @@ class Config:
     api_token: str
 
 
-def load(path: Path) -> Config:
+def load(path: Path, require_token: bool = True) -> Config:
+    """require_token=False is for commands that never contact Canvas
+    (e.g. `update --check-all`) but still need base_url/course_id."""
     with open(path, "rb") as f:
         data = tomllib.load(f)
 
     api_token = os.environ.get("CANVAS_API_TOKEN") or data.get("auth", {}).get("api_token", "")
-    if not api_token:
+    if not api_token and require_token:
         raise ValueError("Canvas API token not set. Use CANVAS_API_TOKEN env var or canvas.toml [auth] api_token.")
 
     return Config(

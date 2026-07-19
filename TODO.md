@@ -1,15 +1,5 @@
 # Possible Future Features
 
-## `update --check-all`: offline dry-run of a fresh full sync
-
-Validate the whole repo as if uploading it for the first time to a brand-new
-empty Canvas course (broken links, missing rubrics, malformed frontmatter,
-title collisions, due_dates coverage, …) without contacting Canvas or writing
-anything (no Canvas changes, no `.canvas-manifest.toml` changes). Use case:
-develop a course over a break, check it periodically, deploy all at once when
-the quarter starts. Full implementation plan: **[DESIGN-check-all.md](DESIGN-check-all.md)**
-(includes a latent `sync_syllabus` fresh-course `KeyError` bug to fix en route).
-
 ## Course flags: follow-on features beyond the shipped v1
 
 Course flags themselves, `published_if` (frontmatter), and due_dates

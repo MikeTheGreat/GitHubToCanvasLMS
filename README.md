@@ -30,6 +30,7 @@ Write your course content as Markdown files in a Git repository. Run this tool t
   - [Canvas overwrite protection](#canvas-overwrite-protection)
     - [Full sync (default)](#full-sync-default)
     - [Typical full-sync workflow](#typical-full-sync-workflow)
+  - [Checking a course before deploying (`--check-all`)](#checking-a-course-before-deploying---check-all)
   - [Selective sync](#selective-sync)
     - [`-t` — recursive (BFS)](#-t--recursive-bfs)
     - [`-s` — single target (no traversal)](#-s--single-target-no-traversal)
@@ -238,6 +239,10 @@ Options:
                                   it transitively references (BFS). Skips the full sync.
   -s, --single-target FILE        Comma-separated files to sync without traversing references.
                                   Runs after -t. Skips the full sync.
+  --check-all                     Dry run: validate the whole repo as if uploading it for the
+                                  first time to a brand-new empty Canvas course. Contacts
+                                  Canvas for nothing and writes nothing. Exits nonzero if any
+                                  problems are found.
   --help                          Show this message and exit.
 ```
 **Warning**: In order to get changes to the left-hand course navigation column you may need to go
@@ -312,6 +317,47 @@ git add .canvas-manifest.toml
 git commit -m "sync: update Canvas IDs"
 git push
 ```
+
+---
+
+## Checking a course before deploying (`--check-all`)
+
+`--check-all` runs the entire update pipeline as a **dry run simulating a
+first sync to a brand-new, completely empty Canvas course** — every file is
+converted, every link resolved, every rubric / assignment-group / due-date
+reference checked — but:
+
+- **Canvas is never contacted** (works offline; no API token needed), and
+- **nothing is written** (no Canvas changes, no `.canvas-manifest.toml`
+  changes — the existing manifest is ignored so *everything* gets checked,
+  not just files changed since the last sync).
+
+```bash
+github-to-canvas update ./my-course --check-all
+```
+
+Typical use: develop a course repo over a break, run `--check-all`
+periodically to catch problems, then deploy the whole course with a plain
+`update` when the quarter starts. It exits nonzero when problems are found,
+so it also works in scripts and pre-deploy hooks.
+
+Problems it catches include: broken local links/images, rubric names not
+defined in `rubrics.toml`, unknown assignment groups, malformed YAML
+frontmatter, missing snippets, course-flag/`published_if` errors, `<h1>`
+headings, title collisions, quiz/question parse errors, module items pointing
+at missing files, `due_dates` entries matching nothing, missing
+`annotatable_attachment` files, unused course flags, and `pinned_resources`
+entries matching nothing on disk.
+
+What it **cannot** catch: anything only the Canvas server decides — e.g. due
+dates rejected for falling outside the term, quizzes needing a manual "Save
+It Now", or API permission errors. Those can still surface on the real
+deploy.
+
+`--check-all` always checks the whole repo, so it cannot be combined with
+`-t`/`-s`; `--force-uploads`/`--force-overwrite` are meaningless here (every
+file is already treated as new, and Canvas timestamps are never consulted)
+and are rejected too.
 
 ---
 
@@ -443,6 +489,12 @@ Options:
   --help         Show this message and exit.
 ```
 
+As with the normal `mv` command, if DEST is an existing directory then SRC is
+moved *into* it and keeps its own name; otherwise DEST is the new full path.
+Writing DEST with a trailing `/` says "this must be an existing directory" —
+`gg mv pages/a.md pages/typo/` is an error rather than a silent rename of
+`a.md` to a file called `typo`.
+
 `mv` updates:
 
 - The file/directory on disk (via `git mv` when inside a git repo and the
@@ -464,6 +516,10 @@ github-to-canvas mv assets/Lecture-Related/Unit-01 assets/lecture-related/unit-0
 
 # Rename a quiz folder (also renames the inner .md to match)
 github-to-canvas mv quizzes/old-quiz quizzes/new-quiz
+
+# Move a file into an existing directory, keeping its name
+# (like normal mv — this lands at pages/summer/week-1.md)
+github-to-canvas mv pages/week-1.md pages/summer/
 
 # Preview what would change without doing anything
 github-to-canvas mv --noop pages/old.md pages/new.md

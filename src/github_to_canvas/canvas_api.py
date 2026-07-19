@@ -484,6 +484,11 @@ def get_syllabus_body(course) -> str:
     return response.json().get("syllabus_body", "") or ""
 
 
+def update_syllabus_body(course, html: str) -> None:
+    """Set the course syllabus_body HTML."""
+    course.update(course={"syllabus_body": html})
+
+
 def get_canvas_updated_at(course, canvas_type: str, identifier) -> datetime | None:
     """Return the updated_at datetime for an existing Canvas item, or None if unavailable.
 

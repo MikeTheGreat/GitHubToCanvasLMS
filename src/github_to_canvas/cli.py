@@ -156,7 +156,7 @@ def install_completion(shell: str | None) -> None:
 
 @main.command(name="mv", no_args_is_help=True)
 @click.argument("src", type=click.Path(path_type=Path))
-@click.argument("dest", type=click.Path(path_type=Path))
+@click.argument("dest", type=click.Path(path_type=str))
 @click.option(
     "--noop",
     "-n",
@@ -171,12 +171,15 @@ def install_completion(shell: str | None) -> None:
     default=False,
     help="Print each individual change (moved file, updated link, etc.).",
 )
-def mv_cmd(src: Path, dest: Path, noop: bool, verbose: bool) -> None:
+def mv_cmd(src: Path, dest: str, noop: bool, verbose: bool) -> None:
     """Move or rename a file/directory, updating the manifest and all references.
 
-    SRC is the file or directory to move. DEST is the new path.
-    Both must be within the same course repo and the same content-type
-    directory (e.g. both under pages/, or both under assets/).
+    SRC is the file or directory to move. DEST is the new path, or an
+    existing directory to move SRC into (keeping its name), just like the
+    normal mv command. A trailing slash on DEST requires it to be an
+    existing directory. Both must be within the same course repo and the
+    same content-type directory (e.g. both under pages/, or both under
+    assets/).
 
     Updates .canvas-manifest.toml, all Markdown cross-references,
     snippet references, and module_order.toml as needed.
@@ -554,6 +557,19 @@ def _format_concise_date(iso_date: str) -> str:
     default=False,
     help="Print messages for items that are skipped (up-to-date or newer on Canvas).",
 )
+@click.option(
+    "--check-all",
+    "check_all",
+    is_flag=True,
+    default=False,
+    help=(
+        "Validate the whole repo as if uploading it for the first time to a "
+        "brand-new empty Canvas course (broken links, missing rubrics, malformed "
+        "frontmatter, ...). Contacts Canvas for nothing and writes nothing "
+        "(no Canvas changes, no .canvas-manifest.toml changes); no API token "
+        "needed. Exits nonzero if any problems are found."
+    ),
+)
 @_handle_cli_errors
 def update(
     repo: Path,
@@ -563,15 +579,30 @@ def update(
     target_recursively: str | None,
     single_target: str | None,
     verbose: bool,
+    check_all: bool,
 ) -> None:
     """Sync a Markdown course repo to Canvas LMS."""
     _ensure_pandoc()
+    if check_all and (target_recursively or single_target):
+        die("--check-all always checks the whole repo; it cannot be combined with -t/--target-recursively or -s/--single-target.")
+    if check_all and (force_uploads or force_overwrite):
+        die("--check-all already treats every file as new and never consults Canvas; drop --force-uploads/--force-overwrite.")
     if config is None:
         config = repo / "course_settings" / "canvas.toml"
-    cfg = load_config(config)
+    cfg = load_config(config, require_token=not check_all)
 
     click.echo(f"Repo:      {repo.resolve()}")
     click.echo(f"Course ID: {cfg.course_id}  ({cfg.base_url})")
+
+    if check_all:
+        had_errors = run_sync(cfg, repo, verbose=verbose, check_all=True)
+        if had_errors:
+            click.secho(
+                "Check complete; please fix the problems listed above.", fg="yellow"
+            )
+            sys.exit(1)
+        click.secho("Check successful — no problems found (nothing uploaded)", fg="green")
+        return
 
     course = get_course(cfg)
     click.echo(f"Course:    {course.name}")

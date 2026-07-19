@@ -75,6 +75,7 @@ github-to-canvas/      ← this tool repo
 │       ├── config.py        # config file handling (API token, base URL, course ID)
 │       ├── quiz.py          # quiz/question file parsing
 │       ├── sync.py          # main sync pipeline (update subcommand)
+│       ├── dryrun.py        # in-memory canvas_api stand-in for update --check-all
 │       ├── publish.py       # publish subcommand: stage content → MkDocs site
 │       ├── mv.py            # mv subcommand: rename/move content + manifest
 │       ├── orphans.py       # find-orphans / prune support
@@ -104,6 +105,7 @@ github-to-canvas/      ← this tool repo
     ├── test_mv.py           # unit + integration tests: mv subcommand
     ├── test_orphans.py      # unit + integration tests: find-orphans / prune
     ├── test_sync.py         # integration tests: full pipeline with mocked canvasapi
+    ├── test_check_all.py    # integration tests: update --check-all offline dry run
     ├── test_imscc_import.py # integration tests: full import pipeline
     ├── test_imscc_convert.py # unit tests: IMSCC XML parsing, link rewriting, slugification
     ├── test_imscc_link_rewrite.py # unit tests: IMSCC-specific link rewriting

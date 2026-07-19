@@ -10,12 +10,14 @@ import tomli_w
 
 from github_to_canvas.mv import (
     build_path_map,
+    has_trailing_slash,
     compute_course_settings_updates,
     compute_file_updates,
     compute_manifest_updates,
     compute_module_order_updates,
     compute_pinned_resources_updates,
     find_repo_root,
+    resolve_dest,
     run_mv,
     transform_links,
     validate_move,
@@ -66,6 +68,72 @@ class TestFindRepoRoot:
 
     def test_returns_none_when_no_repo(self, tmp_path: Path) -> None:
         assert find_repo_root(tmp_path) is None
+
+
+# ---------------------------------------------------------------------------
+# resolve_dest
+# ---------------------------------------------------------------------------
+
+
+class TestResolveDest:
+    def test_expands_existing_directory_dest(self, tmp_path: Path) -> None:
+        repo = _make_repo(tmp_path, {"pages/a.md": "# A"})
+        (repo / "pages" / "sub").mkdir()
+        assert resolve_dest(repo / "pages/a.md", repo / "pages/sub") == (
+            repo / "pages" / "sub" / "a.md"
+        )
+
+    def test_expands_for_directory_source(self, tmp_path: Path) -> None:
+        repo = _make_repo(tmp_path, {"assets/unit-01/img.png": "PNG"})
+        (repo / "assets" / "units").mkdir()
+        assert resolve_dest(repo / "assets/unit-01", repo / "assets/units") == (
+            repo / "assets" / "units" / "unit-01"
+        )
+
+    def test_leaves_nonexistent_dest_alone(self, tmp_path: Path) -> None:
+        repo = _make_repo(tmp_path, {"pages/a.md": "# A"})
+        assert resolve_dest(repo / "pages/a.md", repo / "pages/b.md") == (
+            repo / "pages" / "b.md"
+        )
+
+    def test_leaves_existing_file_dest_alone(self, tmp_path: Path) -> None:
+        repo = _make_repo(tmp_path, {"pages/a.md": "# A", "pages/b.md": "# B"})
+        assert resolve_dest(repo / "pages/a.md", repo / "pages/b.md") == (
+            repo / "pages" / "b.md"
+        )
+
+    def test_must_be_dir_rejects_missing_dest(self, tmp_path: Path) -> None:
+        repo = _make_repo(tmp_path, {"pages/a.md": "# A"})
+        with pytest.raises(ValueError, match="Destination directory does not exist"):
+            resolve_dest(
+                repo / "pages/a.md", repo / "pages/nope", must_be_dir=True
+            )
+
+    def test_must_be_dir_rejects_file_dest(self, tmp_path: Path) -> None:
+        repo = _make_repo(tmp_path, {"pages/a.md": "# A", "pages/b.md": "# B"})
+        with pytest.raises(
+            ValueError, match="Destination directory is a file, not a directory"
+        ):
+            resolve_dest(repo / "pages/a.md", repo / "pages/b.md", must_be_dir=True)
+
+    def test_must_be_dir_accepts_existing_dir(self, tmp_path: Path) -> None:
+        repo = _make_repo(tmp_path, {"pages/a.md": "# A"})
+        (repo / "pages" / "sub").mkdir()
+        assert resolve_dest(
+            repo / "pages/a.md", repo / "pages/sub", must_be_dir=True
+        ) == (repo / "pages" / "sub" / "a.md")
+
+
+class TestHasTrailingSlash:
+    def test_detects_trailing_slash_on_str(self) -> None:
+        assert has_trailing_slash("pages/summer/")
+
+    def test_false_without_trailing_slash(self) -> None:
+        assert not has_trailing_slash("pages/summer")
+
+    def test_false_for_path_objects(self) -> None:
+        # Path() discards the separator, so a Path can never carry the intent.
+        assert not has_trailing_slash(Path("pages/summer"))
 
 
 # ---------------------------------------------------------------------------
@@ -606,6 +674,116 @@ class TestRunMv:
 
         content = (repo / "pages/sub/moveme.md").read_text()
         assert "../../assignments/hw1.md" in content
+
+    def test_move_into_existing_directory_keeps_name(self, tmp_path: Path) -> None:
+        repo = _make_repo(tmp_path, {
+            "pages/worksheets/week-1.md": "See [hw](../../assignments/hw1.md)",
+            "assignments/hw1.md": "# HW1",
+            "modules/unit-06.md": "- [Week 1](../pages/worksheets/week-1.md)\n",
+        })
+        (repo / "pages" / "worksheets" / "summer").mkdir()
+        _make_manifest(repo, {
+            "pages/worksheets/week-1.md": {
+                "canvas_id": 100,
+                "canvas_type": "page",
+                "last_synced": "2025-01-01T00:00:00+00:00",
+            },
+        })
+
+        run_mv(repo / "pages/worksheets/week-1.md", repo / "pages/worksheets/summer")
+
+        assert not (repo / "pages/worksheets/week-1.md").exists()
+        moved = repo / "pages/worksheets/summer/week-1.md"
+        assert moved.exists()
+
+        with (repo / ".canvas-manifest.toml").open("rb") as f:
+            manifest = tomllib.load(f)
+        assert "pages/worksheets/summer/week-1.md" in manifest
+        assert manifest["pages/worksheets/summer/week-1.md"]["canvas_id"] == 100
+
+        assert "../../../assignments/hw1.md" in moved.read_text()
+        assert "../pages/worksheets/summer/week-1.md" in (
+            repo / "modules/unit-06.md"
+        ).read_text()
+
+    def test_move_directory_into_existing_directory(self, tmp_path: Path) -> None:
+        repo = _make_repo(tmp_path, {
+            "assets/unit-01/img.png": "PNG",
+            "pages/page1.md": "![fig](../assets/unit-01/img.png)",
+        })
+        (repo / "assets" / "units").mkdir()
+
+        run_mv(repo / "assets/unit-01", repo / "assets/units")
+
+        assert (repo / "assets/units/unit-01/img.png").exists()
+        assert "../assets/units/unit-01/img.png" in (
+            repo / "pages/page1.md"
+        ).read_text()
+
+    def test_trailing_slash_dest_moves_into_directory(self, tmp_path: Path) -> None:
+        repo = _make_repo(tmp_path, {"pages/a.md": "# A"})
+        (repo / "pages" / "sub").mkdir()
+
+        run_mv(repo / "pages/a.md", f"{repo}/pages/sub/")
+
+        assert (repo / "pages/sub/a.md").exists()
+
+    def test_trailing_slash_dest_rejects_missing_directory(
+        self, tmp_path: Path
+    ) -> None:
+        repo = _make_repo(tmp_path, {"pages/a.md": "# A"})
+
+        with pytest.raises(ValueError, match="Destination directory does not exist"):
+            run_mv(repo / "pages/a.md", f"{repo}/pages/nope/")
+
+        assert (repo / "pages/a.md").exists()
+        assert not (repo / "pages/nope").exists()
+
+    def test_move_nested_directory_remaps_every_descendant(
+        self, tmp_path: Path
+    ) -> None:
+        repo = _make_repo(tmp_path, {
+            "assets/unit-01/top.png": "PNG",
+            "assets/unit-01/slides/deck.pdf": "PDF",
+            "assets/unit-01/slides/img/fig.png": "PNG",
+            "pages/page1.md": (
+                "![top](../assets/unit-01/top.png)\n"
+                "[deck](../assets/unit-01/slides/deck.pdf)\n"
+                "![fig](../assets/unit-01/slides/img/fig.png)\n"
+            ),
+        })
+        _make_manifest(repo, {
+            "assets/unit-01/slides/img/fig.png": {
+                "canvas_id": 300,
+                "canvas_type": "file",
+                "last_synced": "2025-01-01T00:00:00+00:00",
+            },
+        })
+
+        run_mv(repo / "assets/unit-01", repo / "assets/unit-1")
+
+        assert (repo / "assets/unit-1/slides/img/fig.png").exists()
+        assert not (repo / "assets/unit-01").exists()
+
+        with (repo / ".canvas-manifest.toml").open("rb") as f:
+            manifest = tomllib.load(f)
+        assert "assets/unit-1/slides/img/fig.png" in manifest
+
+        content = (repo / "pages/page1.md").read_text()
+        assert "../assets/unit-1/top.png" in content
+        assert "../assets/unit-1/slides/deck.pdf" in content
+        assert "../assets/unit-1/slides/img/fig.png" in content
+        assert "unit-01" not in content
+
+    def test_move_into_existing_directory_rejects_name_collision(
+        self, tmp_path: Path
+    ) -> None:
+        repo = _make_repo(tmp_path, {
+            "pages/a.md": "# A",
+            "pages/sub/a.md": "# Other A",
+        })
+        with pytest.raises(ValueError, match="Destination already exists"):
+            run_mv(repo / "pages/a.md", repo / "pages/sub")
 
     def test_updates_module_order_toml(self, tmp_path: Path) -> None:
         repo = _make_repo(tmp_path, {

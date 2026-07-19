@@ -15,6 +15,7 @@ from typing import Any
 import yaml
 
 from . import canvas_api as capi
+from . import dryrun
 from . import manifest as manifest_lib
 from .conditionals import (
     apply_conditionals,
@@ -56,11 +57,18 @@ class SyncContext:
     repo_path: Path
     snippets_dir: Path
     manifest: manifest_lib.ManifestDict
-    manifest_path: Path
+    # None = never write the manifest to disk (check-all mode).
+    manifest_path: Path | None
     course_id: int
     force_uploads: bool = False
     force_overwrite: bool = False
     verbose: bool = False
+    # All Canvas traffic goes through this namespace: the real canvas_api
+    # module, or a dryrun.DryRunCanvas during `update --check-all`.
+    api: Any = capi
+    # True during `update --check-all`: same pipeline, but nothing is
+    # uploaded and progress lines read "Would upload" instead of "Uploading".
+    check_only: bool = False
     matcher: IgnoreMatcher | None = None
     newer_on_canvas: list[str] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
@@ -417,7 +425,7 @@ def _apply_due_dates_only(ctx: SyncContext) -> None:
         date_fields = _resolve_date_overrides(override, canvas_id, local_key, errors)
         if date_fields:
             print(f"  Updating dates: {local_key}")
-            result = capi.update_dates(course, ctype, canvas_id, date_fields)
+            result = ctx.api.update_dates(course, ctype, canvas_id, date_fields)
             if result.get("date_warning"):
                 msg = _date_rejection_message(
                     local_key, title, date_fields.get("due_at"), result.get("html_url")
@@ -638,7 +646,7 @@ def _question_files_referenced_snippets(questions_dir: Path, snippets_dir: Path)
     return found
 
 
-def _make_stub_creator(course, manifest, manifest_path, note: str):
+def _make_stub_creator(course, manifest, manifest_path, note: str, api=capi):
     """Build a stub-creator closure for rewrite_links.
 
     When a link references content that has not been synced yet, Canvas needs a
@@ -649,7 +657,7 @@ def _make_stub_creator(course, manifest, manifest_path, note: str):
     def stub_creator(ref_local_path: str, ref_canvas_type: str) -> dict[str, Any]:
         title = Path(ref_local_path).stem.replace("-", " ").replace("_", " ").title()
         print(f"  Stub-creating: {ref_local_path} ({note})")
-        entry = capi.create_stub(course, ref_canvas_type, title)
+        entry = api.create_stub(course, ref_canvas_type, title)
         extra = {
             k: v for k, v in entry.items() if k not in ("canvas_id", "canvas_type")
         }
@@ -880,6 +888,7 @@ def _canvas_is_newer(
     local_mtime: datetime,
     manifest: manifest_lib.ManifestDict,
     newer_on_canvas: list[str],
+    api=capi,
 ) -> bool:
     """Check if the Canvas version of an existing item is newer than the local file.
 
@@ -895,7 +904,7 @@ def _canvas_is_newer(
     )
     if identifier is None:
         return False
-    canvas_ts = capi.get_canvas_updated_at(course, canvas_type, identifier)
+    canvas_ts = api.get_canvas_updated_at(course, canvas_type, identifier)
     if canvas_ts is not None and canvas_ts > local_mtime:
         print(f"Skipping (Canvas is newer): {local_key}")
         newer_on_canvas.append(local_key)
@@ -923,7 +932,7 @@ def sync_syllabus(ctx: SyncContext) -> None:
         return
     if _skip_if_pinned(ctx, local_key):
         return
-    print("Syncing syllabus...")
+    print("Would sync syllabus..." if ctx.check_only else "Syncing syllabus...")
     try:
         frontmatter, body = parse_frontmatter(syllabus_md.read_text())
     except yaml.YAMLError as exc:
@@ -937,14 +946,20 @@ def sync_syllabus(ctx: SyncContext) -> None:
     body = preprocess_snippets(body, syllabus_md, ctx.snippets_dir, errors, flags=ctx.flags)
     html = markdown_to_html(body.strip()) if body.strip() else ""
     error_count_before = len(errors)
-    # Stub creator is not needed for the syllabus; pass a no-op
+    # A real stub creator, not a no-op: the syllabus syncs before the content
+    # phases, so on a fresh course a syllabus link to a not-yet-synced page
+    # needs a stub to point at (a {} entry would crash canvas_content_url).
+    stub_creator = _make_stub_creator(
+        ctx.course, manifest, ctx.manifest_path, "referenced from syllabus",
+        api=ctx.api,
+    )
     html = rewrite_links(
-        html, syllabus_md, repo_path, manifest, course_id, lambda *_: {}, errors
+        html, syllabus_md, repo_path, manifest, course_id, stub_creator, errors
     )
     if len(errors) > error_count_before:
         print(f"  Skipping upload due to errors: {local_key}")
         return
-    ctx.course.update(course={"syllabus_body": html})
+    ctx.api.update_syllabus_body(ctx.course, html)
     flags_used = _flags_used_for([syllabus_md], ctx.snippets_dir, ctx.flags)
     manifest_lib.record(
         manifest, ctx.manifest_path, local_key, course_id, "syllabus",
@@ -1002,11 +1017,12 @@ def sync_course_settings(
     course,
     repo_path: Path,
     manifest: dict,
-    manifest_path: Path,
+    manifest_path: Path | None,
     force_uploads: bool = False,
     verbose: bool = False,
     settings: dict | None = None,
     errors: list[str] | None = None,
+    api=capi,
 ) -> tuple[dict[str, int], set[str], list[str]]:
     """Sync course_settings.toml: metadata, grading standards, assignment groups, policies, rubrics.
 
@@ -1054,7 +1070,7 @@ def sync_course_settings(
         if verbose and settings_path.exists():
             print(f"Skipping (up-to-date): {settings_key}")
         try:
-            return capi.get_rubric_ids(course), changed_sections, deferred_ag_rules
+            return api.get_rubric_ids(course), changed_sections, deferred_ag_rules
         except Exception:
             return {}, changed_sections, deferred_ag_rules
 
@@ -1114,13 +1130,13 @@ def sync_course_settings(
         # §1c: grading standards (needed before §1a so we can set grading_standard_id)
         gs_id = None
         if "grading_standards" in stale_sections:
-            gs_id = capi.sync_grading_standards(course, grading_standards)
+            gs_id = api.sync_grading_standards(course, grading_standards)
             _section_done("grading_standards")
 
         # §1a: core course metadata. When only metadata changed, gs_id is None
         # and update_course_metadata leaves the course's grading standard alone.
         if "metadata" in stale_sections:
-            capi.update_course_metadata(course, settings, grading_standard_id=gs_id)
+            api.update_course_metadata(course, settings, grading_standard_id=gs_id)
             _section_done("metadata")
 
         # Dashboard image
@@ -1130,7 +1146,7 @@ def sync_course_settings(
                 if image_path is not None and image_path.exists():
                     print(f"  Uploading dashboard image: {image_rel}")
                     try:
-                        capi.upload_course_image(course, image_path)
+                        api.upload_course_image(course, image_path)
                     except Exception as exc:
                         _section_failed("dashboard_image", exc)
                         image_ok = False
@@ -1143,7 +1159,7 @@ def sync_course_settings(
         # group has no assignments yet (always so on a fresh course) are deferred
         # and re-applied after the content phase by run_sync.
         if "assignment_groups" in stale_sections:
-            deferred_ag_rules[:] = capi.sync_assignment_groups(course, assignment_groups)
+            deferred_ag_rules[:] = api.sync_assignment_groups(course, assignment_groups)
             _section_done("assignment_groups")
 
         # §1e: late policy
@@ -1151,7 +1167,7 @@ def sync_course_settings(
             late_ok = True
             if late_policy:
                 try:
-                    capi.update_late_policy(course, late_policy)
+                    api.update_late_policy(course, late_policy)
                 except Exception as exc:
                     _section_failed(
                         "late_policy", exc, f" (late_policy={late_policy!r})"
@@ -1166,7 +1182,7 @@ def sync_course_settings(
             if "post_manually" in default_post_policy:
                 post_manually = default_post_policy["post_manually"]
                 try:
-                    capi.update_post_policy(course, post_manually)
+                    api.update_post_policy(course, post_manually)
                 except Exception as exc:
                     _section_failed(
                         "default_post_policy",
@@ -1207,7 +1223,7 @@ def sync_course_settings(
                     tab_config = None
                 if tab_config:
                     try:
-                        capi.sync_tab_configuration(course, tab_config)
+                        api.sync_tab_configuration(course, tab_config)
                     except Exception as exc:
                         _section_failed("tab_configuration", exc)
                         tabs_ok = False
@@ -1273,7 +1289,7 @@ def sync_course_settings(
         rubrics_failed = False
         if stale_rubrics:
             try:
-                rubric_ids, created, updated, failed = capi.sync_rubrics(
+                rubric_ids, created, updated, failed = api.sync_rubrics(
                     course, stale_rubrics
                 )
             except Exception as exc:
@@ -1302,7 +1318,7 @@ def sync_course_settings(
         )
     if not rubric_ids:
         try:
-            rubric_ids = capi.get_rubric_ids(course)
+            rubric_ids = api.get_rubric_ids(course)
         except Exception:
             pass
 
@@ -1395,9 +1411,10 @@ def _phase_front_page(
     if front_page_path and (front_page_changed or front_page_path in synced_keys):
         entry = manifest.get(front_page_path)
         if entry and "canvas_url" in entry:
-            print(f"Setting front page: {front_page_path}")
+            verb = "Would set" if ctx.check_only else "Setting"
+            print(f"{verb} front page: {front_page_path}")
             try:
-                capi.set_front_page(course, entry["canvas_url"])
+                ctx.api.set_front_page(course, entry["canvas_url"])
             except Exception as exc:
                 if "unpublished" in str(exc).lower():
                     msg = (
@@ -1466,7 +1483,7 @@ def _phase_modules(ctx: SyncContext, force_uploads: bool) -> None:
             if had_module_warnings:
                 errors.append(f"module {md_file.name}: some items could not be added")
     if order_changed:
-        _reorder_modules(course, position_map, repo_path, manifest, errors)
+        _reorder_modules(course, position_map, repo_path, manifest, errors, api=ctx.api)
         manifest_lib.record(manifest, manifest_path, _order_key, 0, "module_order")
 
 
@@ -1492,12 +1509,32 @@ def run_sync(
     force_uploads: bool = False,
     force_overwrite: bool = False,
     verbose: bool = False,
+    check_all: bool = False,
 ) -> bool:
-    """Main sync pipeline: assets → content → modules. Returns True if any errors occurred."""
-    manifest_path = repo_path / ".canvas-manifest.toml"
-    manifest = manifest_lib.load(manifest_path)
+    """Main sync pipeline: assets → content → modules. Returns True if any errors occurred.
+
+    check_all=True runs the same pipeline as a dry run simulating a first sync
+    to a brand-new empty Canvas course: the on-disk manifest is ignored (every
+    file takes the full processing path), all Canvas traffic goes to an
+    in-memory DryRunCanvas, and nothing is written (no Canvas changes, no
+    .canvas-manifest.toml changes — see manifest_path=None).
+    """
+    manifest_path: Path | None = repo_path / ".canvas-manifest.toml"
+    if check_all:
+        print(
+            "CHECK MODE: simulating a first sync to a brand-new empty Canvas "
+            "course.\nNothing will be uploaded and .canvas-manifest.toml will "
+            "not be modified.\n"
+        )
+        api: Any = dryrun.DryRunCanvas()
+        course = dryrun.DryRunCourse()
+        manifest: manifest_lib.ManifestDict = {}
+        manifest_path = None
+    else:
+        api = capi
+        manifest = manifest_lib.load(manifest_path)
+        course = capi.get_course(config)
     matcher = load_ignore_matcher(repo_path)
-    course = capi.get_course(config)
     snippets_dir = repo_path / "snippets"
     newer_on_canvas: list[str] = []
     errors: list[str] = []
@@ -1520,10 +1557,10 @@ def run_sync(
     # 0. Course settings (metadata, grading standards, assignment groups, policies, rubrics)
     rubric_ids, changed_sections, deferred_ag_rules = sync_course_settings(
         course, repo_path, manifest, manifest_path, force_uploads,
-        verbose=verbose, settings=_settings_dict, errors=errors,
+        verbose=verbose, settings=_settings_dict, errors=errors, api=api,
     )
 
-    assignment_group_ids = capi.get_assignment_group_ids(course)
+    assignment_group_ids = api.get_assignment_group_ids(course)
 
     course_flags = load_course_flags(repo_path, _settings_dict)
     due_dates = filter_due_dates_by_flags(load_due_dates(repo_path, _settings_dict), course_flags)
@@ -1549,6 +1586,8 @@ def run_sync(
         synced_keys=synced_content_keys,
         unpublishable_items=unpublishable_items,
         ignored_fields=ignored_fields,
+        api=api,
+        check_only=check_all,
     )
 
     # 0.5. Syllabus
@@ -1571,7 +1610,7 @@ def run_sync(
     # 2.65. Assignment-group drop rules deferred from course-settings sync
     # (the groups now have their assignments, so Canvas accepts the rules).
     if deferred_ag_rules and _settings_dict:
-        capi.apply_assignment_group_rules(
+        api.apply_assignment_group_rules(
             course, _settings_dict.get("assignment_groups", []), deferred_ag_rules
         )
 
@@ -1764,11 +1803,13 @@ def _walk_assets(ctx: SyncContext, dir_path: Path, assets_root: Path) -> None:
                     entry.stat().st_mtime, tz=timezone.utc
                 )
                 if _canvas_is_newer(
-                    course, local_key, local_mtime, manifest, ctx.newer_on_canvas
+                    course, local_key, local_mtime, manifest, ctx.newer_on_canvas,
+                    api=ctx.api,
                 ):
                     continue
-            print(f"Uploading asset: {local_key}")
-            canvas_entry = capi.upload_asset(course, entry, assets_root)
+            verb = "Would upload" if ctx.check_only else "Uploading"
+            print(f"{verb} asset: {local_key}")
+            canvas_entry = ctx.api.upload_asset(course, entry, assets_root)
             manifest_lib.record(
                 manifest,
                 ctx.manifest_path,
@@ -1843,7 +1884,7 @@ def _apply_rubric(
         if rubric_canvas_id is not None:
             use_for_grading = frontmatter.get("use_for_grading", True)
             try:
-                capi.associate_rubric_with_assignment(
+                ctx.api.associate_rubric_with_assignment(
                     course, rubric_canvas_id, entry["canvas_id"], use_for_grading
                 )
             except Exception as exc:
@@ -1857,7 +1898,7 @@ def _apply_rubric(
             else rubric_settings.id
         )
         try:
-            removed = capi.remove_rubric_from_assignment(
+            removed = ctx.api.remove_rubric_from_assignment(
                 course, entry["canvas_id"], rubric_id
             )
             if removed:
@@ -1877,7 +1918,7 @@ def _upload_page(
     manifest_path = ctx.manifest_path
     synced_keys = ctx.synced_keys
     canvas_url = existing.get("canvas_url") if existing else None
-    entry = capi.create_or_update_page(
+    entry = ctx.api.create_or_update_page(
         course,
         canvas_url,
         title,
@@ -1885,7 +1926,8 @@ def _upload_page(
         published=published,
         editing_roles=frontmatter.get("editing_roles", "teachers"),
     )
-    print(f"  Link: {entry['html_url']}")
+    if not ctx.check_only:
+        print(f"  Link: {entry['html_url']}")
     extra: dict[str, Any] = {"canvas_url": entry["canvas_url"]}
     if flags_used:
         extra["flags_used"] = flags_used
@@ -1962,7 +2004,7 @@ def _upload_assignment(
         else:
             extra["assignment_group_id"] = resolved
     _validate_annotatable_attachment(ctx, frontmatter, local_key, extra)
-    entry = capi.create_or_update_assignment(
+    entry = ctx.api.create_or_update_assignment(
         course, canvas_id, title, html, published=published, **extra
     )
     if entry.get("date_warning"):
@@ -1970,7 +2012,8 @@ def _upload_assignment(
             local_key, title, extra.get("due_at"), entry.get("html_url")
         )
         warn(msg, errors)
-    print(f"  Link: {entry['html_url']}")
+    if not ctx.check_only:
+        print(f"  Link: {entry['html_url']}")
     extra_record: dict[str, Any] = {}
     if flags_used:
         extra_record["flags_used"] = flags_used
@@ -2031,7 +2074,7 @@ def _upload_discussion(
             grading_params["assignment_group_id"] = resolved
     if grading_params:
         extra["assignment"] = grading_params
-    entry = capi.create_or_update_discussion(
+    entry = ctx.api.create_or_update_discussion(
         course, canvas_id, title, html, published=published, **extra
     )
     if entry.get("date_warning"):
@@ -2039,7 +2082,8 @@ def _upload_discussion(
             local_key, title, grading_params.get("due_at"), entry.get("html_url")
         )
         warn(msg, errors)
-    print(f"  Link: {entry['html_url']}")
+    if not ctx.check_only:
+        print(f"  Link: {entry['html_url']}")
     extra_record: dict[str, Any] = {}
     if flags_used:
         extra_record["flags_used"] = flags_used
@@ -2098,10 +2142,11 @@ def _upload_announcement(
             "not a supported announcement setting, so it was not sent to Canvas"
         )
         ctx.ignored_fields.append((local_key, key))
-    entry = capi.create_or_update_announcement(
+    entry = ctx.api.create_or_update_announcement(
         course, canvas_id, title, html, **extra
     )
-    print(f"  Link: {entry['html_url']}")
+    if not ctx.check_only:
+        print(f"  Link: {entry['html_url']}")
     manifest_lib.record(
         manifest, manifest_path, local_key, entry["canvas_id"], "announcement",
         extra={"flags_used": flags_used} if flags_used else None,
@@ -2138,7 +2183,9 @@ def _sync_content_file(ctx: SyncContext, md_file: Path) -> None:
 
     if not force_overwrite:
         local_mtime = _effective_mtime([md_file], snippets_dir)
-        if _canvas_is_newer(course, local_key, local_mtime, manifest, newer_on_canvas):
+        if _canvas_is_newer(
+            course, local_key, local_mtime, manifest, newer_on_canvas, api=ctx.api
+        ):
             return
 
     print(f"Processing: {local_key}")
@@ -2211,7 +2258,8 @@ def _sync_content_file(ctx: SyncContext, md_file: Path) -> None:
         return
 
     stub_creator = _make_stub_creator(
-        course, manifest, manifest_path, "referenced but not yet synced"
+        course, manifest, manifest_path, "referenced but not yet synced",
+        api=ctx.api,
     )
 
     error_count_before = len(errors) if errors is not None else 0
@@ -2226,7 +2274,8 @@ def _sync_content_file(ctx: SyncContext, md_file: Path) -> None:
     title = frontmatter.get("title", md_file.stem)
     flags_used = _flags_used_for([md_file], snippets_dir, ctx.flags)
 
-    print(f"  Uploading: {local_key}")
+    verb = "Would upload" if ctx.check_only else "Uploading"
+    print(f"  {verb}: {local_key}")
     if canvas_type == "page":
         _upload_page(ctx, existing, frontmatter, html, title, published, local_key, flags_used)
     elif canvas_type == "assignment":
@@ -2253,6 +2302,7 @@ def _reorder_modules(
     repo_path: Path,
     manifest: dict,
     errors: list[str] | None,
+    api=capi,
 ) -> None:
     """Set module positions on Canvas without re-syncing content."""
     modules_dir = repo_path / "modules"
@@ -2273,7 +2323,7 @@ def _reorder_modules(
                 errors.append(msg)
             continue
         print(f"Reordering module: {local_key} → position {position}")
-        capi.reposition_module(course, entry["canvas_id"], position)
+        api.reposition_module(course, entry["canvas_id"], position)
 
 
 def _sync_module(
@@ -2311,10 +2361,13 @@ def _sync_module(
 
     if not force_overwrite:
         local_mtime = _effective_mtime([md_file], snippets_dir)
-        if _canvas_is_newer(course, local_key, local_mtime, manifest, newer_on_canvas):
+        if _canvas_is_newer(
+            course, local_key, local_mtime, manifest, newer_on_canvas, api=ctx.api
+        ):
             return False
 
-    print(f"Syncing module: {local_key}")
+    verb = "Would sync" if ctx.check_only else "Syncing"
+    print(f"{verb} module: {local_key}")
 
     parsed = _parse_frontmatter_or_warn(md_file, local_key, errors)
     if parsed is None:
@@ -2343,15 +2396,15 @@ def _sync_module(
     if position is not None:
         module_kwargs["position"] = position
 
-    module = capi.create_or_update_module(
+    module = ctx.api.create_or_update_module(
         course, existing["canvas_id"] if existing else None, title, **module_kwargs
     )
-    capi.clear_module_items(module)
+    ctx.api.clear_module_items(module)
 
     had_warnings = False
     canvas_item_ids: dict[str, int] = {}
     for item in items:
-        item_id, unpub_warn = capi.add_module_item(module, item, manifest)
+        item_id, unpub_warn = ctx.api.add_module_item(module, item, manifest)
         if unpub_warn is not None and unpublishable_items is not None:
             unpublishable_items.append((title, unpub_warn))
         if item["type"] == "content":
@@ -2457,7 +2510,8 @@ def _sync_quiz(ctx: SyncContext, quiz_folder: Path, quiz_md: Path) -> None:
             all_files.extend(questions_dir.glob("*.md"))
         local_max_mtime = _effective_mtime(all_files, snippets_dir)
         if _canvas_is_newer(
-            course, local_key, local_max_mtime, manifest, newer_on_canvas
+            course, local_key, local_max_mtime, manifest, newer_on_canvas,
+            api=ctx.api,
         ):
             return
 
@@ -2501,7 +2555,7 @@ def _sync_quiz(ctx: SyncContext, quiz_folder: Path, quiz_md: Path) -> None:
         else:
             quiz_kwargs["assignment_group_id"] = resolved
     _stub_creator = _make_stub_creator(
-        course, manifest, manifest_path, "referenced from quiz"
+        course, manifest, manifest_path, "referenced from quiz", api=ctx.api
     )
 
     error_count_before = len(errors) if errors is not None else 0
@@ -2557,11 +2611,12 @@ def _sync_quiz(ctx: SyncContext, quiz_folder: Path, quiz_md: Path) -> None:
             _resolve_date_overrides(override, canvas_id, local_key, errors)
         )
 
-    print(f"  Uploading: {local_key}")
+    verb = "Would upload" if ctx.check_only else "Uploading"
+    print(f"  {verb}: {local_key}")
     # The publish state is applied after the questions are synced (see
     # finalize_quiz_publish_state) so a quiz being published this sync
     # includes its new questions without a manual save in the web UI.
-    result = capi.create_or_update_quiz(
+    result = ctx.api.create_or_update_quiz(
         course, canvas_id, title, desc_html, **quiz_kwargs
     )
     if result.get("date_warning"):
@@ -2569,10 +2624,11 @@ def _sync_quiz(ctx: SyncContext, quiz_folder: Path, quiz_md: Path) -> None:
             local_key, title, quiz_kwargs.get("due_at"), result.get("html_url")
         )
         warn(msg, errors)
-    print(f"  Link: {result['html_url']}")
+    if not ctx.check_only:
+        print(f"  Link: {result['html_url']}")
     quiz_obj = course.get_quiz(result["canvas_id"])
-    q_id_map = capi.sync_quiz_questions(course, quiz_obj, questions)
-    if capi.finalize_quiz_publish_state(quiz_obj, published):
+    q_id_map = ctx.api.sync_quiz_questions(course, quiz_obj, questions)
+    if ctx.api.finalize_quiz_publish_state(quiz_obj, published):
         warn(_quiz_manual_save_message(local_key, title, result.get("html_url")), errors)
 
     extra: dict[str, Any] = {"canvas_question_ids": q_id_map}
@@ -2649,8 +2705,9 @@ def _sync_question_banks(ctx: SyncContext) -> None:
         if len(ctx.errors) > error_count_before:
             print(f"  Skipping upload due to errors: {local_key}")
             continue
-        print(f"  Uploading question bank: {local_key}")
-        canvas_id = capi.sync_question_bank(course, bank_title, questions)
+        verb = "Would upload" if ctx.check_only else "Uploading"
+        print(f"  {verb} question bank: {local_key}")
+        canvas_id = ctx.api.sync_question_bank(course, bank_title, questions)
         manifest_lib.record(
             manifest, manifest_path, local_key, canvas_id, "question_bank"
         )
