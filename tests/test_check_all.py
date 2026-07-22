@@ -234,6 +234,67 @@ def test_syllabus_link_stub_created_on_real_first_sync(course_root, tmp_path) ->
     assert f"/courses/{COURSE_ID}/pages/syllabus-stub" in body
 
 
+def test_check_all_syllabus_asset_link_uploads_instead_of_stubbing(
+    course_root, no_canvas, capsys
+) -> None:
+    """A syllabus link to an asset has no stub type in the Canvas API, so it must
+    be uploaded outright rather than routed through create_stub (which raises)."""
+    cs_dir = course_root / "course_settings"
+    cs_dir.mkdir(exist_ok=True)
+    handout = course_root / "assets" / "syllabus" / "handout.docx"
+    handout.parent.mkdir(parents=True, exist_ok=True)
+    handout.write_bytes(b"docx bytes")
+    (cs_dir / "syllabus.md").write_text(
+        "Read the [handout](../assets/syllabus/handout.docx).\n"
+    )
+
+    had_errors = run_sync(_config(), course_root, check_all=True)
+
+    assert had_errors is False
+    out = capsys.readouterr().out
+    assert (
+        "Uploading referenced asset: assets/syllabus/handout.docx "
+        "(referenced from syllabus)" in out
+    )
+    assert "Stub-creating: assets/syllabus/handout.docx" not in out
+
+
+def test_syllabus_asset_uploaded_on_real_first_sync(course_root, tmp_path) -> None:
+    """Same regression on the real path: the asset is uploaded through
+    course.upload() and the syllabus link points at the returned Canvas URL."""
+    from github_to_canvas.sync import SyncContext, sync_syllabus
+
+    cs_dir = course_root / "course_settings"
+    cs_dir.mkdir(exist_ok=True)
+    handout = course_root / "assets" / "syllabus" / "handout.docx"
+    handout.parent.mkdir(parents=True, exist_ok=True)
+    handout.write_bytes(b"docx bytes")
+    (cs_dir / "syllabus.md").write_text(
+        "Read the [handout](../assets/syllabus/handout.docx).\n"
+    )
+
+    course = MagicMock()
+    course.upload.return_value = (True, {"id": 9911, "url": "/files/9911/download"})
+
+    ctx = SyncContext(
+        course=course,
+        repo_path=course_root,
+        snippets_dir=course_root / "snippets",
+        manifest={},
+        manifest_path=tmp_path / "manifest.toml",
+        course_id=COURSE_ID,
+        force_uploads=True,
+    )
+    sync_syllabus(ctx)
+
+    course.upload.assert_called_once()
+    # uploaded into the folder mirroring its path under assets/, not the root
+    assert course.upload.call_args.kwargs["parent_folder_path"] == "course files/syllabus"
+    body = course.update.call_args.kwargs["course"]["syllabus_body"]
+    assert "/files/9911/download" in body
+    assert ctx.manifest["assets/syllabus/handout.docx"]["canvas_id"] == 9911
+
+
 # ---------------------------------------------------------------------------
 # CLI surface
 # ---------------------------------------------------------------------------

@@ -102,7 +102,7 @@ On each run the tool:
 
 Files are skipped if their local modification time is older than the `last_synced` timestamp in the manifest — so unchanged files cost nothing on repeat runs.
 
-Files matched by a `.gitignore` (or an optional `.canvasignore`, same syntax) at the repo root are never uploaded — handy for excluding editor backups and temp files such as Word's `~$*.docx`.
+Files matched by an optional `.canvasignore` (git's `gitignore` syntax) at the repo root are never uploaded — handy for excluding editor backups and temp files such as Word's `~$*.docx`. `.gitignore` is **not** consulted, so you can keep per-term materials out of git while still uploading them to Canvas. To exclude content from both git and Canvas, list it in both files.
 
 A `.canvas-manifest.toml` file is written to your course repo to track Canvas IDs and sync times. Commit it so collaborators share the same mapping.
 
@@ -224,12 +224,15 @@ Or put it in the `[auth]` block of `course_settings/canvas.toml` for local-only 
 ## Usage
 
 ```
-Usage: github-to-canvas update [OPTIONS] REPO
+Usage: github-to-canvas update [OPTIONS] [REPO]
 
   Sync a Markdown course repo to Canvas LMS.
 
 Arguments:
-  REPO                            Path to the course content repo  [required]
+  REPO                            Path to the course content repo. If omitted, the enclosing
+                                  repo is found by walking up from the current directory,
+                                  so you can run `github-to-canvas update` from any
+                                  subdirectory.  [optional]
 
 Options:
   --config PATH                   Path to canvas.toml  [default: <repo>/course_settings/canvas.toml]
@@ -1279,6 +1282,33 @@ This sets the Canvas module item's published state — the item still appears in
 > to unpublish manually in the Canvas web UI.
 
 Unpublished items are also excluded from the `publish` subcommand's static website (including any assets reachable only through unpublished links).
+
+**Module-level `published` overrides its contents.** A module's own frontmatter
+(`published: true` / `published: false`) controls the module, and in Canvas the
+module's publish state **cascades to everything inside it**: unpublishing a
+module unpublishes every item *and the underlying content* (pages, assignments,
+discussions, quizzes). So if a content file's own frontmatter says
+`published: true` but it lives in a module whose frontmatter says
+`published: false`, the module wins — the content is left **unpublished** after
+sync (invisible to students), regardless of its own `published: true`.
+
+Because this is easy to miss (the run still reports success), the tool now
+**warns** when it detects this conflict — inline as the module syncs, and again
+in an end-of-run summary listing each affected item:
+
+```text
+The following content asks to be published (published: true) but sits in a
+module that is unpublished (published: false).
+Canvas unpublishes a module's contents along with the module, so this content
+is NOT visible to students despite its own published: true.
+Publish the module (set published: true in its .md file), or move the item to a
+published module:
+  In module "Midterm Exam": "Midterm Exam Study Guide" (pages/exams/midterm/midterm-exam-study-guide.md)
+```
+
+To fix, either set `published: true` on the module, or move the item to a module
+that is published. (Assets/Files carry no `published:` frontmatter of their own,
+so they are not reported — an unpublished module simply hides them, as expected.)
 
 The `import` subcommand preserves per-item published state from the Canvas export — unpublished items in the original course get the `<!-- published="false" -->` comment automatically.
 

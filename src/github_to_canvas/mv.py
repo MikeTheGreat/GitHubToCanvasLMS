@@ -13,6 +13,7 @@ from urllib.parse import quote, unquote
 import tomli_w
 
 from . import manifest as manifest_lib
+from .config import find_repo_root  # re-exported: mv's public API since before the move
 
 _CONTENT_TYPE_DIRS = {
     "pages", "assignments", "discussions", "announcements", "quizzes",
@@ -26,18 +27,6 @@ _HTML_IMG_RE = re.compile(r"<img\b[^>]*/?>", re.IGNORECASE)
 _HTML_A_RE = re.compile(r"<a\b[^>]*>", re.IGNORECASE)
 _HTML_SRC_ATTR_RE = re.compile(r'\bsrc="([^"]*)"')
 _HTML_HREF_ATTR_RE = re.compile(r'\bhref="([^"]*)"')
-
-
-def find_repo_root(start_path: Path) -> Path | None:
-    """Walk up from start_path looking for course_settings/course_settings.toml."""
-    current = start_path if start_path.is_dir() else start_path.parent
-    while True:
-        if (current / "course_settings" / "course_settings.toml").exists():
-            return current
-        parent = current.parent
-        if parent == current:
-            return None
-        current = parent
 
 
 def _content_type_dir(rel_path: str) -> str | None:

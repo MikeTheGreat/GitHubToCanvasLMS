@@ -49,8 +49,9 @@ class SyncContext:
     The public entry points (`run_sync`, `run_targeted_sync`) build one of these
     and pass it down instead of the previous 10-to-16 positional parameters. The
     mutable accumulators (`newer_on_canvas`, `errors`, `synced_keys`,
-    `unpublishable_items`, `ignored_fields`) live here as plain lists/sets; the
-    entry points read them back after the run to print the summaries.
+    `unpublishable_items`, `publish_conflicts`, `ignored_fields`) live here as
+    plain lists/sets; the entry points read them back after the run to print the
+    summaries.
     """
 
     course: Any
@@ -84,6 +85,12 @@ class SyncContext:
     rubric_ids: dict[str, int] = field(default_factory=dict)
     synced_keys: set[str] = field(default_factory=set)
     unpublishable_items: list[tuple[str, str]] = field(default_factory=list)
+    # (module_title, item_title, item_local_key) for content whose own
+    # frontmatter asks to be published but that sits in a module whose
+    # frontmatter says published: false. Canvas's module-level unpublish
+    # cascades to the underlying content, so the module silently overrides the
+    # item's published: true (see _warn_module_publish_conflicts).
+    publish_conflicts: list[tuple[str, str, str]] = field(default_factory=list)
     # (local_key, field_name) for announcement frontmatter fields that were
     # dropped because Canvas has no matching announcement setting.
     ignored_fields: list[tuple[str, str]] = field(default_factory=list)
@@ -646,7 +653,7 @@ def _question_files_referenced_snippets(questions_dir: Path, snippets_dir: Path)
     return found
 
 
-def _make_stub_creator(course, manifest, manifest_path, note: str, api=capi):
+def _make_stub_creator(course, manifest, manifest_path, note: str, repo_root: Path, api=capi):
     """Build a stub-creator closure for rewrite_links.
 
     When a link references content that has not been synced yet, Canvas needs a
@@ -655,9 +662,23 @@ def _make_stub_creator(course, manifest, manifest_path, note: str, api=capi):
     content and quiz call sites)."""
 
     def stub_creator(ref_local_path: str, ref_canvas_type: str) -> dict[str, Any]:
-        title = Path(ref_local_path).stem.replace("-", " ").replace("_", " ").title()
-        print(f"  Stub-creating: {ref_local_path} ({note})")
-        entry = api.create_stub(course, ref_canvas_type, title)
+        if ref_canvas_type == "file":
+            # Files are uploaded outright rather than stubbed: unlike a page or
+            # assignment, a file's content is fully known here, so there is
+            # nothing to fill in later and no stub type for it in the Canvas API.
+            # The asset phase runs after the syllabus and content phases, so a
+            # link to a not-yet-uploaded asset lands here; uploading now records
+            # last_synced, and the later asset walk skips it as already synced.
+            # canvas_type "file" only ever comes from an assets/ path
+            # (link_rewrite._FOLDER_TO_TYPE), so assets/ is the right root.
+            print(f"  Uploading referenced asset: {ref_local_path} ({note})")
+            entry = api.upload_asset(
+                course, repo_root / ref_local_path, repo_root / "assets"
+            )
+        else:
+            title = Path(ref_local_path).stem.replace("-", " ").replace("_", " ").title()
+            print(f"  Stub-creating: {ref_local_path} ({note})")
+            entry = api.create_stub(course, ref_canvas_type, title)
         extra = {
             k: v for k, v in entry.items() if k not in ("canvas_id", "canvas_type")
         }
@@ -847,6 +868,47 @@ def _content_default_published(
     )
 
 
+def _warn_module_publish_conflicts(
+    ctx: SyncContext, module_title: str, items: list[dict[str, Any]]
+) -> None:
+    """Warn about published content sitting in an unpublished module.
+
+    Called only when the module's own frontmatter says ``published: false``.
+    Canvas's module publish state cascades to its contents: editing a module to
+    unpublished unpublishes every item in it *and the underlying content* —
+    pages, assignments, discussions, quizzes alike. So a content file whose own
+    frontmatter says ``published: true`` is silently flipped back to unpublished
+    the moment its module syncs (the module always wins). Rather than let the run
+    report success with the content left invisible to students, surface the
+    conflict inline and accumulate it for the end-of-run summary.
+
+    Only ``.md`` content items are checked — they carry a ``published:`` intent
+    to conflict with. Assets (Files) have no such frontmatter (their historical
+    default is "published", but there is no stated intent for the module to
+    override), and ExternalUrl/SubHeader items have no underlying content, so
+    neither can produce this conflict.
+    """
+    for item in items:
+        if item.get("type") != "content":
+            continue
+        local_path = item.get("local_path", "")
+        if not local_path.endswith(".md"):
+            continue
+        # published is already resolved to a bool for content items by the caller
+        # (explicit {published:...} override, else the file's own frontmatter).
+        if item.get("published") is not True:
+            continue
+        item_title = item.get("title", local_path)
+        print(
+            f"  WARNING: \"{item_title}\" ({local_path}) has published: true, but"
+            f" its module \"{module_title}\" has published: false. Canvas"
+            f" unpublishes a module's contents along with the module, so this"
+            f" content will be UNPUBLISHED after sync. Publish the module, or move"
+            f" this item to a published module, to keep it visible to students."
+        )
+        ctx.publish_conflicts.append((module_title, item_title, local_path))
+
+
 def check_title_collisions(
     md_files: list[Path],
     repo_root: Path,
@@ -951,7 +1013,7 @@ def sync_syllabus(ctx: SyncContext) -> None:
     # needs a stub to point at (a {} entry would crash canvas_content_url).
     stub_creator = _make_stub_creator(
         ctx.course, manifest, ctx.manifest_path, "referenced from syllabus",
-        api=ctx.api,
+        repo_root=repo_path, api=ctx.api,
     )
     html = rewrite_links(
         html, syllabus_md, repo_path, manifest, course_id, stub_creator, errors
@@ -1632,6 +1694,7 @@ def run_sync(
     _print_newer_on_canvas_summary(newer_on_canvas)
     _print_pinned_summary(ctx.pinned_skips)
     _print_unpublishable_summary(unpublishable_items)
+    _print_publish_conflicts_summary(ctx.publish_conflicts)
     _print_ignored_fields_summary(ignored_fields)
     _print_errors_summary(errors)
     return bool(errors)
@@ -2259,7 +2322,7 @@ def _sync_content_file(ctx: SyncContext, md_file: Path) -> None:
 
     stub_creator = _make_stub_creator(
         course, manifest, manifest_path, "referenced but not yet synced",
-        api=ctx.api,
+        repo_root=repo_root, api=ctx.api,
     )
 
     error_count_before = len(errors) if errors is not None else 0
@@ -2388,6 +2451,9 @@ def _sync_module(
 
     existing = manifest.get(local_key)
     title = frontmatter.get("title", md_file.stem)
+
+    if frontmatter.get("published") is False:
+        _warn_module_publish_conflicts(ctx, title, items)
 
     module_kwargs: dict[str, Any] = {}
     for key in ("published", "unlock_at", "require_sequential_progress"):
@@ -2555,7 +2621,8 @@ def _sync_quiz(ctx: SyncContext, quiz_folder: Path, quiz_md: Path) -> None:
         else:
             quiz_kwargs["assignment_group_id"] = resolved
     _stub_creator = _make_stub_creator(
-        course, manifest, manifest_path, "referenced from quiz", api=ctx.api
+        course, manifest, manifest_path, "referenced from quiz",
+        repo_root=repo_root, api=ctx.api,
     )
 
     error_count_before = len(errors) if errors is not None else 0
@@ -2797,6 +2864,21 @@ def _print_unpublishable_summary(items: list[tuple[str, str]]) -> None:
         print(f"  In module \"{module_title}\": \"{item_title}\"")
 
 
+def _print_publish_conflicts_summary(items: list[tuple[str, str, str]]) -> None:
+    if not items:
+        return
+    print(
+        "\nThe following content asks to be published (published: true) but sits"
+        " in a module that is unpublished (published: false).\nCanvas unpublishes"
+        " a module's contents along with the module, so this content is NOT"
+        " visible to students despite its own published: true.\nPublish the module"
+        " (set published: true in its .md file), or move the item to a published"
+        " module:"
+    )
+    for module_title, item_title, local_path in items:
+        print(f"  In module \"{module_title}\": \"{item_title}\" ({local_path})")
+
+
 def _print_ignored_fields_summary(items: list[tuple[str, str]]) -> None:
     if not items:
         return
@@ -3020,6 +3102,7 @@ def run_targeted_sync(
     _print_newer_on_canvas_summary(newer_on_canvas)
     _print_pinned_summary(ctx.pinned_skips)
     _print_unpublishable_summary(unpublishable_items)
+    _print_publish_conflicts_summary(ctx.publish_conflicts)
     _print_ignored_fields_summary(ignored_fields)
     _print_errors_summary(errors)
     return bool(errors)

@@ -7,6 +7,18 @@ from dataclasses import dataclass
 from pathlib import Path
 
 
+def find_repo_root(start_path: Path) -> Path | None:
+    """Walk up from start_path looking for course_settings/course_settings.toml."""
+    current = start_path if start_path.is_dir() else start_path.parent
+    while True:
+        if (current / "course_settings" / "course_settings.toml").exists():
+            return current
+        parent = current.parent
+        if parent == current:
+            return None
+        current = parent
+
+
 @dataclass(frozen=True)
 class Config:
     base_url: str

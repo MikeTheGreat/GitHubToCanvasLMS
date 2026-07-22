@@ -1,11 +1,14 @@
-"""Ignore-file support: skip uploading files matched by .gitignore / .canvasignore.
+"""Ignore-file support: skip uploading files matched by .canvasignore.
 
-Patterns use git's wildmatch syntax (via the `pathspec` library), so a repo's
-existing `.gitignore` governs what is uploaded to Canvas, and an optional
-`.canvasignore` (same syntax) layers on top for Canvas-only exclusions.
+Patterns use git's wildmatch syntax (via the `pathspec` library), so an
+optional `.canvasignore` at the repo root governs what is excluded from
+Canvas. `.gitignore` is deliberately *not* consulted: this lets a repo
+exclude per-term materials from git while still uploading them to Canvas.
+Content that should be excluded from both git and Canvas must be listed in
+both files.
 
-Matching is purely additive: with no ignore files present, nothing is matched
-and every file is processed exactly as before.
+Matching is purely additive: with no `.canvasignore` present, nothing is
+matched and every file is processed exactly as before.
 """
 from __future__ import annotations
 
@@ -13,7 +16,7 @@ from pathlib import Path
 
 import pathspec
 
-_IGNORE_FILES = (".gitignore", ".canvasignore")
+_IGNORE_FILES = (".canvasignore",)
 
 
 class IgnoreMatcher:
@@ -35,9 +38,9 @@ class IgnoreMatcher:
 
 
 def load_ignore_matcher(repo_root: Path) -> IgnoreMatcher:
-    """Build an IgnoreMatcher from `.gitignore` + `.canvasignore` at the repo root.
+    """Build an IgnoreMatcher from `.canvasignore` at the repo root.
 
-    Missing files contribute no patterns. The result always matches the
+    A missing file contributes no patterns. The result always matches the
     tool's own manifest so it is never treated as uploadable content.
     """
     lines: list[str] = [".canvas-manifest.toml"]

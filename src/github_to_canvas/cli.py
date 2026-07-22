@@ -20,6 +20,7 @@ load_dotenv(find_dotenv(usecwd=True), override=True, verbose=True)
 
 
 from .canvas_api import get_course, read_tab_configuration
+from .config import find_repo_root
 from .config import load as load_config
 from .imscc_import import run_import
 from .mv import run_mv
@@ -32,6 +33,24 @@ from .sync import run_prune, run_sync, run_targeted_sync
 def die(msg: str) -> None:
     click.secho(f"Error: {msg}", fg="red", err=True)
     sys.exit(1)
+
+
+def _resolve_repo(repo: Path | None) -> Path:
+    """Return the course repo to act on.
+
+    An explicit path is used as given — no walking up — so a wrong path still
+    reports the missing course_settings/ rather than silently acting on a parent.
+    When omitted, walk up from the current directory to find the enclosing repo.
+    """
+    if repo is not None:
+        return repo
+    found = find_repo_root(Path.cwd())
+    if found is None:
+        die(
+            "Not inside a course repo (no course_settings/course_settings.toml found "
+            "in this directory or any parent). Pass the repo path explicitly."
+        )
+    return found
 
 
 def _ensure_pandoc() -> None:
@@ -216,7 +235,8 @@ def import_cmd(imscc_path: Path, output_dir: Path) -> None:
 @main.command(name="publish")
 @click.argument(
     "course_dir",
-    default=".",
+    required=False,
+    default=None,
     type=click.Path(exists=True, file_okay=False, path_type=Path),
 )
 @click.option(
@@ -226,12 +246,14 @@ def import_cmd(imscc_path: Path, output_dir: Path) -> None:
     help="Where `mkdocs build` writes the static HTML (default: site/).",
 )
 def publish(
-    course_dir: Path, output_dir: Path
+    course_dir: Path | None, output_dir: Path
 ) -> None:
     """Generate a public MkDocs static site from the course repo.
 
-    COURSE_DIR is the course content repo (defaults to the current directory).
+    COURSE_DIR is the course content repo. If omitted, the enclosing repo is
+    found by walking up from the current directory.
     """
+    course_dir = _resolve_repo(course_dir)
     try:
         run_publish(course_dir, output_dir)
     except ValueError as e:
@@ -503,9 +525,11 @@ def _format_concise_date(iso_date: str) -> str:
         return iso_date[:16] if len(iso_date) >= 16 else iso_date
 
 
-@main.command(no_args_is_help=True)
+@main.command()
 @click.argument(
     "repo",
+    required=False,
+    default=None,
     type=click.Path(exists=True, file_okay=False, path_type=Path),
 )
 @click.option(
@@ -572,7 +596,7 @@ def _format_concise_date(iso_date: str) -> str:
 )
 @_handle_cli_errors
 def update(
-    repo: Path,
+    repo: Path | None,
     config: Path | None,
     force_uploads: bool,
     force_overwrite: bool,
@@ -581,8 +605,13 @@ def update(
     verbose: bool,
     check_all: bool,
 ) -> None:
-    """Sync a Markdown course repo to Canvas LMS."""
+    """Sync a Markdown course repo to Canvas LMS.
+
+    REPO is the course content repo. If omitted, the enclosing repo is found by
+    walking up from the current directory.
+    """
     _ensure_pandoc()
+    repo = _resolve_repo(repo)
     if check_all and (target_recursively or single_target):
         die("--check-all always checks the whole repo; it cannot be combined with -t/--target-recursively or -s/--single-target.")
     if check_all and (force_uploads or force_overwrite):

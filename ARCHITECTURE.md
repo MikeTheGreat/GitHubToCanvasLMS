@@ -14,7 +14,7 @@ git clone (local)
 // This tool:
 1. git pull                             (ensure local copy is up-to-date)
 2. load .canvas-manifest.toml           (into in-memory dict; single source of truth during the run)
-2.1. build ignore matcher               (from .gitignore + optional .canvasignore at repo root;
+2.1. build ignore matcher               (from optional .canvasignore at repo root; .gitignore is NOT consulted;
      any matched file/dir is skipped during discovery in every phase below)
 2.5. if course_settings/course_settings.toml exists: apply course metadata to Canvas (name, dates, flags, grading
      standards, assignment groups, late policy, post policy, rubrics)
@@ -125,7 +125,7 @@ assets/slides/week1.pdf
 
 **Ignore files:**
 
-A `.gitignore` and/or an optional `.canvasignore` at the repo root control which files are uploaded. Patterns use git's `gitwildmatch` syntax (via the [`pathspec`](https://pypi.org/project/pathspec/) library), so negation (`!`), `**`, anchoring, and directory-only patterns (`build/`) all behave as in git. The two files are layered together: `.gitignore` keeps a repo's existing rules authoritative, while `.canvasignore` adds Canvas-only exclusions. Matching is applied at every discovery point (assets, content folders, quizzes, question banks, modules), matching repo-root-relative POSIX paths; a matched directory is pruned entirely (its contents are never walked). With neither file present, nothing is matched and every file is processed as before. The tool's own `.canvas-manifest.toml` is always excluded. Ignoring a file only stops future uploads — it does **not** prune anything already on Canvas (the file still exists locally and keeps its manifest entry; see the `prune` subcommand for removing content). Implemented in `ignore.py`.
+An optional `.canvasignore` at the repo root controls which files are uploaded. Patterns use git's `gitwildmatch` syntax (via the [`pathspec`](https://pypi.org/project/pathspec/) library), so negation (`!`), `**`, anchoring, and directory-only patterns (`build/`) all behave as in git. `.gitignore` is deliberately **not** consulted: this lets a repo exclude per-term materials from git while still uploading them to Canvas. Content that should be excluded from both git and Canvas must be listed in both files (the duplication is expected and fine). Matching is applied at every discovery point (assets, content folders, quizzes, question banks, modules), matching repo-root-relative POSIX paths; a matched directory is pruned entirely (its contents are never walked). With no `.canvasignore` present, nothing is matched and every file is processed as before. The tool's own `.canvas-manifest.toml` is always excluded. Ignoring a file only stops future uploads — it does **not** prune anything already on Canvas (the file still exists locally and keeps its manifest entry; see the `prune` subcommand for removing content). Implemented in `ignore.py`.
 
 **Asset upload detail:**
 
@@ -145,6 +145,8 @@ The `assets/` folder hierarchy is mirrored into Canvas Files. `assets/images/fig
 **Stub creation:**
 
 When a linked file has no Canvas ID yet, the tool creates a minimal placeholder in Canvas (title only, empty body, unpublished) purely to obtain the Canvas ID. The stub is overwritten with real content when that file is processed in the main loop. Content type for the stub is derived from the linked file's directory convention or its frontmatter `canvas_type` field.
+
+**Exception — assets are uploaded, not stubbed.** `canvas_type = "file"` has no stub form: Canvas offers no placeholder file object, and `capi.create_stub()` raises `ValueError` for it. It does not need one either — unlike a page, a file's content is fully known at reference time, so there is nothing to fill in on a later pass. `_make_stub_creator()` therefore branches on `"file"` and calls `capi.upload_asset()` outright (printing `Uploading referenced asset:` instead of `Stub-creating:`). This matters because the syllabus and content phases both run *before* the asset walk, so a syllabus or page link to a not-yet-uploaded asset always arrives here first; before this branch existed it aborted the whole run. The upload records `last_synced`, so the later asset walk skips the file as already synced. `assets_root` is `<repo>/assets` — safe because `"file"` is only ever inferred from an `assets/` path (`link_rewrite._FOLDER_TO_TYPE`).
 
 **Manifest flushing:**
 
@@ -167,10 +169,33 @@ Syncing module: modules/week-1.md
 ## `update` Subcommand
 
 ```text
-Usage: github-to-canvas update [OPTIONS] REPO
+Usage: github-to-canvas update [OPTIONS] [REPO]
 ```
 
-`REPO` is the only required argument — a positional path to the course content repo. There is no `--repo` flag.
+`REPO` is a positional path to the course content repo; there is no `--repo` flag. It is
+optional — see [Repo-root resolution](#repo-root-resolution) below.
+
+### Repo-root resolution
+
+`update` and `publish` both resolve their repo argument through `_resolve_repo()` in
+`cli.py`, which delegates to `find_repo_root()` in `config.py`:
+
+- **Argument given** — used exactly as typed, with no walking up. A wrong path still fails
+  with the missing `course_settings/canvas.toml`, rather than silently acting on some
+  parent directory the user did not mean.
+- **Argument omitted** — walk up from the current working directory looking for
+  `course_settings/course_settings.toml`, so the command can be run from any subdirectory
+  of the course repo. If no repo encloses the cwd, the command exits with a message
+  telling the user to pass the path explicitly.
+
+`find_repo_root()` lives in `config.py` because it encodes knowledge of the
+`course_settings/` layout. `mv.py` re-exports it (`from .config import find_repo_root`) —
+`mv` has always derived its repo root this way, from the source/dest paths rather than the
+cwd, and that behavior is unchanged.
+
+`import` deliberately does *not* participate: its `OUTPUT_DIR` names a repo to be
+**created** (it writes `course_settings/` itself and requires an empty or new directory),
+so searching for an existing enclosing repo would be backwards.
 
 ## CLI Options
 
@@ -505,7 +530,8 @@ never touches Canvas, the API, or `.canvas-manifest.toml`.
 github-to-canvas publish [COURSE_DIR] [--output-dir site] [--deploy] [--emit-workflow]
 ```
 
-- `COURSE_DIR`: the course content repo (defaults to `.`)
+- `COURSE_DIR`: the course content repo. If omitted, resolved by walking up from the current
+  directory — see [Repo-root resolution](#repo-root-resolution)
 - `--output-dir`: where `mkdocs build` writes the static HTML (default: `site/`)
 - `--deploy`: run `mkdocs gh-deploy` (push to the repo's `gh-pages` branch) instead of a local build
 - `--emit-workflow`: also write a starter `.github/workflows/publish.yml` into the course repo
@@ -1054,6 +1080,7 @@ published: true
 - Canvas modules hold a flat ordered list of items. The tool syncs this by comparing the desired item list (derived from the Markdown) against the current Canvas module items and adding, removing, or reordering as needed.
 - The manifest tracks both the module's Canvas ID and the Canvas item IDs within it (needed to reorder or delete individual items).
 - If any item cannot be added (e.g., its file was never synced so it has no manifest entry), the module's manifest entry is written **without** `last_synced` (`record(..., mark_synced=False)`) — the Canvas ID is kept so the next run updates the same module instead of duplicating it, but the module stays stale and is retried on the next `update`.
+- **Module-publish cascade conflict warning:** In Canvas a module's publish state cascades to its contents — `create_or_update_module(..., published=False)` (from a module file's `published: false` frontmatter) unpublishes not just the module but the underlying content of every item in it (pages, assignments, discussions, quizzes). Content is synced *before* modules, so a page uploaded with `published: true` is silently flipped back to unpublished when its module syncs — the module always wins, and the run still reports success. `_warn_module_publish_conflicts(ctx, title, items)` (called from `_sync_module()` only when the module's own `published` is `False`) surfaces this: for each `content` item whose `local_path` ends in `.md` and whose resolved `published` is `True`, it prints an inline `WARNING` and appends `(module_title, item_title, local_key)` to `ctx.publish_conflicts`, which `_print_publish_conflicts_summary()` lists at the end of the run (a **soft** warning like pinned/unpublishable — never added to `ctx.errors`, so the run still succeeds). Only `.md` content is checked: assets (Files) have no `published:` frontmatter to conflict with (their historical module-item default is "published", but there is no stated intent for the module to override), and ExternalUrl/SubHeader items have no underlying content. The check runs on parsed frontmatter, so it fires in `update --check-all` (dry-run) too. Sibling items do **not** affect each other, and links between files do **not** change publish state — the module-level cascade is the only cross-resource publish interaction, so it is the only conflict warned about.
 
 ### Manifest file (`.canvas-manifest.toml`)
 

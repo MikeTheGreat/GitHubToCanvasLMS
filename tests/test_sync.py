@@ -643,6 +643,58 @@ def test_module_sync_item_order(mock_course, course_root, mocker) -> None:
     assert item_calls[4][1]["module_item"]["indent"] == 1
 
 
+def test_published_content_in_unpublished_module_warns(
+    mock_course, course_root, mocker, capsys
+) -> None:
+    """Published .md items inside a published: false module are flagged.
+
+    Canvas's module-level unpublish cascades to the underlying content, so a
+    page/assignment/discussion whose own frontmatter says published: true is
+    silently unpublished when the module syncs. All three content types are
+    reported; the asset (no published: frontmatter) is not.
+    """
+    mocker.patch("github_to_canvas.manifest.flush")
+    module_md = course_root / "modules" / "week-1.md"
+    module_md.write_text(
+        module_md.read_text().replace("published: true", "published: false")
+    )
+    _setup_first_sync_mocks(mock_course)
+
+    run_sync(_config(), course_root)
+
+    out = capsys.readouterr().out
+    # Inline warning, emitted as the module syncs.
+    assert "has published: true, but" in out
+    assert 'module "Week 1: Introduction" has published: false' in out
+    assert "will be UNPUBLISHED after sync" in out
+    # End-of-run summary lists every conflicting content type — and only those
+    # three: the asset (fig.png) carries no published: intent to override.
+    summary_lines = [
+        line for line in out.splitlines()
+        if line.strip().startswith('In module "Week 1: Introduction":')
+    ]
+    assert len(summary_lines) == 3
+    joined = "\n".join(summary_lines)
+    assert "(pages/syllabus.md)" in joined
+    assert "(assignments/week1.md)" in joined
+    assert "(discussions/week1-intro.md)" in joined
+    assert "fig.png" not in joined
+
+
+def test_published_content_in_published_module_no_warning(
+    mock_course, course_root, mocker, capsys
+) -> None:
+    """The fixture module is published: true, so no publish-conflict warning."""
+    mocker.patch("github_to_canvas.manifest.flush")
+    _setup_first_sync_mocks(mock_course)
+
+    run_sync(_config(), course_root)
+
+    out = capsys.readouterr().out
+    assert "will be UNPUBLISHED after sync" not in out
+    assert "asks to be published" not in out
+
+
 # ---------------------------------------------------------------------------
 # Scenario 5b: Module re-synced when referenced content is updated
 # ---------------------------------------------------------------------------
@@ -3506,17 +3558,17 @@ def test_prune_manifest_only_no_orphans_is_noop(
 
 
 # ---------------------------------------------------------------------------
-# Ignore files (.gitignore / .canvasignore)
+# Ignore files (.canvasignore)
 # ---------------------------------------------------------------------------
 
 
 def test_ignored_asset_not_uploaded(mock_course, course_root, mocker) -> None:
-    """A stray file matched by .gitignore (e.g. a Word temp file) is skipped."""
+    """A stray file matched by .canvasignore (e.g. a Word temp file) is skipped."""
     mocker.patch("github_to_canvas.manifest.flush")
     _setup_first_sync_mocks(mock_course)
     # Simulate a Word backup file sitting next to a real asset.
     (course_root / "assets" / "~$logo.docx").write_text("junk")
-    (course_root / ".gitignore").write_text("~$*\n")
+    (course_root / ".canvasignore").write_text("~$*\n")
 
     run_sync(_config(), course_root)
 
@@ -3524,6 +3576,19 @@ def test_ignored_asset_not_uploaded(mock_course, course_root, mocker) -> None:
     mock_course.upload.assert_called_once()
     uploaded_path = mock_course.upload.call_args[0][0]
     assert uploaded_path.endswith("fig.png")
+
+
+def test_gitignore_not_consulted(mock_course, course_root, mocker) -> None:
+    """A file matched only by .gitignore is still uploaded — .gitignore is ignored."""
+    mocker.patch("github_to_canvas.manifest.flush")
+    _setup_first_sync_mocks(mock_course)
+    (course_root / "assets" / "~$logo.docx").write_text("junk")
+    (course_root / ".gitignore").write_text("~$*\n")
+
+    run_sync(_config(), course_root)
+
+    # Both assets upload: .gitignore no longer excludes the temp file.
+    assert mock_course.upload.call_count == 2
 
 
 def test_ignored_asset_uploaded_without_ignore_file(mock_course, course_root, mocker) -> None:
