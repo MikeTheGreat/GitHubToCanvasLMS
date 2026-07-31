@@ -1,40 +1,5 @@
 {
   "permissions": {
-    "allow": [
-      "Bash(*)",
-      "Edit(*)",
-      "Write(*)",
-      "Read(*)",
-      "WebFetch(*)",
-      "Bash(cp /tmp/claude-1000/-home-mike-Dropbox-Personal-Tech-GitHubToCanvasLMS-GitHubToCanvasLMS/5c2615a5-ecfb-4419-948f-5c3a1a900ac8/scratchpad/settings.json.current .claude/settings.json && git stash list)",
-      "Bash(git worktree *)",
-      "Bash(grep -n \"Quiz \\(\\\\`quizzes/\\\\`\\)\" README.md)",
-      "Bash(awk 'NR<1900 && /^def /{name=$0; line=NR} END{}' src/github_to_canvas/sync.py)",
-      "Bash(uv tool *)",
-      "Bash(grep -n \"^$\" /home/mike/Dropbox/Personal/Tech/GitHubToCanvasLMS/GitHubToCanvasLMS/TODO.md)",
-      "Bash(python -m pytest tests/test_conditionals.py -q)",
-      "Bash(python -m pytest tests/test_due_dates.py tests/test_conditionals.py -q)",
-      "Bash(python -m ruff check src/github_to_canvas/conditionals.py src/github_to_canvas/sync.py src/github_to_canvas/publish.py src/github_to_canvas/cli.py)",
-      "Bash(awk '/title = \"115 Assignments Rubric\"/{f=1} f{print} f && /^\\\\[\\\\[rubrics\\\\]\\\\]/ && !/115 Assignments/ && NR>1 && p{exit} {p=1}' \"/home/mike/Dropbox/Work/Courses/_IT_CS_115/IT-CS-115-mpanitz-repo/course_settings/rubrics.toml\")",
-      "Bash(python -m pytest tests/test_sync.py -k \"rubric\" -q)",
-      "Bash(python -m pytest tests/test_sync.py -q)",
-      "Bash(grep -n \"^#\\\\{2,4\\\\} \" /home/mike/Dropbox/Personal/Tech/GitHubToCanvasLMS/GitHubToCanvasLMS/README.md)",
-      "Bash(grep -n \"^#\\\\{1,3\\\\} \" /home/mike/Dropbox/Personal/Tech/GitHubToCanvasLMS/GitHubToCanvasLMS/ARCHITECTURE.md)",
-      "Bash(grep -o '\"content\":\"[^\"]\\\\{0,200\\\\}' /home/mike/Dropbox/Personal/Tech/GitHubToCanvasLMS/GitHubToCanvasLMS/.claude-conversations/0f298248-2e44-4bf8-b2eb-808171264c5a.jsonl)",
-      "Bash(bash -lc 'echo \"login shell has token: ${CANVAS_API_TOKEN:+yes}\"')",
-      "Bash(rm /tmp/claude-1000/-home-mike-Dropbox-Personal-Tech-GitHubToCanvasLMS-GitHubToCanvasLMS/7a05b311-1b41-4a6e-a366-ee2843847e8f/scratchpad/demo-course/pages/broken.md)",
-      "Bash(env -u CANVAS_API_TOKEN uv run --project /home/mike/Dropbox/Personal/Tech/GitHubToCanvasLMS/GitHubToCanvasLMS github-to-canvas update demo-course --check-all)",
-      "Bash(github-to-canvas --version)",
-      "Bash(github-to-canvas update *)",
-      "Bash(env COMP_WORDS=\"github-to-canvas update --check\" COMP_CWORD=2 _GITHUB_TO_CANVAS_COMPLETE=bash_complete github-to-canvas)",
-      "Bash(/home/mike/.local/bin/github-to-canvas update *)",
-      "Bash(git -C /home/mike/Dropbox/Personal/Tech/GitHubToCanvasLMS/GitHubToCanvasLMS log --oneline -- src/github_to_canvas/cli.py)",
-      "Bash(dpkg -l | grep bash-completion; echo \"---\"; grep -n \"BASH_COMPLETION_USER_DIR\\\\|XDG_DATA_HOME\" /usr/share/bash-completion/bash_completion 2>/dev/null | head -20)",
-      "Read(//usr/share/bash-completion/**)"
-    ],
-    "defaultMode": "bypassPermissions",
-    "additionalDirectories": [
-      "/home/mike/Dropbox/Personal/Tech/GitHubToCanvasLMS/GitHubToCanvasLMS/.claude"
-    ]
+    "defaultMode": "auto"
   }
 }
