@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from github_to_canvas.imscc_import import (
+from markdown_to_canvas.imscc_import import (
     open_imscc,
     parse_imsmanifest,
     run_import,
@@ -1002,7 +1002,7 @@ def test_run_import_does_not_replace_course_id_outside_url(imported_dir: Path) -
 
 def test_run_import_snippet_roundtrip(imported_dir: Path) -> None:
     """After import, preprocess_snippets on a generated page produces the real Canvas URL."""
-    from github_to_canvas.convert import preprocess_snippets
+    from markdown_to_canvas.convert import preprocess_snippets
 
 
     page = imported_dir / "pages" / "my-page.md"
@@ -1073,7 +1073,7 @@ def test_run_import_canvas_course_id_token_becomes_snippet(imported_dir: Path) -
 
 def test_run_import_canvas_course_id_snippet_roundtrip(imported_dir: Path) -> None:
     """After import, preprocess_snippets expands the $CANVAS_COURSE_ID$-derived link to the real URL."""
-    from github_to_canvas.convert import preprocess_snippets
+    from markdown_to_canvas.convert import preprocess_snippets
 
 
     page = imported_dir / "pages" / "my-page.md"
@@ -1131,7 +1131,7 @@ def test_run_import_canvas_course_reference_token_becomes_snippet(imported_dir: 
 
 def test_run_import_canvas_course_reference_snippet_roundtrip(imported_dir: Path) -> None:
     """After import, preprocess_snippets expands the $CANVAS_COURSE_REFERENCE$-derived link."""
-    from github_to_canvas.convert import preprocess_snippets
+    from markdown_to_canvas.convert import preprocess_snippets
 
 
     page = imported_dir / "pages" / "my-page.md"

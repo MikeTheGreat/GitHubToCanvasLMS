@@ -790,10 +790,10 @@ jobs:
           python-version: "3.11"
       - name: Install Pandoc
         run: sudo apt-get update && sudo apt-get install -y pandoc
-      - name: Install github-to-canvas
-        run: pip install "github-to-canvas[publish] @ git+https://github.com/MikeTheGreat/GitHubToCanvasLMS"
+      - name: Install markdown-to-canvas
+        run: pip install "markdown-to-canvas[publish] @ git+https://github.com/MikeTheGreat/MarkdownToCanvasLMS"
       - name: Build site
-        run: github-to-canvas publish .
+        run: markdown-to-canvas publish .
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
         with:
@@ -863,7 +863,7 @@ def _run_mkdocs(args: list[str], staging_dir: Path, cwd: Path) -> None:
     if importlib.util.find_spec("mkdocs") is None:
         raise ValueError(
             "mkdocs is not installed. Install the publish extra with "
-            "`uv tool install github-to-canvas[publish]` (or `pip install mkdocs mkdocs-material`)."
+            "`uv tool install markdown-to-canvas[publish]` (or `pip install mkdocs mkdocs-material`)."
         )
     cmd = [sys.executable, "-m", "mkdocs", *args, "-f", str(staging_dir / "mkdocs.yml")]
     print(f"Running: {' '.join(cmd)}")
@@ -872,7 +872,7 @@ def _run_mkdocs(args: list[str], staging_dir: Path, cwd: Path) -> None:
     except FileNotFoundError:
         raise ValueError(
             "mkdocs is not installed. Install the publish extra with "
-            "`uv tool install github-to-canvas[publish]` (or `pip install mkdocs mkdocs-material`)."
+            "`uv tool install markdown-to-canvas[publish]` (or `pip install mkdocs mkdocs-material`)."
         )
     except subprocess.CalledProcessError as exc:
         raise ValueError(f"mkdocs failed with exit code {exc.returncode}.")

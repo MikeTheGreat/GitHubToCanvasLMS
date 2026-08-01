@@ -319,6 +319,22 @@ and `mv` (see ARCHITECTURE.md → import/update). Remaining nice-to-have:
 - maybe on the syllabus page, like in Canvas?
   - Rename to Syllabus + Schedule
 
+## Pin the emitted `publish.yml` to a release tag instead of `HEAD`
+
+`emit_workflow()` in `publish.py` writes a GitHub Actions workflow whose install
+step is `pip install "markdown-to-canvas[publish] @ git+https://github.com/MikeTheGreat/MarkdownToCanvasLMS"`
+— with **no ref**. So every course repo's CI tracks this repo's `HEAD`, and any
+breaking change here (a rename, a CLI flag removal) silently breaks every course
+site's next deploy. This is exactly what bit the 2026-08-01 rename: the course
+repo's build failed at the `pip install` step because the distribution metadata
+name no longer matched what the workflow asked for.
+
+Pinning to a release tag (`@v0.2.0`) would fix it, but that needs a release
+process — tagging, and a decision about how course repos get told to bump. Both
+of which don't exist yet.
+
+Effort: small for the pin itself; the release process is the real work.
+
 ## Optional: block *all* outbound HTTP in tests, not just `requests.put`
 
 `tests/conftest.py` patches only `requests.put` (the one raw-requests call in

@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from github_to_canvas.convert import (
+from markdown_to_canvas.convert import (
     expand_frontmatter_snippets,
     find_referenced_snippets,
     mark_decorative_images,

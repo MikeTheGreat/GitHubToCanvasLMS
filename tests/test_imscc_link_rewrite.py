@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import pytest
 
-from github_to_canvas.imscc_import import TempEntry, rewrite_imscc_links
+from markdown_to_canvas.imscc_import import TempEntry, rewrite_imscc_links
 
 
 def _manifest(*entries: TempEntry) -> dict[str, TempEntry]:

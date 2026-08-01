@@ -17,8 +17,8 @@ from unittest.mock import MagicMock
 import pytest
 from click.testing import CliRunner
 
-from github_to_canvas.config import Config
-from github_to_canvas.sync import run_sync
+from markdown_to_canvas.config import Config
+from markdown_to_canvas.sync import run_sync
 
 FIXTURES = Path(__file__).parent / "fixtures"
 COURSE_ID = 999
@@ -44,7 +44,7 @@ def course_root(tmp_path: Path) -> Path:
 def no_canvas(mocker) -> None:
     """Fail the test if anything tries to construct a Canvas connection."""
     mocker.patch(
-        "github_to_canvas.canvas_api.Canvas",
+        "markdown_to_canvas.canvas_api.Canvas",
         side_effect=AssertionError("check-all must not contact Canvas"),
     )
 
@@ -202,7 +202,7 @@ def test_check_all_syllabus_link_gets_stub(course_root, no_canvas, capsys) -> No
 def test_syllabus_link_stub_created_on_real_first_sync(course_root, tmp_path) -> None:
     """Same regression on the real path: sync_syllabus with an empty manifest
     stub-creates the referenced page and rewrites the link to a Canvas URL."""
-    from github_to_canvas.sync import SyncContext, sync_syllabus
+    from markdown_to_canvas.sync import SyncContext, sync_syllabus
 
     cs_dir = course_root / "course_settings"
     cs_dir.mkdir(exist_ok=True)
@@ -262,7 +262,7 @@ def test_check_all_syllabus_asset_link_uploads_instead_of_stubbing(
 def test_syllabus_asset_uploaded_on_real_first_sync(course_root, tmp_path) -> None:
     """Same regression on the real path: the asset is uploaded through
     course.upload() and the syllabus link points at the returned Canvas URL."""
-    from github_to_canvas.sync import SyncContext, sync_syllabus
+    from markdown_to_canvas.sync import SyncContext, sync_syllabus
 
     cs_dir = course_root / "course_settings"
     cs_dir.mkdir(exist_ok=True)
@@ -309,7 +309,7 @@ def _write_canvas_toml(course_root: Path) -> None:
 
 
 def test_cli_check_all_rejects_targeting_flags(course_root) -> None:
-    from github_to_canvas.cli import main
+    from markdown_to_canvas.cli import main
 
     runner = CliRunner()
     result = runner.invoke(
@@ -325,7 +325,7 @@ def test_cli_check_all_rejects_targeting_flags(course_root) -> None:
 
 def test_cli_check_all_success_without_token(course_root, no_canvas, monkeypatch) -> None:
     """--check-all needs no API token and exits 0 on a clean repo."""
-    from github_to_canvas.cli import main
+    from markdown_to_canvas.cli import main
 
     _write_canvas_toml(course_root)
     monkeypatch.delenv("CANVAS_API_TOKEN", raising=False)
@@ -339,7 +339,7 @@ def test_cli_check_all_success_without_token(course_root, no_canvas, monkeypatch
 
 
 def test_cli_check_all_exit_code_on_problems(course_root, no_canvas, monkeypatch) -> None:
-    from github_to_canvas.cli import main
+    from markdown_to_canvas.cli import main
 
     _write_canvas_toml(course_root)
     monkeypatch.delenv("CANVAS_API_TOKEN", raising=False)

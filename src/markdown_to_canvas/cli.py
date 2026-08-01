@@ -57,7 +57,7 @@ def _ensure_pandoc() -> None:
     try:
         pypandoc.get_pandoc_version()
     except OSError:
-        die("Pandoc not found. Run `github-to-canvas setup` to install it.")
+        die("Pandoc not found. Run `markdown-to-canvas setup` to install it.")
 
 
 def _handle_cli_errors(func):
@@ -96,7 +96,7 @@ class _FullHelpGroup(click.Group):
 
 @click.group(cls=_FullHelpGroup, context_settings={"help_option_names": ["-h", "--help"]})
 def main() -> None:
-    """Manage Canvas LMS course content from a Markdown GitHub repo."""
+    """Manage Canvas LMS course content from a Markdown repo."""
 
 
 @main.command(name="setup")
@@ -146,7 +146,7 @@ def _completion_path(shell: str, prog_name: str) -> Path:
     help="Shell to install completion for (auto-detected from $SHELL if omitted).",
 )
 def install_completion(shell: str | None) -> None:
-    """Install shell tab-completion for github-to-canvas."""
+    """Install shell tab-completion for markdown-to-canvas."""
     from click.shell_completion import BashComplete, FishComplete, ZshComplete
 
     if shell is None:
@@ -154,8 +154,8 @@ def install_completion(shell: str | None) -> None:
 
     comp_cls = {"bash": BashComplete, "zsh": ZshComplete, "fish": FishComplete}[shell]
 
-    prog_name = "github-to-canvas"
-    complete_var = "_GITHUB_TO_CANVAS_COMPLETE"
+    prog_name = "markdown-to-canvas"
+    complete_var = "_MARKDOWN_TO_CANVAS_COMPLETE"
     comp = comp_cls(cli=main, ctx_args={}, prog_name=prog_name, complete_var=complete_var)
     script = comp.source()
 

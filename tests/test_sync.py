@@ -10,8 +10,8 @@ from unittest.mock import MagicMock, call
 import pytest
 from canvasapi.exceptions import ResourceDoesNotExist
 
-from github_to_canvas.config import Config
-from github_to_canvas.sync import (
+from markdown_to_canvas.config import Config
+from markdown_to_canvas.sync import (
     check_title_collisions,
     compute_settings_section_hashes,
     find_pinned_match,
@@ -93,7 +93,7 @@ def course_root(tmp_path: Path) -> Path:
 @pytest.fixture
 def mock_course(mocker) -> MagicMock:
     """Patch canvasapi.Canvas; return the mock course object."""
-    mock_canvas_cls = mocker.patch("github_to_canvas.canvas_api.Canvas")
+    mock_canvas_cls = mocker.patch("markdown_to_canvas.canvas_api.Canvas")
     course = MagicMock()
     mock_canvas_cls.return_value.get_course.return_value = course
     return course
@@ -185,7 +185,7 @@ def test_parse_module_body_empty() -> None:
 
 
 def test_first_sync_creates_all_content(mock_course, course_root, mocker) -> None:
-    mocker.patch("github_to_canvas.manifest.flush")
+    mocker.patch("markdown_to_canvas.manifest.flush")
     _setup_first_sync_mocks(mock_course)
 
     run_sync(_config(), course_root)
@@ -203,7 +203,7 @@ def test_first_sync_creates_all_content(mock_course, course_root, mocker) -> Non
 
 def test_first_sync_stub_created_before_real_page(mock_course, course_root, mocker) -> None:
     """assignments/week1.md references pages/syllabus.md → stub created first."""
-    mocker.patch("github_to_canvas.manifest.flush")
+    mocker.patch("markdown_to_canvas.manifest.flush")
     stub_page = _setup_first_sync_mocks(mock_course)
 
     run_sync(_config(), course_root)
@@ -221,7 +221,7 @@ def test_first_sync_stub_created_before_real_page(mock_course, course_root, mock
 
 def test_first_sync_assignment_frontmatter_passed_to_canvas(mock_course, course_root, mocker) -> None:
     """points_possible, due_at, submission_types reach canvasapi."""
-    mocker.patch("github_to_canvas.manifest.flush")
+    mocker.patch("markdown_to_canvas.manifest.flush")
     _setup_first_sync_mocks(mock_course)
 
     run_sync(_config(), course_root)
@@ -267,7 +267,7 @@ def _announcement_create_call(mock_course):
 def test_unpublished_announcement_is_skipped_not_posted(mock_course, course_root, mocker, capsys) -> None:
     """Canvas has no draft announcements, so published:false is skipped (not created).
     The skip message is only printed in verbose mode."""
-    mocker.patch("github_to_canvas.manifest.flush")
+    mocker.patch("markdown_to_canvas.manifest.flush")
     _setup_first_sync_mocks(mock_course)
     _write_announcement(course_root, published=False)
 
@@ -283,7 +283,7 @@ def test_unpublished_announcement_is_skipped_not_posted(mock_course, course_root
 def test_unpublished_announcement_skip_message_quiet_by_default(
     mock_course, course_root, mocker, capsys
 ) -> None:
-    mocker.patch("github_to_canvas.manifest.flush")
+    mocker.patch("markdown_to_canvas.manifest.flush")
     _setup_first_sync_mocks(mock_course)
     _write_announcement(course_root, published=False)
 
@@ -298,7 +298,7 @@ def test_unpublished_announcement_skipped_before_link_rewriting(
 ) -> None:
     """The skip happens before link rewriting, so a broken link in an unpublished
     announcement is never validated (no error, no stub-creation)."""
-    mocker.patch("github_to_canvas.manifest.flush")
+    mocker.patch("markdown_to_canvas.manifest.flush")
     _setup_first_sync_mocks(mock_course)
     (course_root / "announcements").mkdir(exist_ok=True)
     (course_root / "announcements" / "midterm-reminder.md").write_text(
@@ -316,7 +316,7 @@ def test_unpublished_announcement_skipped_before_link_rewriting(
 
 def test_published_announcement_is_posted_without_published_kwarg(mock_course, course_root, mocker) -> None:
     """published:true posts the announcement; `published` is not sent (Canvas posts by default)."""
-    mocker.patch("github_to_canvas.manifest.flush")
+    mocker.patch("markdown_to_canvas.manifest.flush")
     _setup_first_sync_mocks(mock_course)
     _write_announcement(course_root, published=True)
 
@@ -333,7 +333,7 @@ def test_announcement_forwards_supported_fields_and_ignores_others(
     mock_course, course_root, mocker
 ) -> None:
     """Supported discussion-topic settings pass through; unsupported/internal keys don't."""
-    mocker.patch("github_to_canvas.manifest.flush")
+    mocker.patch("markdown_to_canvas.manifest.flush")
     _setup_first_sync_mocks(mock_course)
     _write_announcement(
         course_root,
@@ -367,7 +367,7 @@ def test_announcement_ignored_fields_warn_inline_and_in_summary(
 ) -> None:
     """Unsupported fields are warned about as they happen and listed in the summary;
     handled/supported fields (canvas_type, allow_rating) are not."""
-    mocker.patch("github_to_canvas.manifest.flush")
+    mocker.patch("markdown_to_canvas.manifest.flush")
     _setup_first_sync_mocks(mock_course)
     _write_announcement(
         course_root,
@@ -399,7 +399,7 @@ def test_announcement_no_ignored_summary_when_all_fields_supported(
     mock_course, course_root, mocker, capsys
 ) -> None:
     """A clean announcement prints no 'ignored fields' summary."""
-    mocker.patch("github_to_canvas.manifest.flush")
+    mocker.patch("markdown_to_canvas.manifest.flush")
     _setup_first_sync_mocks(mock_course)
     _write_announcement(course_root, published=True, extra={"allow_rating": "true"})
 
@@ -411,9 +411,9 @@ def test_announcement_no_ignored_summary_when_all_fields_supported(
 
 def test_announcement_recorded_with_announcement_type(mock_course, course_root, mocker) -> None:
     """The manifest records the item as canvas_type='announcement' (not 'discussion')."""
-    from github_to_canvas import manifest as manifest_mod
+    from markdown_to_canvas import manifest as manifest_mod
 
-    mocker.patch("github_to_canvas.manifest.flush")
+    mocker.patch("markdown_to_canvas.manifest.flush")
     record_spy = mocker.spy(manifest_mod, "record")
     _setup_first_sync_mocks(mock_course)
     _write_announcement(course_root, published=True)
@@ -461,8 +461,8 @@ def test_second_sync_updates_not_creates(mock_course, course_root, mocker) -> No
             "last_synced": "2025-01-01T00:00:00+00:00",
         },
     }
-    mocker.patch("github_to_canvas.manifest.load", return_value=preloaded)
-    mocker.patch("github_to_canvas.manifest.flush")
+    mocker.patch("markdown_to_canvas.manifest.load", return_value=preloaded)
+    mocker.patch("markdown_to_canvas.manifest.flush")
 
     real_page = _mock_page(11111, "syllabus")
     mock_course.get_page.return_value = real_page
@@ -509,8 +509,8 @@ def test_interrupted_sync_skips_completed_asset(mock_course, course_root, mocker
             "last_synced": "2025-01-01T00:00:00+00:00",
         },
     }
-    mocker.patch("github_to_canvas.manifest.load", return_value=partial)
-    mocker.patch("github_to_canvas.manifest.flush")
+    mocker.patch("markdown_to_canvas.manifest.load", return_value=partial)
+    mocker.patch("markdown_to_canvas.manifest.flush")
     _setup_first_sync_mocks(mock_course)
 
     run_sync(_config(), course_root)
@@ -527,7 +527,7 @@ def test_interrupted_sync_skips_completed_asset(mock_course, course_root, mocker
 def test_h1_heading_blocks_upload(
     mock_course, tmp_path: Path, mocker, capsys: pytest.CaptureFixture
 ) -> None:
-    mocker.patch("github_to_canvas.manifest.flush")
+    mocker.patch("markdown_to_canvas.manifest.flush")
     course_root = tmp_path / "course"
     (course_root / "pages").mkdir(parents=True)
     page = course_root / "pages" / "test.md"
@@ -546,7 +546,7 @@ def test_h1_heading_blocks_upload(
 def test_no_h1_heading_no_warning(
     mock_course, tmp_path: Path, mocker, capsys: pytest.CaptureFixture
 ) -> None:
-    mocker.patch("github_to_canvas.manifest.flush")
+    mocker.patch("markdown_to_canvas.manifest.flush")
     course_root = tmp_path / "course"
     (course_root / "pages").mkdir(parents=True)
     page = course_root / "pages" / "test.md"
@@ -563,7 +563,7 @@ def test_no_h1_heading_no_warning(
 def test_missing_local_file_tag_removed_sync_continues(
     mock_course, tmp_path: Path, mocker, capsys: pytest.CaptureFixture
 ) -> None:
-    mocker.patch("github_to_canvas.manifest.flush")
+    mocker.patch("markdown_to_canvas.manifest.flush")
     course_root = tmp_path / "course"
     (course_root / "pages").mkdir(parents=True)
     page = course_root / "pages" / "test.md"
@@ -611,8 +611,8 @@ def test_module_sync_item_order(mock_course, course_root, mocker) -> None:
             "last_synced": "2025-01-01T00:00:00+00:00",
         },
     }
-    mocker.patch("github_to_canvas.manifest.load", return_value=preloaded)
-    mocker.patch("github_to_canvas.manifest.flush")
+    mocker.patch("markdown_to_canvas.manifest.load", return_value=preloaded)
+    mocker.patch("markdown_to_canvas.manifest.flush")
 
     real_page = _mock_page(11111, "syllabus")
     mock_course.get_page.return_value = real_page
@@ -653,7 +653,7 @@ def test_published_content_in_unpublished_module_warns(
     silently unpublished when the module syncs. All three content types are
     reported; the asset (no published: frontmatter) is not.
     """
-    mocker.patch("github_to_canvas.manifest.flush")
+    mocker.patch("markdown_to_canvas.manifest.flush")
     module_md = course_root / "modules" / "week-1.md"
     module_md.write_text(
         module_md.read_text().replace("published: true", "published: false")
@@ -685,7 +685,7 @@ def test_published_content_in_published_module_no_warning(
     mock_course, course_root, mocker, capsys
 ) -> None:
     """The fixture module is published: true, so no publish-conflict warning."""
-    mocker.patch("github_to_canvas.manifest.flush")
+    mocker.patch("markdown_to_canvas.manifest.flush")
     _setup_first_sync_mocks(mock_course)
 
     run_sync(_config(), course_root)
@@ -735,8 +735,8 @@ def test_module_resynced_when_referenced_page_updated(
             "last_synced": _FUTURE_SYNCED,
         },
     }
-    mocker.patch("github_to_canvas.manifest.load", return_value=preloaded)
-    mocker.patch("github_to_canvas.manifest.flush")
+    mocker.patch("markdown_to_canvas.manifest.load", return_value=preloaded)
+    mocker.patch("markdown_to_canvas.manifest.flush")
 
     real_page = _mock_page(11111, "syllabus")
     mock_course.get_page.return_value = real_page
@@ -795,8 +795,8 @@ def test_module_not_resynced_when_referenced_content_unchanged(
             "last_synced": "2025-01-01T00:00:00+00:00",
         },
     }
-    mocker.patch("github_to_canvas.manifest.load", return_value=preloaded)
-    mocker.patch("github_to_canvas.manifest.flush")
+    mocker.patch("markdown_to_canvas.manifest.load", return_value=preloaded)
+    mocker.patch("markdown_to_canvas.manifest.flush")
 
     run_sync(_config(), course_root, verbose=True)
 
@@ -829,8 +829,8 @@ def test_up_to_date_content_file_is_skipped(mock_course, course_root, mocker, ca
             "last_synced": "2025-01-01T00:00:00+00:00",
         },
     }
-    mocker.patch("github_to_canvas.manifest.load", return_value=preloaded)
-    mocker.patch("github_to_canvas.manifest.flush")
+    mocker.patch("markdown_to_canvas.manifest.load", return_value=preloaded)
+    mocker.patch("markdown_to_canvas.manifest.flush")
 
     mock_course.create_discussion_topic.return_value = _mock_discussion(55555)
     mock_course.create_page.return_value = _mock_page(11111, "syllabus")
@@ -856,8 +856,8 @@ def test_force_uploads_re_uploads_up_to_date_file(mock_course, course_root, mock
             "last_synced": _FUTURE_SYNCED,
         },
     }
-    mocker.patch("github_to_canvas.manifest.load", return_value=preloaded)
-    mocker.patch("github_to_canvas.manifest.flush")
+    mocker.patch("markdown_to_canvas.manifest.load", return_value=preloaded)
+    mocker.patch("markdown_to_canvas.manifest.flush")
     mock_course.upload.return_value = (
         True,
         {"id": 77777, "url": "https://school.instructure.com/files/77777/download"},
@@ -890,8 +890,8 @@ def test_canvas_newer_skips_upload_and_prints_summary(
             "last_synced": "2025-01-01T00:00:00+00:00",
         },
     }
-    mocker.patch("github_to_canvas.manifest.load", return_value=preloaded)
-    mocker.patch("github_to_canvas.manifest.flush")
+    mocker.patch("markdown_to_canvas.manifest.load", return_value=preloaded)
+    mocker.patch("markdown_to_canvas.manifest.flush")
 
     page_mock = _mock_page(11111, "syllabus")
     page_mock.updated_at = "2999-12-31T00:00:00+00:00"  # Canvas far in future → newer
@@ -916,8 +916,8 @@ def test_canvas_older_upload_proceeds(mock_course, course_root, mocker) -> None:
             "last_synced": "2025-01-01T00:00:00+00:00",
         },
     }
-    mocker.patch("github_to_canvas.manifest.load", return_value=preloaded)
-    mocker.patch("github_to_canvas.manifest.flush")
+    mocker.patch("markdown_to_canvas.manifest.load", return_value=preloaded)
+    mocker.patch("markdown_to_canvas.manifest.flush")
 
     page_mock = _mock_page(11111, "syllabus")
     page_mock.updated_at = "2020-01-01T00:00:00+00:00"  # Canvas is old → local file is newer
@@ -937,8 +937,8 @@ def test_force_overwrite_skips_canvas_check_and_uploads(mock_course, course_root
             "last_synced": "2025-01-01T00:00:00+00:00",
         },
     }
-    mocker.patch("github_to_canvas.manifest.load", return_value=preloaded)
-    mocker.patch("github_to_canvas.manifest.flush")
+    mocker.patch("markdown_to_canvas.manifest.load", return_value=preloaded)
+    mocker.patch("markdown_to_canvas.manifest.flush")
 
     page_mock = _mock_page(11111, "syllabus")
     page_mock.updated_at = "2999-12-31T00:00:00+00:00"  # Canvas "newer" but should be ignored
@@ -963,8 +963,8 @@ def test_canvas_newer_skips_asset_upload(mock_course, course_root, mocker) -> No
             "last_synced": "2025-01-01T00:00:00+00:00",
         },
     }
-    mocker.patch("github_to_canvas.manifest.load", return_value=preloaded)
-    mocker.patch("github_to_canvas.manifest.flush")
+    mocker.patch("markdown_to_canvas.manifest.load", return_value=preloaded)
+    mocker.patch("markdown_to_canvas.manifest.flush")
 
     file_mock = MagicMock()
     file_mock.updated_at = "2999-12-31T00:00:00+00:00"  # Canvas far in future → newer
@@ -985,7 +985,7 @@ def test_canvas_newer_skips_asset_upload(mock_course, course_root, mocker) -> No
 
 def test_single_target_syncs_only_specified_file(mock_course, course_root, mocker) -> None:
     """--single-target syncs the given file and nothing else."""
-    mocker.patch("github_to_canvas.manifest.flush")
+    mocker.patch("markdown_to_canvas.manifest.flush")
     mock_course.create_assignment.return_value = _mock_assignment(98765)
     mock_course.create_page.return_value = _mock_page(99999, "syllabus-stub")
 
@@ -1003,7 +1003,7 @@ def test_single_target_syncs_only_specified_file(mock_course, course_root, mocke
 
 def test_single_target_frontmatter_snippet_merged(mock_course, course_root, mocker) -> None:
     """A PASTE_SNIPPET_INTO_FRONTMATTER reference merges shared defaults into frontmatter."""
-    mocker.patch("github_to_canvas.manifest.flush")
+    mocker.patch("markdown_to_canvas.manifest.flush")
     mock_course.create_assignment.return_value = _mock_assignment(98765)
 
     (course_root / "snippets" / "worksheet-defaults.md").write_text(
@@ -1040,8 +1040,8 @@ def test_single_target_respects_timestamp(mock_course, course_root, mocker, caps
             "last_synced": "2025-01-01T00:00:00+00:00",
         },
     }
-    mocker.patch("github_to_canvas.manifest.load", return_value=preloaded)
-    mocker.patch("github_to_canvas.manifest.flush")
+    mocker.patch("markdown_to_canvas.manifest.load", return_value=preloaded)
+    mocker.patch("markdown_to_canvas.manifest.flush")
 
     run_targeted_sync(
         _config(), course_root,
@@ -1067,7 +1067,7 @@ def test_recursive_target_traverses_refs(mock_course, course_root, mocker) -> No
     BFS defers the module until after all its referenced content is processed,
     so add_module_item can look up canvas IDs from the manifest.
     """
-    mocker.patch("github_to_canvas.manifest.flush")
+    mocker.patch("markdown_to_canvas.manifest.flush")
 
     real_page = _mock_page(11111, "syllabus")
     mock_course.create_page.return_value = real_page
@@ -1103,7 +1103,7 @@ def test_recursive_target_no_duplicate_processing(mock_course, course_root, mock
     # Make the file old so -t definitely uploads it (not in manifest, needs_sync=True),
     # setting last_synced=now. When -s runs, file_mtime=0 < last_synced=now → skipped.
     _make_old(course_root / "pages" / "syllabus.md")
-    mocker.patch("github_to_canvas.manifest.flush")
+    mocker.patch("markdown_to_canvas.manifest.flush")
     mock_course.create_page.return_value = _mock_page(11111, "syllabus")
     mock_course.create_assignment.return_value = _mock_assignment(98765)
 
@@ -1163,7 +1163,7 @@ def _quiz_course_root(tmp_path: Path) -> Path:
 
 
 def test_quiz_sync_creates_quiz_on_first_sync(mock_course, mocker, tmp_path) -> None:
-    mocker.patch("github_to_canvas.manifest.flush")
+    mocker.patch("markdown_to_canvas.manifest.flush")
     root = _quiz_course_root(tmp_path)
     quiz = _mock_quiz(12345)
     mock_course.create_quiz.return_value = quiz
@@ -1200,8 +1200,8 @@ def test_quiz_sync_updates_quiz_on_second_sync(mock_course, mocker, tmp_path) ->
             "canvas_question_ids": {},
         },
     }
-    mocker.patch("github_to_canvas.manifest.load", return_value=preloaded)
-    mocker.patch("github_to_canvas.manifest.flush")
+    mocker.patch("markdown_to_canvas.manifest.load", return_value=preloaded)
+    mocker.patch("markdown_to_canvas.manifest.flush")
     quiz = _mock_quiz(12345)
     mock_course.get_quiz.return_value = quiz
     quiz.create_question.side_effect = [_mock_quiz_question(i) for i in [101, 102]]
@@ -1230,8 +1230,8 @@ def test_published_quiz_update_warns_about_manual_save(
             "canvas_question_ids": {},
         },
     }
-    mocker.patch("github_to_canvas.manifest.load", return_value=preloaded)
-    mocker.patch("github_to_canvas.manifest.flush")
+    mocker.patch("markdown_to_canvas.manifest.load", return_value=preloaded)
+    mocker.patch("markdown_to_canvas.manifest.flush")
     quiz = _mock_quiz(12345, published=True)
     mock_course.get_quiz.return_value = quiz
     quiz.create_question.side_effect = [_mock_quiz_question(i) for i in [101, 102]]
@@ -1252,8 +1252,8 @@ def test_unpublished_quiz_update_does_not_warn(mock_course, mocker, tmp_path, ca
             "canvas_question_ids": {},
         },
     }
-    mocker.patch("github_to_canvas.manifest.load", return_value=preloaded)
-    mocker.patch("github_to_canvas.manifest.flush")
+    mocker.patch("markdown_to_canvas.manifest.load", return_value=preloaded)
+    mocker.patch("markdown_to_canvas.manifest.flush")
     quiz = _mock_quiz(12345, published=False)
     mock_course.get_quiz.return_value = quiz
     quiz.create_question.side_effect = [_mock_quiz_question(i) for i in [101, 102]]
@@ -1272,8 +1272,8 @@ def test_quiz_deleted_on_canvas_is_recreated(mock_course, mocker, tmp_path, caps
             "canvas_question_ids": {},
         },
     }
-    mocker.patch("github_to_canvas.manifest.load", return_value=preloaded)
-    mocker.patch("github_to_canvas.manifest.flush")
+    mocker.patch("markdown_to_canvas.manifest.load", return_value=preloaded)
+    mocker.patch("markdown_to_canvas.manifest.flush")
     new_quiz = _mock_quiz(99999)
     mock_course.create_quiz.return_value = new_quiz
     new_quiz.create_question.side_effect = [_mock_quiz_question(i) for i in [101, 102]]
@@ -1292,7 +1292,7 @@ def test_quiz_deleted_on_canvas_is_recreated(mock_course, mocker, tmp_path, caps
 
 
 def test_quiz_questions_created_in_order(mock_course, mocker, tmp_path) -> None:
-    mocker.patch("github_to_canvas.manifest.flush")
+    mocker.patch("markdown_to_canvas.manifest.flush")
     root = _quiz_course_root(tmp_path)
     quiz = _mock_quiz(12345)
     mock_course.create_quiz.return_value = quiz
@@ -1324,8 +1324,8 @@ def test_quiz_skipped_if_up_to_date(mock_course, mocker, tmp_path, capsys) -> No
             "canvas_question_ids": {},
         },
     }
-    mocker.patch("github_to_canvas.manifest.load", return_value=preloaded)
-    mocker.patch("github_to_canvas.manifest.flush")
+    mocker.patch("markdown_to_canvas.manifest.load", return_value=preloaded)
+    mocker.patch("markdown_to_canvas.manifest.flush")
 
     run_sync(_config(), root, verbose=True)
 
@@ -1347,8 +1347,8 @@ def test_quiz_resynced_when_question_file_updated(mock_course, mocker, tmp_path)
             "canvas_question_ids": {},
         },
     }
-    mocker.patch("github_to_canvas.manifest.load", return_value=preloaded)
-    mocker.patch("github_to_canvas.manifest.flush")
+    mocker.patch("markdown_to_canvas.manifest.load", return_value=preloaded)
+    mocker.patch("markdown_to_canvas.manifest.flush")
     quiz = _mock_quiz(12345)
     mock_course.get_quiz.return_value = quiz
     quiz.create_question.side_effect = [_mock_quiz_question(i) for i in [101, 102]]
@@ -1389,8 +1389,8 @@ def test_quiz_resynced_when_referenced_snippet_updated(mock_course, mocker, tmp_
             "canvas_question_ids": {},
         },
     }
-    mocker.patch("github_to_canvas.manifest.load", return_value=preloaded)
-    mocker.patch("github_to_canvas.manifest.flush")
+    mocker.patch("markdown_to_canvas.manifest.load", return_value=preloaded)
+    mocker.patch("markdown_to_canvas.manifest.flush")
     quiz = _mock_quiz(12345)
     mock_course.get_quiz.return_value = quiz
     quiz.create_question.side_effect = [_mock_quiz_question(i) for i in [101, 102]]
@@ -1421,8 +1421,8 @@ def test_quiz_module_item_type_is_quiz(mock_course, mocker, tmp_path) -> None:
             "last_synced": _FUTURE_SYNCED,
         },
     }
-    mocker.patch("github_to_canvas.manifest.load", return_value=preloaded)
-    mocker.patch("github_to_canvas.manifest.flush")
+    mocker.patch("markdown_to_canvas.manifest.load", return_value=preloaded)
+    mocker.patch("markdown_to_canvas.manifest.flush")
     module = _mock_module(66666)
     mock_course.create_module.return_value = module
     module.create_module_item.return_value = _mock_item(201)
@@ -1437,7 +1437,7 @@ def test_quiz_module_item_type_is_quiz(mock_course, mocker, tmp_path) -> None:
 
 def test_file_module_item_type_is_file(mock_course, mocker, tmp_path) -> None:
     """A module that references an asset file creates a File-type module item."""
-    mocker.patch("github_to_canvas.manifest.flush")
+    mocker.patch("markdown_to_canvas.manifest.flush")
     root = tmp_path / "course"
     (root / "modules").mkdir(parents=True)
     (root / "assets").mkdir()
@@ -1453,7 +1453,7 @@ def test_file_module_item_type_is_file(mock_course, mocker, tmp_path) -> None:
             "last_synced": _FUTURE_SYNCED,
         },
     }
-    mocker.patch("github_to_canvas.manifest.load", return_value=preloaded)
+    mocker.patch("markdown_to_canvas.manifest.load", return_value=preloaded)
     module = _mock_module(66666)
     mock_course.create_module.return_value = module
     module.create_module_item.return_value = _mock_item(201)
@@ -1468,7 +1468,7 @@ def test_file_module_item_type_is_file(mock_course, mocker, tmp_path) -> None:
 
 def test_unpublished_file_item_warns(mock_course, mocker, tmp_path, capsys) -> None:
     """An unpublished File module item prints a summary warning at the end."""
-    mocker.patch("github_to_canvas.manifest.flush")
+    mocker.patch("markdown_to_canvas.manifest.flush")
     root = tmp_path / "course"
     (root / "modules").mkdir(parents=True)
     (root / "assets").mkdir()
@@ -1484,7 +1484,7 @@ def test_unpublished_file_item_warns(mock_course, mocker, tmp_path, capsys) -> N
             "last_synced": _FUTURE_SYNCED,
         },
     }
-    mocker.patch("github_to_canvas.manifest.load", return_value=preloaded)
+    mocker.patch("markdown_to_canvas.manifest.load", return_value=preloaded)
     module = _mock_module(66666)
     mock_course.create_module.return_value = module
     mi = _mock_item(201)
@@ -1503,7 +1503,7 @@ def test_single_target_skipped_when_t_already_uploaded_it(mock_course, course_ro
     # Make the page old so -t uploads it (needs_sync=True), setting last_synced=now.
     # When -s runs independently, file_mtime=0 < last_synced=now → skipped.
     _make_old(course_root / "pages" / "syllabus.md")
-    mocker.patch("github_to_canvas.manifest.flush")
+    mocker.patch("markdown_to_canvas.manifest.flush")
     real_page = _mock_page(11111, "syllabus")
     mock_course.create_page.return_value = real_page
     mock_course.get_page.return_value = real_page
@@ -1698,7 +1698,7 @@ def test_parse_module_body_indentation_levels(tmp_path: Path) -> None:
 
 def test_parse_module_body_indent_clamped_at_max(tmp_path: Path, capsys) -> None:
     """Indent levels beyond MAX_CANVAS_INDENT are clamped with a warning."""
-    from github_to_canvas.sync import MAX_CANVAS_INDENT
+    from markdown_to_canvas.sync import MAX_CANVAS_INDENT
 
     course_root = tmp_path / "course"
     (course_root / "modules").mkdir(parents=True)
@@ -1752,7 +1752,7 @@ def test_module_inline_snippet_becomes_external_url(tmp_path: Path) -> None:
     module_file = course_root / "modules" / "m.md"
     body = '- [Syllabus]($../snippets/inline/CANVAS_COURSE_REFERENCE.md$/assignments/syllabus "Syllabus")\n'
 
-    from github_to_canvas.convert import preprocess_snippets
+    from markdown_to_canvas.convert import preprocess_snippets
 
     expanded = preprocess_snippets(body, module_file, course_root / "snippets")
     items = parse_module_body(expanded, module_file, course_root)
@@ -1778,7 +1778,7 @@ def test_module_inline_snippet_mixed_with_local_content(tmp_path: Path) -> None:
         '- [Grades]($../snippets/inline/CANVAS_COURSE_REFERENCE.md$/grades "Grades")\n'
     )
 
-    from github_to_canvas.convert import preprocess_snippets
+    from markdown_to_canvas.convert import preprocess_snippets
 
     expanded = preprocess_snippets(body, module_file, course_root / "snippets")
     items = parse_module_body(expanded, module_file, course_root)
@@ -1837,7 +1837,7 @@ def test_assignment_lock_at_unlock_at_grading_type_passed_to_canvas(
     mock_course, course_root, mocker
 ) -> None:
     """lock_at, unlock_at, grading_type from assignment frontmatter reach canvasapi."""
-    mocker.patch("github_to_canvas.manifest.flush")
+    mocker.patch("markdown_to_canvas.manifest.flush")
     _setup_first_sync_mocks(mock_course)
 
     run_sync(_config(), course_root)
@@ -1852,7 +1852,7 @@ def test_assignment_group_grading_peer_review_fields_passed_to_canvas(
     mock_course, course_root, mocker
 ) -> None:
     """Group, anonymous/moderated grading, and peer-review frontmatter reach canvasapi."""
-    mocker.patch("github_to_canvas.manifest.flush")
+    mocker.patch("markdown_to_canvas.manifest.flush")
     _setup_first_sync_mocks(mock_course)
     (course_root / "assignments" / "week1.md").write_text(
         "---\n"
@@ -1891,7 +1891,7 @@ def test_assignment_group_id_numeric_passed_to_canvas(
     mock_course, course_root, mocker
 ) -> None:
     """assignment_group_id as a numeric value is passed through unchanged."""
-    mocker.patch("github_to_canvas.manifest.flush")
+    mocker.patch("markdown_to_canvas.manifest.flush")
     _setup_first_sync_mocks(mock_course)
     mock_course.get_assignment_groups.return_value = []
     (course_root / "assignments" / "week1.md").write_text(
@@ -1912,7 +1912,7 @@ def test_assignment_group_id_by_name_resolved_to_canvas_id(
     mock_course, course_root, mocker
 ) -> None:
     """assignment_group_id as a name string is resolved to the Canvas numeric ID."""
-    mocker.patch("github_to_canvas.manifest.flush")
+    mocker.patch("markdown_to_canvas.manifest.flush")
     _setup_first_sync_mocks(mock_course)
     labs_group = MagicMock()
     labs_group.name = "Labs"
@@ -1936,7 +1936,7 @@ def test_assignment_group_id_unknown_name_skipped(
     mock_course, course_root, mocker, capsys
 ) -> None:
     """Unknown assignment group name prints a warning and omits the field."""
-    mocker.patch("github_to_canvas.manifest.flush")
+    mocker.patch("markdown_to_canvas.manifest.flush")
     _setup_first_sync_mocks(mock_course)
     mock_course.get_assignment_groups.return_value = []
     (course_root / "assignments" / "week1.md").write_text(
@@ -1964,7 +1964,7 @@ def test_quiz_assignment_group_id_by_name_resolved_to_canvas_id(
     mock_course, mocker, tmp_path
 ) -> None:
     """assignment_group_id on a quiz is resolved to the Canvas numeric ID, same as assignments."""
-    mocker.patch("github_to_canvas.manifest.flush")
+    mocker.patch("markdown_to_canvas.manifest.flush")
     root = _quiz_course_root(tmp_path)
     (root / "quizzes" / "a-quiz" / "a-quiz.md").write_text(
         "---\ntitle: A Quiz\nquiz_type: assignment\npublished: true\n"
@@ -1991,7 +1991,7 @@ def test_quiz_assignment_group_id_unknown_name_skipped(
     mock_course, mocker, tmp_path, capsys
 ) -> None:
     """Unknown assignment group name on a quiz prints a warning and omits the field."""
-    mocker.patch("github_to_canvas.manifest.flush")
+    mocker.patch("markdown_to_canvas.manifest.flush")
     root = _quiz_course_root(tmp_path)
     (root / "quizzes" / "a-quiz" / "a-quiz.md").write_text(
         "---\ntitle: A Quiz\nquiz_type: assignment\npublished: true\n"
@@ -2024,7 +2024,7 @@ def test_graded_discussion_fields_passed_as_assignment_dict(
     mock_course, course_root, mocker
 ) -> None:
     """points_possible, due_at, lock_at, unlock_at passed as assignment= dict for discussions."""
-    mocker.patch("github_to_canvas.manifest.flush")
+    mocker.patch("markdown_to_canvas.manifest.flush")
     _setup_first_sync_mocks(mock_course)
 
     run_sync(_config(), course_root)
@@ -2042,7 +2042,7 @@ def test_discussion_assignment_group_id_by_name_resolved_to_canvas_id(
     mock_course, course_root, mocker
 ) -> None:
     """assignment_group_id on a graded discussion is resolved, same as assignments/quizzes."""
-    mocker.patch("github_to_canvas.manifest.flush")
+    mocker.patch("markdown_to_canvas.manifest.flush")
     _setup_first_sync_mocks(mock_course)
     labs_group = MagicMock()
     labs_group.name = "Labs"
@@ -2068,7 +2068,7 @@ def test_discussion_assignment_group_id_unknown_name_skipped(
     mock_course, course_root, mocker, capsys
 ) -> None:
     """Unknown assignment group name on a discussion prints a warning and omits the field."""
-    mocker.patch("github_to_canvas.manifest.flush")
+    mocker.patch("markdown_to_canvas.manifest.flush")
     _setup_first_sync_mocks(mock_course)
     mock_course.get_assignment_groups.return_value = []
     (course_root / "discussions" / "week1-intro.md").write_text(
@@ -2110,7 +2110,7 @@ def _make_course_with_syllabus(tmp_path: Path) -> Path:
 
 def test_syllabus_synced_calls_course_update(mock_course, mocker, tmp_path) -> None:
     """sync_syllabus converts syllabus.md to HTML and calls course.update(syllabus_body=...)."""
-    mocker.patch("github_to_canvas.manifest.flush")
+    mocker.patch("markdown_to_canvas.manifest.flush")
     root = _make_course_with_syllabus(tmp_path)
 
     run_sync(_config(), root)
@@ -2124,7 +2124,7 @@ def test_syllabus_synced_calls_course_update(mock_course, mocker, tmp_path) -> N
 
 def test_syllabus_missing_does_not_crash(mock_course, mocker, tmp_path) -> None:
     """If course_settings/syllabus.md is absent, sync proceeds without error."""
-    mocker.patch("github_to_canvas.manifest.flush")
+    mocker.patch("markdown_to_canvas.manifest.flush")
     root = tmp_path / "course"
     root.mkdir()
 
@@ -2137,7 +2137,7 @@ def test_syllabus_missing_does_not_crash(mock_course, mocker, tmp_path) -> None:
 
 def test_syllabus_expands_inline_snippets(mock_course, mocker, tmp_path) -> None:
     """Inline snippets in syllabus.md are expanded before conversion."""
-    mocker.patch("github_to_canvas.manifest.flush")
+    mocker.patch("markdown_to_canvas.manifest.flush")
     root = tmp_path / "course"
     cs_dir = root / "course_settings"
     cs_dir.mkdir(parents=True)
@@ -2183,7 +2183,7 @@ def _make_course_with_settings(tmp_path: Path) -> Path:
 
 def test_course_metadata_synced_calls_course_update(mock_course, mocker, tmp_path) -> None:
     """course_settings.toml fields reach course.update(course={...})."""
-    mocker.patch("github_to_canvas.manifest.flush")
+    mocker.patch("markdown_to_canvas.manifest.flush")
     root = _make_course_with_settings(tmp_path)
 
     run_sync(_config(), root)
@@ -2199,7 +2199,7 @@ def test_course_metadata_synced_calls_course_update(mock_course, mocker, tmp_pat
 
 def test_course_settings_missing_does_not_crash(mock_course, mocker, tmp_path) -> None:
     """If course_settings.toml is absent, sync proceeds without error."""
-    mocker.patch("github_to_canvas.manifest.flush")
+    mocker.patch("markdown_to_canvas.manifest.flush")
     root = tmp_path / "course"
     root.mkdir()
 
@@ -2213,7 +2213,7 @@ def test_course_settings_missing_does_not_crash(mock_course, mocker, tmp_path) -
 
 def test_dashboard_image_uploaded_and_set(mock_course, mocker, tmp_path) -> None:
     """dashboard_image in course_settings.toml uploads the file and sets image_id."""
-    mocker.patch("github_to_canvas.manifest.flush")
+    mocker.patch("markdown_to_canvas.manifest.flush")
     root = tmp_path / "course"
     root.mkdir()
     cs_dir = root / "course_settings"
@@ -2244,7 +2244,7 @@ def test_dashboard_image_uploaded_and_set(mock_course, mocker, tmp_path) -> None
 
 def test_dashboard_image_missing_file_warns(mock_course, mocker, tmp_path, capsys) -> None:
     """dashboard_image pointing to a non-existent file prints a warning."""
-    mocker.patch("github_to_canvas.manifest.flush")
+    mocker.patch("markdown_to_canvas.manifest.flush")
     root = tmp_path / "course"
     root.mkdir()
     cs_dir = root / "course_settings"
@@ -2264,7 +2264,7 @@ def test_dashboard_image_missing_file_warns(mock_course, mocker, tmp_path, capsy
 
 def test_dashboard_image_not_passed_to_course_metadata(mock_course, mocker, tmp_path) -> None:
     """dashboard_image is handled separately and not passed to course.update as metadata."""
-    mocker.patch("github_to_canvas.manifest.flush")
+    mocker.patch("markdown_to_canvas.manifest.flush")
     root = tmp_path / "course"
     root.mkdir()
     cs_dir = root / "course_settings"
@@ -2284,7 +2284,7 @@ def test_dashboard_image_not_passed_to_course_metadata(mock_course, mocker, tmp_
 
 def test_upload_course_image_unit() -> None:
     """Unit test: upload_course_image uploads and sets image_id on the course."""
-    from github_to_canvas.canvas_api import upload_course_image
+    from markdown_to_canvas.canvas_api import upload_course_image
 
     course = MagicMock()
     course.upload.return_value = (True, {"id": 99, "url": "https://example.com/files/99"})
@@ -2302,7 +2302,7 @@ def test_upload_course_image_unit() -> None:
 # Scenario 13b: Course-navigation (tab_configuration) sync
 # ---------------------------------------------------------------------------
 
-from github_to_canvas import canvas_api as _capi  # noqa: E402
+from markdown_to_canvas import canvas_api as _capi  # noqa: E402
 
 
 def _mock_tab(tab_id: str, label: str | None = None) -> MagicMock:
@@ -2472,7 +2472,7 @@ def test_tab_configuration_dedups_collaborations() -> None:
 
 def test_tab_configuration_synced_end_to_end(mock_course, mocker, tmp_path) -> None:
     """tab_configuration in course_settings.toml reaches the Tabs API via run_sync."""
-    mocker.patch("github_to_canvas.manifest.flush")
+    mocker.patch("markdown_to_canvas.manifest.flush")
     root = tmp_path / "course"
     root.mkdir()
     cs_dir = root / "course_settings"
@@ -2494,7 +2494,7 @@ def test_tab_configuration_synced_end_to_end(mock_course, mocker, tmp_path) -> N
 
 def test_tab_configuration_array_of_tables_end_to_end(mock_course, mocker, tmp_path) -> None:
     """The new [[tab_configuration]] array-of-tables form drives the Tabs API."""
-    mocker.patch("github_to_canvas.manifest.flush")
+    mocker.patch("markdown_to_canvas.manifest.flush")
     root = tmp_path / "course"
     root.mkdir()
     cs_dir = root / "course_settings"
@@ -2522,7 +2522,7 @@ def test_tab_configuration_array_of_tables_end_to_end(mock_course, mocker, tmp_p
 
 def test_tab_configuration_misplaced_under_section_warns(mock_course, mocker, tmp_path, capsys) -> None:
     """tab_configuration accidentally nested under a [section] is detected and warned."""
-    mocker.patch("github_to_canvas.manifest.flush")
+    mocker.patch("markdown_to_canvas.manifest.flush")
     root = tmp_path / "course"
     root.mkdir()
     cs_dir = root / "course_settings"
@@ -2742,7 +2742,7 @@ def test_drop_rules_applied_after_content_via_run_sync(mock_course, course_root,
     the rule is re-applied after the content phase (single `update` run)."""
     from canvasapi.exceptions import BadRequest
 
-    mocker.patch("github_to_canvas.manifest.flush")
+    mocker.patch("markdown_to_canvas.manifest.flush")
     cs = course_root / "course_settings" / "course_settings.toml"
     cs.parent.mkdir(parents=True, exist_ok=True)
     cs.write_text(
@@ -2773,7 +2773,7 @@ def test_drop_rules_applied_after_content_via_run_sync(mock_course, course_root,
 def test_group_weights_reach_canvas_via_run_sync(mock_course, mocker, tmp_path) -> None:
     """Full pipeline: weighted assignment_groups enable the course flag and
     pass group_weight to create_assignment_group."""
-    mocker.patch("github_to_canvas.manifest.flush")
+    mocker.patch("markdown_to_canvas.manifest.flush")
     root = tmp_path / "course"
     root.mkdir()
     cs_dir = root / "course_settings"
@@ -2808,7 +2808,7 @@ def test_group_weights_reach_canvas_via_run_sync(mock_course, mocker, tmp_path) 
 
 def test_course_settings_folder_not_synced_as_page(mock_course, mocker, tmp_path) -> None:
     """Files inside course_settings/ are not uploaded as Canvas Pages."""
-    mocker.patch("github_to_canvas.manifest.flush")
+    mocker.patch("markdown_to_canvas.manifest.flush")
     root = tmp_path / "course"
     cs_dir = root / "course_settings"
     cs_dir.mkdir(parents=True)
@@ -2834,7 +2834,7 @@ def test_course_settings_folder_not_synced_as_page(mock_course, mocker, tmp_path
 
 def test_module_external_url_item_created(mock_course, mocker, tmp_path) -> None:
     """ExternalUrl items in module body result in ExternalUrl module item calls."""
-    mocker.patch("github_to_canvas.manifest.flush")
+    mocker.patch("markdown_to_canvas.manifest.flush")
     root = tmp_path / "course"
     (root / "modules").mkdir(parents=True)
     (root / "modules" / "m.md").write_text(
@@ -2869,7 +2869,7 @@ def test_module_item_missing_from_manifest_warns_and_skips(
     sync runs, add_module_item should print a WARNING and skip the item rather than
     raising a KeyError.
     """
-    mocker.patch("github_to_canvas.manifest.flush")
+    mocker.patch("markdown_to_canvas.manifest.flush")
     root = tmp_path / "course"
     (root / "modules").mkdir(parents=True)
     # pages/ghost.md is referenced but NEVER created — it won't be in the manifest
@@ -2897,8 +2897,8 @@ def test_module_with_failed_items_is_retried_next_run(
     manifest (so the next run updates rather than duplicates it) but gets no
     last_synced stamp, so needs_sync() retries it on the next update."""
     manifest: dict = {}
-    mocker.patch("github_to_canvas.manifest.load", return_value=manifest)
-    mocker.patch("github_to_canvas.manifest.flush")
+    mocker.patch("markdown_to_canvas.manifest.load", return_value=manifest)
+    mocker.patch("markdown_to_canvas.manifest.flush")
     root = tmp_path / "course"
     (root / "modules").mkdir(parents=True)
     (root / "modules" / "m.md").write_text(
@@ -2923,8 +2923,8 @@ def test_quiz_with_missing_question_file_skips_upload_and_reports_error(
     last_synced is never stamped and the quiz is retried next run) and the
     missing file counts as an error, failing the run."""
     manifest: dict = {}
-    mocker.patch("github_to_canvas.manifest.load", return_value=manifest)
-    mocker.patch("github_to_canvas.manifest.flush")
+    mocker.patch("markdown_to_canvas.manifest.load", return_value=manifest)
+    mocker.patch("markdown_to_canvas.manifest.flush")
     root = _quiz_course_root(tmp_path)
     (root / "quizzes" / "a-quiz" / "questions" / "what-is-2-plus-2.md").unlink()
 
@@ -2942,7 +2942,7 @@ def test_assignment_without_optional_fields_still_uploads(
     mock_course, mocker, tmp_path
 ) -> None:
     """An assignment with only title and body (no dates, points, etc.) uploads successfully."""
-    mocker.patch("github_to_canvas.manifest.flush")
+    mocker.patch("markdown_to_canvas.manifest.flush")
     root = tmp_path / "course"
     (root / "assignments").mkdir(parents=True)
     (root / "assignments" / "simple.md").write_text(
@@ -2967,7 +2967,7 @@ def test_discussion_without_optional_fields_still_uploads(
     mock_course, mocker, tmp_path
 ) -> None:
     """A discussion with only title and body (no grading params) uploads successfully."""
-    mocker.patch("github_to_canvas.manifest.flush")
+    mocker.patch("markdown_to_canvas.manifest.flush")
     root = tmp_path / "course"
     (root / "discussions").mkdir(parents=True)
     (root / "discussions" / "intro.md").write_text(
@@ -2988,7 +2988,7 @@ def test_content_file_without_frontmatter_still_uploads(
     mock_course, mocker, tmp_path
 ) -> None:
     """A page with no frontmatter at all is uploaded using the filename as title."""
-    mocker.patch("github_to_canvas.manifest.flush")
+    mocker.patch("markdown_to_canvas.manifest.flush")
     root = tmp_path / "course"
     (root / "pages").mkdir(parents=True)
     (root / "pages" / "my-notes.md").write_text("## Notes\n\nSome content here.\n")
@@ -3020,7 +3020,7 @@ def test_module_position_passed_when_order_file_present(
     mock_course, mocker, tmp_path
 ) -> None:
     """Position is passed to create_module when module_order.toml lists the module."""
-    mocker.patch("github_to_canvas.manifest.flush")
+    mocker.patch("markdown_to_canvas.manifest.flush")
     root = tmp_path / "course"
     _make_minimal_module_repo(root, ["week-1.md", "week-2.md"])
     (root / "course_settings").mkdir()
@@ -3045,7 +3045,7 @@ def test_module_without_order_file_has_no_position(
     mock_course, mocker, tmp_path
 ) -> None:
     """No position kwarg is sent to Canvas when module_order.toml does not exist."""
-    mocker.patch("github_to_canvas.manifest.flush")
+    mocker.patch("markdown_to_canvas.manifest.flush")
     root = tmp_path / "course"
     _make_minimal_module_repo(root, ["week-1.md"])
 
@@ -3077,8 +3077,8 @@ def test_module_order_change_repositions_without_resync(
         },
         # order file has no manifest entry → needs_sync returns True
     }
-    mocker.patch("github_to_canvas.manifest.load", return_value=preloaded)
-    mocker.patch("github_to_canvas.manifest.flush")
+    mocker.patch("markdown_to_canvas.manifest.load", return_value=preloaded)
+    mocker.patch("markdown_to_canvas.manifest.flush")
 
     module = _mock_module(101)
     mock_course.get_module.return_value = module
@@ -3105,7 +3105,7 @@ def test_module_order_error_when_file_not_found_locally(
     mod1 = _mock_module(101)
     mock_course.create_module.return_value = mod1
 
-    mocker.patch("github_to_canvas.manifest.flush")
+    mocker.patch("markdown_to_canvas.manifest.flush")
     reposition_module = _mock_module(101)
     mock_course.get_module.return_value = reposition_module
 
@@ -3138,8 +3138,8 @@ def test_module_order_error_when_not_synced_to_canvas(
             "last_synced": _FUTURE_SYNCED,
         },
     }
-    mocker.patch("github_to_canvas.manifest.load", return_value=preloaded)
-    mocker.patch("github_to_canvas.manifest.flush")
+    mocker.patch("markdown_to_canvas.manifest.load", return_value=preloaded)
+    mocker.patch("markdown_to_canvas.manifest.flush")
 
     reposition_module = _mock_module(101)
     mock_course.get_module.return_value = reposition_module
@@ -3173,8 +3173,8 @@ def test_module_order_up_to_date_skips_resync(
             "last_synced": "2025-01-01T00:00:00+00:00",
         },
     }
-    mocker.patch("github_to_canvas.manifest.load", return_value=preloaded)
-    mocker.patch("github_to_canvas.manifest.flush")
+    mocker.patch("markdown_to_canvas.manifest.load", return_value=preloaded)
+    mocker.patch("markdown_to_canvas.manifest.flush")
 
     run_sync(_config(), root, verbose=True)
 
@@ -3188,7 +3188,7 @@ def test_targeted_sync_passes_position_from_order_file(
     mock_course, mocker, tmp_path
 ) -> None:
     """run_targeted_sync applies position from module_order.toml when syncing a module."""
-    mocker.patch("github_to_canvas.manifest.flush")
+    mocker.patch("markdown_to_canvas.manifest.flush")
     root = tmp_path / "course"
     _make_minimal_module_repo(root, ["week-1.md", "week-2.md"])
     (root / "course_settings").mkdir()
@@ -3231,8 +3231,8 @@ def test_prune_delete_removes_orphans_and_keeps_present(
         "assignments/gone.md": {"canvas_type": "assignment", "canvas_id": 22},
         "pages/kept.md": {"canvas_type": "page", "canvas_id": 33, "canvas_url": "kept"},
     }
-    mocker.patch("github_to_canvas.manifest.load", return_value=manifest)
-    mocker.patch("github_to_canvas.manifest.flush")
+    mocker.patch("markdown_to_canvas.manifest.load", return_value=manifest)
+    mocker.patch("markdown_to_canvas.manifest.flush")
 
     had_errors = run_prune(_config(), root, "delete")
 
@@ -3257,8 +3257,8 @@ def test_prune_announcement_deletes_and_unpublishes_like_discussion(
     manifest = {
         "announcements/gone.md": {"canvas_type": "announcement", "canvas_id": 77},
     }
-    mocker.patch("github_to_canvas.manifest.load", return_value=manifest)
-    mocker.patch("github_to_canvas.manifest.flush")
+    mocker.patch("markdown_to_canvas.manifest.load", return_value=manifest)
+    mocker.patch("markdown_to_canvas.manifest.flush")
 
     assert run_prune(_config(), root, "delete") is False
     mock_course.get_discussion_topic.assert_called_once_with(77)
@@ -3279,8 +3279,8 @@ def test_prune_unpublish_sets_published_false(mock_course, mocker, tmp_path) -> 
         "pages/gone.md": {"canvas_type": "page", "canvas_id": 11, "canvas_url": "gone"},
         "quizzes/gone/gone.md": {"canvas_type": "quiz", "canvas_id": 44},
     }
-    mocker.patch("github_to_canvas.manifest.load", return_value=manifest)
-    mocker.patch("github_to_canvas.manifest.flush")
+    mocker.patch("markdown_to_canvas.manifest.load", return_value=manifest)
+    mocker.patch("markdown_to_canvas.manifest.flush")
 
     had_errors = run_prune(_config(), root, "unpublish")
 
@@ -3305,8 +3305,8 @@ def test_prune_skips_nonprunable_type_and_keeps_entry(
             "canvas_id": 0,
         },
     }
-    mocker.patch("github_to_canvas.manifest.load", return_value=manifest)
-    mocker.patch("github_to_canvas.manifest.flush")
+    mocker.patch("markdown_to_canvas.manifest.load", return_value=manifest)
+    mocker.patch("markdown_to_canvas.manifest.flush")
 
     had_errors = run_prune(_config(), root, "delete")
 
@@ -3327,8 +3327,8 @@ def test_prune_question_bank_skipped_under_unpublish(
             "canvas_id": 88,
         },
     }
-    mocker.patch("github_to_canvas.manifest.load", return_value=manifest)
-    mocker.patch("github_to_canvas.manifest.flush")
+    mocker.patch("markdown_to_canvas.manifest.load", return_value=manifest)
+    mocker.patch("markdown_to_canvas.manifest.flush")
 
     had_errors = run_prune(_config(), root, "unpublish")
 
@@ -3342,8 +3342,8 @@ def test_prune_no_orphans_is_noop(mock_course, mocker, tmp_path) -> None:
     manifest = {
         "pages/kept.md": {"canvas_type": "page", "canvas_id": 33, "canvas_url": "kept"},
     }
-    mocker.patch("github_to_canvas.manifest.load", return_value=manifest)
-    flush = mocker.patch("github_to_canvas.manifest.flush")
+    mocker.patch("markdown_to_canvas.manifest.load", return_value=manifest)
+    flush = mocker.patch("markdown_to_canvas.manifest.flush")
 
     had_errors = run_prune(_config(), root, "delete")
 
@@ -3359,8 +3359,8 @@ def test_prune_reports_errors_but_continues(mock_course, mocker, tmp_path) -> No
         "pages/bad.md": {"canvas_type": "page", "canvas_id": 11, "canvas_url": "bad"},
         "assignments/gone.md": {"canvas_type": "assignment", "canvas_id": 22},
     }
-    mocker.patch("github_to_canvas.manifest.load", return_value=manifest)
-    mocker.patch("github_to_canvas.manifest.flush")
+    mocker.patch("markdown_to_canvas.manifest.load", return_value=manifest)
+    mocker.patch("markdown_to_canvas.manifest.flush")
     mock_course.get_page.side_effect = RuntimeError("404 not found")
 
     had_errors = run_prune(_config(), root, "delete")
@@ -3385,8 +3385,8 @@ def test_prune_keeps_front_page(mock_course, mocker, tmp_path) -> None:
         "pages/home.md": {"canvas_type": "page", "canvas_id": 11, "canvas_url": "home"},
         "assignments/gone.md": {"canvas_type": "assignment", "canvas_id": 22},
     }
-    mocker.patch("github_to_canvas.manifest.load", return_value=manifest)
-    mocker.patch("github_to_canvas.manifest.flush")
+    mocker.patch("markdown_to_canvas.manifest.load", return_value=manifest)
+    mocker.patch("markdown_to_canvas.manifest.flush")
     mock_course.show_front_page.return_value = SimpleNamespace(url="home")
     _set_syllabus_body(mock_course, "")
 
@@ -3406,8 +3406,8 @@ def test_prune_keeps_page_linked_from_syllabus(mock_course, mocker, tmp_path) ->
     manifest = {
         "pages/syl.md": {"canvas_type": "page", "canvas_id": 11, "canvas_url": "syl-page"},
     }
-    mocker.patch("github_to_canvas.manifest.load", return_value=manifest)
-    mocker.patch("github_to_canvas.manifest.flush")
+    mocker.patch("markdown_to_canvas.manifest.load", return_value=manifest)
+    mocker.patch("markdown_to_canvas.manifest.flush")
     mock_course.show_front_page.return_value = None
     _set_syllabus_body(
         mock_course,
@@ -3428,8 +3428,8 @@ def test_prune_keeps_announcement_linked_from_syllabus(mock_course, mocker, tmp_
     manifest = {
         "announcements/gone.md": {"canvas_type": "announcement", "canvas_id": 88},
     }
-    mocker.patch("github_to_canvas.manifest.load", return_value=manifest)
-    mocker.patch("github_to_canvas.manifest.flush")
+    mocker.patch("markdown_to_canvas.manifest.load", return_value=manifest)
+    mocker.patch("markdown_to_canvas.manifest.flush")
     mock_course.show_front_page.return_value = None
     _set_syllabus_body(
         mock_course,
@@ -3448,8 +3448,8 @@ def test_prune_unpublish_keeps_front_page(mock_course, mocker, tmp_path) -> None
     manifest = {
         "pages/home.md": {"canvas_type": "page", "canvas_id": 11, "canvas_url": "home"},
     }
-    mocker.patch("github_to_canvas.manifest.load", return_value=manifest)
-    mocker.patch("github_to_canvas.manifest.flush")
+    mocker.patch("markdown_to_canvas.manifest.load", return_value=manifest)
+    mocker.patch("markdown_to_canvas.manifest.flush")
     mock_course.show_front_page.return_value = SimpleNamespace(url="home")
     _set_syllabus_body(mock_course, "")
 
@@ -3468,8 +3468,8 @@ def test_prune_delete_treats_already_gone_as_success(
     manifest = {
         "pages/gone.md": {"canvas_type": "page", "canvas_id": 11, "canvas_url": "gone"},
     }
-    mocker.patch("github_to_canvas.manifest.load", return_value=manifest)
-    mocker.patch("github_to_canvas.manifest.flush")
+    mocker.patch("markdown_to_canvas.manifest.load", return_value=manifest)
+    mocker.patch("markdown_to_canvas.manifest.flush")
     _set_syllabus_body(mock_course, "")
     # The Canvas item was already deleted (manually or by a prior run).
     mock_course.get_page.return_value.delete.side_effect = ResourceDoesNotExist(
@@ -3494,8 +3494,8 @@ def test_prune_unpublish_treats_already_gone_as_success(
     manifest = {
         "pages/gone.md": {"canvas_type": "page", "canvas_id": 11, "canvas_url": "gone"},
     }
-    mocker.patch("github_to_canvas.manifest.load", return_value=manifest)
-    mocker.patch("github_to_canvas.manifest.flush")
+    mocker.patch("markdown_to_canvas.manifest.load", return_value=manifest)
+    mocker.patch("markdown_to_canvas.manifest.flush")
     _set_syllabus_body(mock_course, "")
     mock_course.get_page.side_effect = ResourceDoesNotExist("404 not found")
 
@@ -3522,8 +3522,8 @@ def test_prune_manifest_only_drops_orphans_without_touching_canvas(
         # ...and a present file that must be preserved.
         "pages/kept.md": {"canvas_type": "page", "canvas_id": 33, "canvas_url": "kept"},
     }
-    mocker.patch("github_to_canvas.manifest.load", return_value=manifest)
-    flush = mocker.patch("github_to_canvas.manifest.flush")
+    mocker.patch("markdown_to_canvas.manifest.load", return_value=manifest)
+    flush = mocker.patch("markdown_to_canvas.manifest.flush")
 
     had_errors = run_prune(_config(), root, "manifest")
 
@@ -3547,8 +3547,8 @@ def test_prune_manifest_only_no_orphans_is_noop(
     manifest = {
         "pages/kept.md": {"canvas_type": "page", "canvas_id": 33, "canvas_url": "kept"},
     }
-    mocker.patch("github_to_canvas.manifest.load", return_value=manifest)
-    flush = mocker.patch("github_to_canvas.manifest.flush")
+    mocker.patch("markdown_to_canvas.manifest.load", return_value=manifest)
+    flush = mocker.patch("markdown_to_canvas.manifest.flush")
 
     had_errors = run_prune(_config(), root, "manifest")
 
@@ -3564,7 +3564,7 @@ def test_prune_manifest_only_no_orphans_is_noop(
 
 def test_ignored_asset_not_uploaded(mock_course, course_root, mocker) -> None:
     """A stray file matched by .canvasignore (e.g. a Word temp file) is skipped."""
-    mocker.patch("github_to_canvas.manifest.flush")
+    mocker.patch("markdown_to_canvas.manifest.flush")
     _setup_first_sync_mocks(mock_course)
     # Simulate a Word backup file sitting next to a real asset.
     (course_root / "assets" / "~$logo.docx").write_text("junk")
@@ -3580,7 +3580,7 @@ def test_ignored_asset_not_uploaded(mock_course, course_root, mocker) -> None:
 
 def test_gitignore_not_consulted(mock_course, course_root, mocker) -> None:
     """A file matched only by .gitignore is still uploaded — .gitignore is ignored."""
-    mocker.patch("github_to_canvas.manifest.flush")
+    mocker.patch("markdown_to_canvas.manifest.flush")
     _setup_first_sync_mocks(mock_course)
     (course_root / "assets" / "~$logo.docx").write_text("junk")
     (course_root / ".gitignore").write_text("~$*\n")
@@ -3593,7 +3593,7 @@ def test_gitignore_not_consulted(mock_course, course_root, mocker) -> None:
 
 def test_ignored_asset_uploaded_without_ignore_file(mock_course, course_root, mocker) -> None:
     """Baseline: with no ignore file, the stray file IS uploaded (proves the filter acts)."""
-    mocker.patch("github_to_canvas.manifest.flush")
+    mocker.patch("markdown_to_canvas.manifest.flush")
     _setup_first_sync_mocks(mock_course)
     (course_root / "assets" / "~$logo.docx").write_text("junk")
 
@@ -3604,7 +3604,7 @@ def test_ignored_asset_uploaded_without_ignore_file(mock_course, course_root, mo
 
 def test_ignored_content_file_not_synced(mock_course, course_root, mocker) -> None:
     """A page matched by .canvasignore is not created on Canvas."""
-    mocker.patch("github_to_canvas.manifest.flush")
+    mocker.patch("markdown_to_canvas.manifest.flush")
     _setup_first_sync_mocks(mock_course)
     (course_root / "pages" / "scratch.md").write_text("---\ntitle: Scratch\n---\n\n## Draft\n")
     (course_root / ".canvasignore").write_text("scratch.md\n")
@@ -3621,7 +3621,7 @@ def test_ignored_content_file_not_synced(mock_course, course_root, mocker) -> No
 
 
 def test_build_criteria_dict_basic() -> None:
-    from github_to_canvas.canvas_api import _build_criteria_dict
+    from markdown_to_canvas.canvas_api import _build_criteria_dict
 
     criteria = [
         {
@@ -3647,7 +3647,7 @@ def test_build_criteria_dict_basic() -> None:
 
 
 def test_build_criteria_dict_long_description_included() -> None:
-    from github_to_canvas.canvas_api import _build_criteria_dict
+    from markdown_to_canvas.canvas_api import _build_criteria_dict
 
     criteria = [
         {
@@ -3671,7 +3671,7 @@ def test_build_criteria_dict_long_description_included() -> None:
 
 
 def test_build_criteria_dict_empty_long_description_omitted() -> None:
-    from github_to_canvas.canvas_api import _build_criteria_dict
+    from markdown_to_canvas.canvas_api import _build_criteria_dict
 
     criteria = [
         {
@@ -3699,7 +3699,7 @@ def _mock_rubric(rubric_id: int, title: str) -> MagicMock:
 
 
 def test_sync_rubrics_creates_new() -> None:
-    from github_to_canvas.canvas_api import sync_rubrics
+    from markdown_to_canvas.canvas_api import sync_rubrics
 
     course = MagicMock()
     course.get_rubrics.return_value = []
@@ -3719,7 +3719,7 @@ def test_sync_rubrics_creates_new() -> None:
 
 
 def test_sync_rubrics_updates_existing() -> None:
-    from github_to_canvas.canvas_api import sync_rubrics
+    from markdown_to_canvas.canvas_api import sync_rubrics
 
     course = MagicMock()
     course.id = 999
@@ -3741,7 +3741,7 @@ def test_sync_rubrics_updates_existing() -> None:
 
 
 def test_sync_rubrics_empty_returns_existing_ids() -> None:
-    from github_to_canvas.canvas_api import sync_rubrics
+    from markdown_to_canvas.canvas_api import sync_rubrics
 
     course = MagicMock()
     existing = _mock_rubric(42, "Essay Rubric")
@@ -3756,7 +3756,7 @@ def test_sync_rubrics_empty_returns_existing_ids() -> None:
 
 
 def test_sync_rubrics_sends_reusable_and_read_only() -> None:
-    from github_to_canvas.canvas_api import sync_rubrics
+    from markdown_to_canvas.canvas_api import sync_rubrics
 
     course = MagicMock()
     course.get_rubrics.return_value = []
@@ -3772,7 +3772,7 @@ def test_sync_rubrics_sends_reusable_and_read_only() -> None:
 
 
 def test_sync_rubrics_omits_reusable_when_absent() -> None:
-    from github_to_canvas.canvas_api import sync_rubrics
+    from markdown_to_canvas.canvas_api import sync_rubrics
 
     course = MagicMock()
     course.get_rubrics.return_value = []
@@ -3790,7 +3790,7 @@ def test_sync_rubrics_omits_reusable_when_absent() -> None:
 def test_sync_rubrics_partial_failure_continues() -> None:
     """A rubric whose API call fails is reported in `failed` and doesn't
     abort the remaining rubrics."""
-    from github_to_canvas.canvas_api import sync_rubrics
+    from markdown_to_canvas.canvas_api import sync_rubrics
 
     course = MagicMock()
     course.get_rubrics.return_value = []
@@ -3821,8 +3821,8 @@ def test_rubric_hashing_skips_unchanged_rubrics(
     """When rubrics.toml is stale, only rubrics whose content changed are
     re-sent; unchanged ones are skipped via the manifest's rubric_hashes."""
     manifest: dict = {}
-    mocker.patch("github_to_canvas.manifest.load", return_value=manifest)
-    mocker.patch("github_to_canvas.manifest.flush")
+    mocker.patch("markdown_to_canvas.manifest.load", return_value=manifest)
+    mocker.patch("markdown_to_canvas.manifest.flush")
     root = tmp_path / "course"
     cs_dir = root / "course_settings"
     cs_dir.mkdir(parents=True)
@@ -3888,8 +3888,8 @@ def test_rubric_removed_from_file_drops_out_of_hash_cache(
     """Deleting a [[rubrics]] block removes its cached hash so the manifest
     doesn't grow stale entries (the Canvas rubric itself is left alone)."""
     manifest: dict = {}
-    mocker.patch("github_to_canvas.manifest.load", return_value=manifest)
-    mocker.patch("github_to_canvas.manifest.flush")
+    mocker.patch("markdown_to_canvas.manifest.load", return_value=manifest)
+    mocker.patch("markdown_to_canvas.manifest.flush")
     root = tmp_path / "course"
     cs_dir = root / "course_settings"
     cs_dir.mkdir(parents=True)
@@ -3920,8 +3920,8 @@ def test_failed_rubric_keeps_old_hash_so_only_it_retries(
     """A per-rubric failure leaves the entry unstamped and only the failed
     rubric's hash un-updated, so the next run retries exactly that rubric."""
     manifest: dict = {}
-    mocker.patch("github_to_canvas.manifest.load", return_value=manifest)
-    mocker.patch("github_to_canvas.manifest.flush")
+    mocker.patch("markdown_to_canvas.manifest.load", return_value=manifest)
+    mocker.patch("markdown_to_canvas.manifest.flush")
     root = tmp_path / "course"
     cs_dir = root / "course_settings"
     cs_dir.mkdir(parents=True)
@@ -3967,8 +3967,8 @@ def test_failed_rubric_sync_is_retried_next_run(mock_course, mocker, tmp_path) -
     keeps no last_synced stamp, so needs_sync() retries it on the next update
     instead of silently treating the rubric as if it were created."""
     manifest: dict = {}
-    mocker.patch("github_to_canvas.manifest.load", return_value=manifest)
-    mocker.patch("github_to_canvas.manifest.flush")
+    mocker.patch("markdown_to_canvas.manifest.load", return_value=manifest)
+    mocker.patch("markdown_to_canvas.manifest.flush")
     root = tmp_path / "course"
     cs_dir = root / "course_settings"
     cs_dir.mkdir(parents=True)
@@ -3996,8 +3996,8 @@ def test_single_target_rubrics_toml_syncs_rubrics_not_page(
     uploaded as a wiki page (regression: the TOML file used to fall through
     to the generic content handler and get created as a Canvas page)."""
     manifest: dict = {}
-    mocker.patch("github_to_canvas.manifest.load", return_value=manifest)
-    mocker.patch("github_to_canvas.manifest.flush")
+    mocker.patch("markdown_to_canvas.manifest.load", return_value=manifest)
+    mocker.patch("markdown_to_canvas.manifest.flush")
     cs_dir = course_root / "course_settings"
     cs_dir.mkdir()
     rubrics_toml = cs_dir / "rubrics.toml"
@@ -4032,8 +4032,8 @@ def test_single_target_syllabus_syncs_syllabus_not_page(
     """-s course_settings/syllabus.md updates the course syllabus body — it
     must not be uploaded as a wiki page."""
     manifest: dict = {}
-    mocker.patch("github_to_canvas.manifest.load", return_value=manifest)
-    mocker.patch("github_to_canvas.manifest.flush")
+    mocker.patch("markdown_to_canvas.manifest.load", return_value=manifest)
+    mocker.patch("markdown_to_canvas.manifest.flush")
     cs_dir = course_root / "course_settings"
     cs_dir.mkdir()
     syllabus_md = cs_dir / "syllabus.md"
@@ -4073,8 +4073,8 @@ def test_single_target_module_order_repositions_modules(
         },
         # order file has no manifest entry → needs_sync returns True
     }
-    mocker.patch("github_to_canvas.manifest.load", return_value=preloaded)
-    mocker.patch("github_to_canvas.manifest.flush")
+    mocker.patch("markdown_to_canvas.manifest.load", return_value=preloaded)
+    mocker.patch("markdown_to_canvas.manifest.flush")
     module = _mock_module(101)
     mock_course.get_module.return_value = module
 
@@ -4096,7 +4096,7 @@ def test_single_target_other_course_settings_file_warns(
 ) -> None:
     """-s on a course_settings file the tool doesn't recognize warns instead
     of uploading it as content."""
-    mocker.patch("github_to_canvas.manifest.flush")
+    mocker.patch("markdown_to_canvas.manifest.flush")
     cs_dir = course_root / "course_settings"
     cs_dir.mkdir()
     stray = cs_dir / "notes.md"
@@ -4120,7 +4120,7 @@ def test_single_target_other_course_settings_file_warns(
 
 def test_rubric_association_by_name(mock_course, course_root, mocker) -> None:
     """Assignment with rubric: 'Name' creates a rubric association."""
-    mocker.patch("github_to_canvas.manifest.flush")
+    mocker.patch("markdown_to_canvas.manifest.flush")
     _setup_first_sync_mocks(mock_course)
     rubric = _mock_rubric(42, "Essay Rubric")
     mock_course.get_rubrics.return_value = [rubric]
@@ -4141,7 +4141,7 @@ def test_rubric_association_by_name(mock_course, course_root, mocker) -> None:
 
 def test_rubric_association_by_numeric_id(mock_course, course_root, mocker) -> None:
     """Assignment with rubric: 999 (numeric) uses the ID directly."""
-    mocker.patch("github_to_canvas.manifest.flush")
+    mocker.patch("markdown_to_canvas.manifest.flush")
     _setup_first_sync_mocks(mock_course)
 
     (course_root / "assignments" / "week1.md").write_text(
@@ -4157,7 +4157,7 @@ def test_rubric_association_by_numeric_id(mock_course, course_root, mocker) -> N
 
 def test_rubric_unknown_name_warns(mock_course, course_root, mocker, capsys) -> None:
     """Unknown rubric name prints a warning and skips association."""
-    mocker.patch("github_to_canvas.manifest.flush")
+    mocker.patch("markdown_to_canvas.manifest.flush")
     _setup_first_sync_mocks(mock_course)
     mock_course.get_rubrics.return_value = []
 
@@ -4175,7 +4175,7 @@ def test_rubric_unknown_name_warns(mock_course, course_root, mocker, capsys) -> 
 
 def test_rubric_use_for_grading_default_true(mock_course, course_root, mocker) -> None:
     """use_for_grading defaults to True when not specified."""
-    mocker.patch("github_to_canvas.manifest.flush")
+    mocker.patch("markdown_to_canvas.manifest.flush")
     _setup_first_sync_mocks(mock_course)
     rubric = _mock_rubric(42, "Essay Rubric")
     mock_course.get_rubrics.return_value = [rubric]
@@ -4192,7 +4192,7 @@ def test_rubric_use_for_grading_default_true(mock_course, course_root, mocker) -
 
 def test_rubric_use_for_grading_false(mock_course, course_root, mocker) -> None:
     """use_for_grading can be explicitly set to false."""
-    mocker.patch("github_to_canvas.manifest.flush")
+    mocker.patch("markdown_to_canvas.manifest.flush")
     _setup_first_sync_mocks(mock_course)
     rubric = _mock_rubric(42, "Essay Rubric")
     mock_course.get_rubrics.return_value = [rubric]
@@ -4211,8 +4211,8 @@ def test_rubric_removal_when_rubric_key_absent(mock_course, course_root, mocker)
     """When an assignment has a stale rubric on Canvas but no `rubric:` key in
     frontmatter, update should call remove_rubric_from_assignment, not
     create_rubric_association."""
-    mocker.patch("github_to_canvas.manifest.flush")
-    remove_mock = mocker.patch("github_to_canvas.canvas_api.remove_rubric_from_assignment", return_value=True)
+    mocker.patch("markdown_to_canvas.manifest.flush")
+    remove_mock = mocker.patch("markdown_to_canvas.canvas_api.remove_rubric_from_assignment", return_value=True)
     _setup_first_sync_mocks(mock_course)
 
     # Override the assignment mock to have rubric_settings set (simulating a
@@ -4233,8 +4233,8 @@ def test_rubric_removal_when_rubric_key_absent(mock_course, course_root, mocker)
 def test_rubric_no_removal_when_no_canvas_rubric(mock_course, course_root, mocker) -> None:
     """When an assignment has no rubric key and Canvas also has no rubric_settings,
     remove_rubric_from_assignment should not be called."""
-    mocker.patch("github_to_canvas.manifest.flush")
-    remove_mock = mocker.patch("github_to_canvas.canvas_api.remove_rubric_from_assignment", return_value=False)
+    mocker.patch("markdown_to_canvas.manifest.flush")
+    remove_mock = mocker.patch("markdown_to_canvas.canvas_api.remove_rubric_from_assignment", return_value=False)
     _setup_first_sync_mocks(mock_course)  # assignment mock has rubric_settings=None by default
 
     (course_root / "assignments" / "week1.md").write_text(
@@ -4250,7 +4250,7 @@ def test_rubric_no_removal_when_no_canvas_rubric(mock_course, course_root, mocke
 def test_remove_rubric_from_assignment_empty(mocker) -> None:
     """remove_rubric_from_assignment returns False when the rubric has no
     Assignment-type association for this assignment."""
-    from github_to_canvas.canvas_api import remove_rubric_from_assignment
+    from markdown_to_canvas.canvas_api import remove_rubric_from_assignment
 
     course = MagicMock()
     course.id = 1
@@ -4265,7 +4265,7 @@ def test_remove_rubric_from_assignment_empty(mocker) -> None:
 
 def test_remove_rubric_from_assignment_deletes(mocker) -> None:
     """remove_rubric_from_assignment deletes the matching association and returns True."""
-    from github_to_canvas.canvas_api import remove_rubric_from_assignment
+    from markdown_to_canvas.canvas_api import remove_rubric_from_assignment
 
     course = MagicMock()
     course.id = 1
@@ -4276,7 +4276,7 @@ def test_remove_rubric_from_assignment_deletes(mocker) -> None:
     course.get_rubric.return_value = rubric
 
     ra_mock = MagicMock()
-    mocker.patch("github_to_canvas.canvas_api.RubricAssociation", return_value=ra_mock)
+    mocker.patch("markdown_to_canvas.canvas_api.RubricAssociation", return_value=ra_mock)
 
     removed = remove_rubric_from_assignment(course, assignment_id=42, rubric_id=7)
     assert removed is True
@@ -4450,7 +4450,7 @@ def test_content_default_published_mirrors_referenced_frontmatter(tmp_path: Path
     state from the referenced content file's own frontmatter, defaulting to False
     when absent (matching the real sync default for pages/assignments/discussions),
     and to True for non-.md targets (e.g. File items) that have no frontmatter."""
-    from github_to_canvas.sync import _content_default_published
+    from markdown_to_canvas.sync import _content_default_published
 
     repo_root = tmp_path
     (repo_root / "pages").mkdir()
@@ -4475,7 +4475,7 @@ def test_content_default_published_resolves_published_from_frontmatter_snippet(
     file's own frontmatter block) must still be picked up — regression test for a
     bug where _content_default_published read raw frontmatter and saw no
     `published` key, silently unpublishing the module item."""
-    from github_to_canvas.sync import _content_default_published
+    from markdown_to_canvas.sync import _content_default_published
 
     repo_root = tmp_path
     snippets_dir = repo_root / "snippets" / "frontmatter"
@@ -4679,8 +4679,8 @@ def test_assignment_resynced_when_referenced_snippet_updated(
             "last_synced": "2025-01-01T00:00:00+00:00",
         },
     }
-    mocker.patch("github_to_canvas.manifest.load", return_value=preloaded)
-    mocker.patch("github_to_canvas.manifest.flush")
+    mocker.patch("markdown_to_canvas.manifest.load", return_value=preloaded)
+    mocker.patch("markdown_to_canvas.manifest.flush")
     mock_course.get_assignment.return_value = _mock_assignment(98765)
 
     # Sanity check: with everything aged, nothing should sync.
@@ -4719,8 +4719,8 @@ def test_module_resynced_when_referenced_snippet_updated(
             "last_synced": "2025-01-01T00:00:00+00:00",
         },
     }
-    mocker.patch("github_to_canvas.manifest.load", return_value=preloaded)
-    mocker.patch("github_to_canvas.manifest.flush")
+    mocker.patch("markdown_to_canvas.manifest.load", return_value=preloaded)
+    mocker.patch("markdown_to_canvas.manifest.flush")
     mock_course.get_assignment_groups.return_value = []
     module = _mock_module(66666)
     mock_course.get_module.return_value = module
@@ -4760,10 +4760,10 @@ def test_question_bank_resynced_when_referenced_snippet_updated(
             "last_synced": "2025-01-01T00:00:00+00:00",
         },
     }
-    mocker.patch("github_to_canvas.manifest.load", return_value=preloaded)
-    mocker.patch("github_to_canvas.manifest.flush")
+    mocker.patch("markdown_to_canvas.manifest.load", return_value=preloaded)
+    mocker.patch("markdown_to_canvas.manifest.flush")
     sync_bank_mock = mocker.patch(
-        "github_to_canvas.canvas_api.sync_question_bank", return_value=555
+        "markdown_to_canvas.canvas_api.sync_question_bank", return_value=555
     )
     mock_course.get_assignment_groups.return_value = []
     mock_course.get_tabs.return_value = []
@@ -4792,8 +4792,8 @@ def test_single_target_does_not_pull_in_other_files_via_snippet_change(
             "last_synced": "2025-01-01T00:00:00+00:00",
         },
     }
-    mocker.patch("github_to_canvas.manifest.load", return_value=preloaded)
-    mocker.patch("github_to_canvas.manifest.flush")
+    mocker.patch("markdown_to_canvas.manifest.load", return_value=preloaded)
+    mocker.patch("markdown_to_canvas.manifest.flush")
     mock_course.get_assignment.return_value = _mock_assignment(98765)
 
     _make_old(course_root / "assignments" / "week1.md")
@@ -4888,8 +4888,8 @@ def test_pinned_quiz_stale_is_not_uploaded_and_warns(
             "canvas_question_ids": {},
         },
     }
-    mocker.patch("github_to_canvas.manifest.load", return_value=preloaded)
-    mocker.patch("github_to_canvas.manifest.flush")
+    mocker.patch("markdown_to_canvas.manifest.load", return_value=preloaded)
+    mocker.patch("markdown_to_canvas.manifest.flush")
 
     had_errors = run_sync(_config(), root)
 
@@ -4908,7 +4908,7 @@ def test_pinned_quiz_stale_is_not_uploaded_and_warns(
 def test_pinned_quiz_md_file_entry_also_matches(mock_course, mocker, tmp_path) -> None:
     root = _quiz_course_root(tmp_path)
     _write_pinned(root, ["quizzes/a-quiz/a-quiz.md"])
-    mocker.patch("github_to_canvas.manifest.flush")
+    mocker.patch("markdown_to_canvas.manifest.flush")
 
     run_sync(_config(), root)
 
@@ -4931,8 +4931,8 @@ def test_pinned_wins_over_force_uploads(mock_course, mocker, tmp_path, capsys) -
             "canvas_question_ids": {},
         },
     }
-    mocker.patch("github_to_canvas.manifest.load", return_value=preloaded)
-    mocker.patch("github_to_canvas.manifest.flush")
+    mocker.patch("markdown_to_canvas.manifest.load", return_value=preloaded)
+    mocker.patch("markdown_to_canvas.manifest.flush")
 
     run_sync(_config(), root, force_uploads=True)
 
@@ -4959,8 +4959,8 @@ def test_pinned_up_to_date_quiz_stays_silent(
             "canvas_question_ids": {},
         },
     }
-    mocker.patch("github_to_canvas.manifest.load", return_value=preloaded)
-    mocker.patch("github_to_canvas.manifest.flush")
+    mocker.patch("markdown_to_canvas.manifest.load", return_value=preloaded)
+    mocker.patch("markdown_to_canvas.manifest.flush")
 
     run_sync(_config(), root, verbose=True)
 
@@ -4974,7 +4974,7 @@ def test_pinned_page_is_not_uploaded(mock_course, mocker, tmp_path, capsys) -> N
     (root / "pages").mkdir(parents=True)
     (root / "pages" / "one.md").write_text("---\ntitle: One\n---\nbody\n")
     _write_pinned(root, ["pages/one.md"])
-    mocker.patch("github_to_canvas.manifest.flush")
+    mocker.patch("markdown_to_canvas.manifest.flush")
 
     had_errors = run_sync(_config(), root)
 
@@ -4987,7 +4987,7 @@ def test_pinned_wins_over_explicit_target(mock_course, mocker, tmp_path, capsys)
     """Naming a pinned quiz with -s (even with --force-uploads) still skips it."""
     root = _quiz_course_root(tmp_path)
     _write_pinned(root, ["quizzes/a-quiz"])
-    mocker.patch("github_to_canvas.manifest.flush")
+    mocker.patch("markdown_to_canvas.manifest.flush")
 
     run_targeted_sync(
         _config(), root,
@@ -5008,7 +5008,7 @@ def test_pinned_entry_matching_nothing_warns(
     (root / "pages").mkdir(parents=True)
     (root / "pages" / "one.md").write_text("---\ntitle: One\n---\nbody\n")
     _write_pinned(root, ["quizzes/no-such-quiz"])
-    mocker.patch("github_to_canvas.manifest.flush")
+    mocker.patch("markdown_to_canvas.manifest.flush")
     mock_course.create_page.return_value = _mock_page(1, "one")
 
     run_sync(_config(), root)
@@ -5027,8 +5027,8 @@ def test_prune_delete_skips_pinned_orphan(mock_course, mocker, tmp_path, capsys)
         "quizzes/gone/gone.md": {"canvas_type": "quiz", "canvas_id": 44},
         "pages/gone.md": {"canvas_type": "page", "canvas_id": 11, "canvas_url": "gone"},
     }
-    mocker.patch("github_to_canvas.manifest.load", return_value=manifest)
-    mocker.patch("github_to_canvas.manifest.flush")
+    mocker.patch("markdown_to_canvas.manifest.load", return_value=manifest)
+    mocker.patch("markdown_to_canvas.manifest.flush")
 
     had_errors = run_prune(_config(), root, "delete")
 
@@ -5085,7 +5085,7 @@ def test_pinned_question_file_stops_update_before_any_upload(
     (the CLI turns it into die()) before anything is applied to Canvas."""
     root = _quiz_course_root(tmp_path)
     _write_pinned(root, ["quizzes/a-quiz/questions/what-is-2-plus-2.md"])
-    mocker.patch("github_to_canvas.manifest.flush")
+    mocker.patch("markdown_to_canvas.manifest.flush")
 
     with pytest.raises(ValueError, match="Pin the whole quiz instead"):
         run_sync(_config(), root)

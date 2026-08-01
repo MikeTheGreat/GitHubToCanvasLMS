@@ -1,2 +1,2 @@
-uv tool install --force --reinstall "github-to-canvas[publish] @ /home/mike/Dropbox/Personal/Tech/GitHubToCanvasLMS/GitHubToCanvasLMS"
-github-to-canvas install-completion
+uv tool install --force --reinstall "markdown-to-canvas[publish] @ /home/mike/Dropbox/Personal/Tech/MarkdownToCanvasLMS"
+markdown-to-canvas install-completion

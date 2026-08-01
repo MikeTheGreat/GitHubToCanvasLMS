@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from github_to_canvas.ignore import load_ignore_matcher
+from markdown_to_canvas.ignore import load_ignore_matcher
 
 
 def _write(path: Path, text: str) -> None:

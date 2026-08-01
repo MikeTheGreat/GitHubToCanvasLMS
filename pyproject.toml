@@ -3,9 +3,9 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "github-to-canvas"
-version = "0.1.0"
-description = "Sync Markdown from a GitHub repo to Canvas LMS"
+name = "markdown-to-canvas"
+version = "0.2.0"
+description = "Sync Markdown from a repo to Canvas LMS"
 requires-python = ">=3.11"
 dependencies = [
     "canvasapi>=3.3",
@@ -19,7 +19,7 @@ dependencies = [
 ]
 
 [project.scripts]
-github-to-canvas = "github_to_canvas.cli:main"
+markdown-to-canvas = "markdown_to_canvas.cli:main"
 
 [project.optional-dependencies]
 dev = [
@@ -32,13 +32,13 @@ publish = [
 ]
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/github_to_canvas"]
+packages = ["src/markdown_to_canvas"]
 
 [tool.ruff.lint.per-file-ignores]
 # cli.py intentionally places its local package imports after load_dotenv() so
 # that CANVAS_API_TOKEN is in the environment before .config reads it at import
 # time. See the comment above the load_dotenv() call in cli.py.
-"src/github_to_canvas/cli.py" = ["E402"]
+"src/markdown_to_canvas/cli.py" = ["E402"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

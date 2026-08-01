@@ -6,7 +6,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from github_to_canvas.link_rewrite import (
+from markdown_to_canvas.link_rewrite import (
     canvas_content_url,
     infer_canvas_type,
     rewrite_links,

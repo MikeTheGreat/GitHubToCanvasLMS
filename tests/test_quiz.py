@@ -2,7 +2,7 @@
 from pathlib import Path
 
 
-from github_to_canvas.quiz import parse_question_file, parse_quiz_file
+from markdown_to_canvas.quiz import parse_question_file, parse_quiz_file
 
 FIXTURES = Path(__file__).parent / "fixtures"
 QUIZ_DIR = FIXTURES / "quizzes" / "a-quiz"

@@ -11,7 +11,7 @@ from pathlib import Path
 
 import yaml
 
-from github_to_canvas import publish
+from markdown_to_canvas import publish
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -459,7 +459,7 @@ def test_emit_workflow(tmp_path):
     text = dest.read_text()
     assert "actions/deploy-pages@v4" in text
     assert "actions/upload-pages-artifact@v3" in text
-    assert "github-to-canvas publish ." in text
+    assert "markdown-to-canvas publish ." in text
     assert "--deploy" not in text
 
 

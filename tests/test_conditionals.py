@@ -10,18 +10,18 @@ from unittest.mock import MagicMock
 import pytest
 import tomli_w
 
-from github_to_canvas import manifest as manifest_lib
-from github_to_canvas import publish
-from github_to_canvas.conditionals import (
+from markdown_to_canvas import manifest as manifest_lib
+from markdown_to_canvas import publish
+from markdown_to_canvas.conditionals import (
     apply_conditionals,
     find_referenced_flags,
     find_referenced_flags_in_frontmatter,
     resolve_published_if,
 )
-from github_to_canvas.config import Config
-from github_to_canvas.convert import preprocess_snippets
-from github_to_canvas.mv import run_mv
-from github_to_canvas.sync import (
+from markdown_to_canvas.config import Config
+from markdown_to_canvas.convert import preprocess_snippets
+from markdown_to_canvas.mv import run_mv
+from markdown_to_canvas.sync import (
     check_course_flags_coverage,
     load_course_flags,
     run_sync,
@@ -727,7 +727,7 @@ def _mock_module(canvas_id: int) -> MagicMock:
 
 @pytest.fixture
 def mock_course(mocker) -> MagicMock:
-    mock_canvas_cls = mocker.patch("github_to_canvas.canvas_api.Canvas")
+    mock_canvas_cls = mocker.patch("markdown_to_canvas.canvas_api.Canvas")
     course = MagicMock()
     mock_canvas_cls.return_value.get_course.return_value = course
     return course

@@ -5,7 +5,7 @@ import os
 from pathlib import Path
 
 
-from github_to_canvas.manifest import flush, load, needs_sync, record
+from markdown_to_canvas.manifest import flush, load, needs_sync, record
 
 
 def test_load_missing_file(tmp_path: Path) -> None:

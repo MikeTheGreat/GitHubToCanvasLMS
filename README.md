@@ -1,4 +1,4 @@
-# github-to-canvas
+# markdown-to-canvas
 
 Sync a Markdown course repository to [Canvas LMS](https://www.instructure.com/canvas).
 
@@ -13,7 +13,7 @@ Write your course content as Markdown files in a Git repository. Run this tool t
 
 ## Contents
 
-- [github-to-canvas](#github-to-canvas)
+- [markdown-to-canvas](#markdown-to-canvas)
   - [Important Gotch'yas:](#important-gotchyas)
   - [Contents](#contents)
   - [How it works](#how-it-works)
@@ -114,35 +114,35 @@ A `.canvas-manifest.toml` file is written to your course repo to track Canvas ID
 
 - Python 3.11+
 - [uv](https://docs.astral.sh/uv/) (for install/run)
-- Pandoc — either install it system-wide **or** run `github-to-canvas setup` after installing the tool (see below)
+- Pandoc — either install it system-wide **or** run `markdown-to-canvas setup` after installing the tool (see below)
 - A Canvas LMS account with API access
 
 ### Recommended: install as a `uv` tool
 
 ```bash
-uv tool install git+https://github.com/MikeTheGreat/GitHubToCanvasLMS
+uv tool install git+https://github.com/MikeTheGreat/MarkdownToCanvasLMS
 ```
 
 Then run from anywhere:
 
 ```bash
-github-to-canvas ./my-course
+markdown-to-canvas ./my-course
 ```
 
 ### Run without installing (one-off)
 
 ```bash
-uvx --from git+https://github.com/MikeTheGreat/GitHubToCanvasLMS github-to-canvas \
+uvx --from git+https://github.com/MikeTheGreat/MarkdownToCanvasLMS markdown-to-canvas \
   ./my-course
 ```
 
-One-off `uvx` runs require a system-wide Pandoc install — `github-to-canvas setup` cannot help here because `uvx` uses a temporary environment that is discarded after the run.
+One-off `uvx` runs require a system-wide Pandoc install — `markdown-to-canvas setup` cannot help here because `uvx` uses a temporary environment that is discarded after the run.
 
 ### Install for development
 
 ```bash
-git clone https://github.com/MikeTheGreat/GitHubToCanvasLMS
-cd GitHubToCanvasLMS
+git clone https://github.com/MikeTheGreat/MarkdownToCanvasLMS
+cd MarkdownToCanvasLMS
 uv venv
 uv pip install -e ".[dev]"
 ```
@@ -150,14 +150,14 @@ uv pip install -e ".[dev]"
 After that, run the CLI directly without activating the venv:
 
 ```bash
-uv run github-to-canvas ./my-course
+uv run markdown-to-canvas ./my-course
 ```
 
 Or activate the venv first and then call the command normally:
 
 ```bash
 source .venv/bin/activate
-github-to-canvas ./my-course
+markdown-to-canvas ./my-course
 ```
 
 Run the tests the same way:
@@ -176,7 +176,7 @@ You have two options:
 - **Tool-local install** (after `uv tool install` only): run the `setup` subcommand to download Pandoc into the tool's own environment:
 
   ```bash
-  github-to-canvas setup
+  markdown-to-canvas setup
   ```
 
   This places the Pandoc binary alongside the tool so no separate system installation is needed. It is a no-op if Pandoc is already found.
@@ -207,7 +207,7 @@ Pass it as an environment variable (recommended):
 
 ```bash
 export CANVAS_API_TOKEN="your-token-here"
-github-to-canvas ./my-course
+markdown-to-canvas ./my-course
 ```
 
 Or put it in a `.env` file in your working directory (loaded automatically on startup):
@@ -224,14 +224,14 @@ Or put it in the `[auth]` block of `course_settings/canvas.toml` for local-only 
 ## Usage
 
 ```
-Usage: github-to-canvas update [OPTIONS] [REPO]
+Usage: markdown-to-canvas update [OPTIONS] [REPO]
 
   Sync a Markdown course repo to Canvas LMS.
 
 Arguments:
   REPO                            Path to the course content repo. If omitted, the enclosing
                                   repo is found by walking up from the current directory,
-                                  so you can run `github-to-canvas update` from any
+                                  so you can run `markdown-to-canvas update` from any
                                   subdirectory.  [optional]
 
 Options:
@@ -272,7 +272,7 @@ This lets you review the diverged items before deciding what to do:
 - **Keep the local version** — use `--force-overwrite` to overwrite Canvas regardless:
 
 ```bash
-github-to-canvas update . --force-overwrite
+markdown-to-canvas update . --force-overwrite
 ```
 
 `--force-overwrite` skips the Canvas timestamp check entirely. This is also faster (no extra API calls) when you know the local repo is the authoritative source and don't need the protection.
@@ -296,13 +296,13 @@ Syncs every file in the course repo. Files that haven't changed since their last
 
 ```bash
 # canvas.toml lives in the repo's course_settings/ folder (default)
-github-to-canvas update ./my-course
+markdown-to-canvas update ./my-course
 
 # explicit config path
-github-to-canvas update ./my-course --config ~/secrets/canvas.toml
+markdown-to-canvas update ./my-course --config ~/secrets/canvas.toml
 
 # force re-upload of everything regardless of timestamps
-github-to-canvas update ./my-course --force-uploads
+markdown-to-canvas update ./my-course --force-uploads
 ```
 
 ### Typical full-sync workflow
@@ -313,7 +313,7 @@ cd my-course && git pull
 
 # 2. Sync to Canvas (only changed files are uploaded)
 CANVAS_API_TOKEN=your-token-here \
-  github-to-canvas update .
+  markdown-to-canvas update .
 
 # 3. Commit the updated manifest
 git add .canvas-manifest.toml
@@ -336,7 +336,7 @@ reference checked — but:
   not just files changed since the last sync).
 
 ```bash
-github-to-canvas update ./my-course --check-all
+markdown-to-canvas update ./my-course --check-all
 ```
 
 Typical use: develop a course repo over a break, run `--check-all`
@@ -374,13 +374,13 @@ Syncs the specified file(s) and every resource they transitively reference, foll
 
 ```bash
 # Re-sync a module and everything it links to
-github-to-canvas update . -t modules/week-1.md
+markdown-to-canvas update . -t modules/week-1.md
 
 # Re-sync two modules and all their dependencies
-github-to-canvas update . -t modules/week-1.md,modules/week-2.md
+markdown-to-canvas update . -t modules/week-1.md,modules/week-2.md
 
 # Force re-upload even for unchanged files
-github-to-canvas update . -t modules/week-1.md --force-uploads
+markdown-to-canvas update . -t modules/week-1.md --force-uploads
 ```
 
 **What counts as a reference:**
@@ -397,10 +397,10 @@ Syncs only the listed file(s), with no recursive traversal. Useful when you know
 
 ```bash
 # Re-sync one page
-github-to-canvas update . -s pages/syllabus.md
+markdown-to-canvas update . -s pages/syllabus.md
 
 # Re-sync several specific files
-github-to-canvas update . -s assignments/week1.md,discussions/week1-intro.md
+markdown-to-canvas update . -s assignments/week1.md,discussions/week1-intro.md
 ```
 
 ### Combining `-t` and `-s`
@@ -410,7 +410,7 @@ github-to-canvas update . -s assignments/week1.md,discussions/week1-intro.md
 ```bash
 # Re-sync a module and all its content (via -t),
 # then also sync an unrelated page (via -s)
-github-to-canvas update . \
+markdown-to-canvas update . \
   -t modules/week-3.md \
   -s pages/office-hours.md
 ```
@@ -424,7 +424,7 @@ file locally, the item it created stays in Canvas and a stale entry remains in t
 manifest. Use `prune` to clean those up.
 
 ```text
-Usage: github-to-canvas prune [OPTIONS] REPO
+Usage: markdown-to-canvas prune [OPTIONS] REPO
 
   Delete or unpublish Canvas items whose local source file no longer exists.
 
@@ -448,13 +448,13 @@ manifest first if you want an easy way to undo.
 
 ```bash
 # Delete every orphaned item from Canvas
-github-to-canvas prune ./my-course --delete
+markdown-to-canvas prune ./my-course --delete
 
 # ...or hide them instead of deleting (where the type supports it)
-github-to-canvas prune ./my-course --unpublish
+markdown-to-canvas prune ./my-course --unpublish
 
 # ...or just clear stale manifest entries without touching Canvas
-github-to-canvas prune ./my-course --manifest-only
+markdown-to-canvas prune ./my-course --manifest-only
 ```
 
 Pages, assignments, discussions, quizzes, and modules can be either deleted or
@@ -482,7 +482,7 @@ Use `mv` to move or rename files and directories within your course repo.
 It handles all the bookkeeping so nothing breaks on the next `update`:
 
 ```text
-Usage: github-to-canvas mv [OPTIONS] SRC DEST
+Usage: markdown-to-canvas mv [OPTIONS] SRC DEST
 
   Move or rename a file/directory, updating the manifest and all references.
 
@@ -512,20 +512,20 @@ Writing DEST with a trailing `/` says "this must be an existing directory" —
 
 ```bash
 # Rename a page
-github-to-canvas mv pages/old-name.md pages/new-name.md
+markdown-to-canvas mv pages/old-name.md pages/new-name.md
 
 # Rename an asset directory (updates all references across the repo)
-github-to-canvas mv assets/Lecture-Related/Unit-01 assets/lecture-related/unit-01
+markdown-to-canvas mv assets/Lecture-Related/Unit-01 assets/lecture-related/unit-01
 
 # Rename a quiz folder (also renames the inner .md to match)
-github-to-canvas mv quizzes/old-quiz quizzes/new-quiz
+markdown-to-canvas mv quizzes/old-quiz quizzes/new-quiz
 
 # Move a file into an existing directory, keeping its name
 # (like normal mv — this lands at pages/summer/week-1.md)
-github-to-canvas mv pages/week-1.md pages/summer/
+markdown-to-canvas mv pages/week-1.md pages/summer/
 
 # Preview what would change without doing anything
-github-to-canvas mv --noop pages/old.md pages/new.md
+markdown-to-canvas mv --noop pages/old.md pages/new.md
 ```
 
 **Restrictions:**
@@ -673,7 +673,7 @@ tab_configuration = [
 # The optional `type` field disambiguates if two items share a title
 # (valid values: assignment, discussion, quiz).
 #
-# Use `github-to-canvas list-titles <repo>` to see all available titles.
+# Use `markdown-to-canvas list-titles <repo>` to see all available titles.
 #
 # IMPORTANT: like tab_configuration, this is a top-level key and must appear
 # BEFORE any [section] or [[section]] header.
@@ -1879,11 +1879,11 @@ To fix this, re-upload the affected file using one of:
 
 ```bash
 # Re-upload everything
-github-to-canvas update . --force-uploads
+markdown-to-canvas update . --force-uploads
 
 # Re-upload just the one file (touch updates mtime so the tool treats it as changed)
 touch assets/Images/path/to/file.png
-github-to-canvas update .
+markdown-to-canvas update .
 ```
 
 After a forced re-upload the file receives a **new** Canvas ID. Pages that reference the image must then be re-synced so their embedded URLs are rewritten to the new ID.
@@ -1893,7 +1893,7 @@ After a forced re-upload the file receives a **new** Canvas ID. Pages that refer
 Import an existing Canvas course export (`.imscc` file) into a local Markdown repo:
 
 ```bash
-github-to-canvas import course-export.imscc ./my-course-repo
+markdown-to-canvas import course-export.imscc ./my-course-repo
 ```
 
 This converts pages, assignments, discussions, announcements, quizzes, question banks, modules, and course settings to local files ready for use with this tool. A `canvas.toml` skeleton is written with the Canvas domain and course ID pre-filled from the export metadata.
@@ -1958,7 +1958,7 @@ due date (earliest first); items without a due date are listed last,
 alphabetically by title.
 
 ```bash
-github-to-canvas list-titles path/to/course-repo
+markdown-to-canvas list-titles path/to/course-repo
 ```
 
 Example output:
@@ -1991,7 +1991,7 @@ reading the navigation tabs from a live Canvas course.
 2. Run `create-tool-aliases`, passing any URL from that course:
 
    ```bash
-   github-to-canvas create-tool-aliases https://school.instructure.com/courses/12345
+   markdown-to-canvas create-tool-aliases https://school.instructure.com/courses/12345
    ```
 
    Any URL containing `/courses/<id>` works — you can paste whatever page you

@@ -8,21 +8,21 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from github_to_canvas.imscc_import import (
+from markdown_to_canvas.imscc_import import (
     _build_frontmatter,
     _collect_due_date,
     _extract_date_fields,
     format_due_dates_toml,
     run_import,
 )
-from github_to_canvas.sync import (
+from markdown_to_canvas.sync import (
     filter_due_dates_by_flags,
     find_due_date_override,
     load_due_dates,
     resolve_dates_symbolic,
     run_sync,
 )
-from github_to_canvas.config import Config
+from markdown_to_canvas.config import Config
 
 FIXTURES = Path(__file__).parent / "fixtures"
 IMSCC_FIXTURES = FIXTURES / "imscc"
@@ -254,25 +254,25 @@ class TestBuildFrontmatterCommented:
 
 class TestResolveDateOverrides:
     def test_actual_date_values(self) -> None:
-        from github_to_canvas.sync import _resolve_date_overrides
+        from markdown_to_canvas.sync import _resolve_date_overrides
         override = {"due_at": "2025-06-01T23:59:00", "unlock_at": "2025-05-01", "lock_at": "2025-06-08"}
         result = _resolve_date_overrides(override, canvas_id=123, local_key="x.md", errors=None)
         assert result == {"due_at": "2025-06-01T23:59:00", "unlock_at": "2025-05-01", "lock_at": "2025-06-08"}
 
     def test_none_sentinel_clears_date(self) -> None:
-        from github_to_canvas.sync import _resolve_date_overrides
+        from markdown_to_canvas.sync import _resolve_date_overrides
         override = {"due_at": "2025-06-01T23:59:00", "unlock_at": "NONE", "lock_at": "none"}
         result = _resolve_date_overrides(override, canvas_id=123, local_key="x.md", errors=None)
         assert result == {"due_at": "2025-06-01T23:59:00", "unlock_at": "", "lock_at": ""}
 
     def test_keep_sentinel_omits_field(self) -> None:
-        from github_to_canvas.sync import _resolve_date_overrides
+        from markdown_to_canvas.sync import _resolve_date_overrides
         override = {"due_at": "2025-06-01T23:59:00", "unlock_at": "KEEP", "lock_at": "Keep"}
         result = _resolve_date_overrides(override, canvas_id=123, local_key="x.md", errors=None)
         assert result == {"due_at": "2025-06-01T23:59:00"}
 
     def test_empty_string_acts_as_keep_with_warning(self) -> None:
-        from github_to_canvas.sync import _resolve_date_overrides
+        from markdown_to_canvas.sync import _resolve_date_overrides
         errors: list[str] = []
         override = {"due_at": "2025-06-01T23:59:00", "unlock_at": "", "lock_at": ""}
         result = _resolve_date_overrides(override, canvas_id=123, local_key="test.md", errors=errors)
@@ -282,7 +282,7 @@ class TestResolveDateOverrides:
         assert "CREATE_NONE_THEN_KEEP" in errors[0]
 
     def test_empty_string_consolidated_warning(self) -> None:
-        from github_to_canvas.sync import _resolve_date_overrides
+        from markdown_to_canvas.sync import _resolve_date_overrides
         errors: list[str] = []
         override = {"due_at": "", "unlock_at": "", "lock_at": ""}
         result = _resolve_date_overrides(override, canvas_id=123, local_key="test.md", errors=errors)
@@ -291,25 +291,25 @@ class TestResolveDateOverrides:
         assert "unlock_at, due_at, lock_at" in errors[0]
 
     def test_create_none_then_keep_on_create(self) -> None:
-        from github_to_canvas.sync import _resolve_date_overrides
+        from markdown_to_canvas.sync import _resolve_date_overrides
         override = {"due_at": "2025-06-01", "unlock_at": "CREATE_NONE_THEN_KEEP", "lock_at": "create_none_then_keep"}
         result = _resolve_date_overrides(override, canvas_id=None, local_key="x.md", errors=None)
         assert result == {"due_at": "2025-06-01", "unlock_at": "", "lock_at": ""}
 
     def test_create_none_then_keep_on_update(self) -> None:
-        from github_to_canvas.sync import _resolve_date_overrides
+        from markdown_to_canvas.sync import _resolve_date_overrides
         override = {"due_at": "2025-06-01", "unlock_at": "CREATE_NONE_THEN_KEEP", "lock_at": "create_none_then_keep"}
         result = _resolve_date_overrides(override, canvas_id=123, local_key="x.md", errors=None)
         assert result == {"due_at": "2025-06-01"}
 
     def test_case_insensitive_sentinels(self) -> None:
-        from github_to_canvas.sync import _resolve_date_overrides
+        from markdown_to_canvas.sync import _resolve_date_overrides
         override = {"due_at": "NoNe", "unlock_at": "kEeP", "lock_at": "Create_None_Then_Keep"}
         result = _resolve_date_overrides(override, canvas_id=None, local_key="x.md", errors=None)
         assert result == {"due_at": "", "lock_at": ""}
 
     def test_no_warning_when_errors_is_none(self) -> None:
-        from github_to_canvas.sync import _resolve_date_overrides
+        from markdown_to_canvas.sync import _resolve_date_overrides
         override = {"due_at": "", "unlock_at": "", "lock_at": ""}
         result = _resolve_date_overrides(override, canvas_id=123, local_key="x.md", errors=None)
         assert result == {}
@@ -368,7 +368,7 @@ def course_root(tmp_path: Path) -> Path:
 
 @pytest.fixture
 def mock_course(mocker) -> MagicMock:
-    mock_canvas_cls = mocker.patch("github_to_canvas.canvas_api.Canvas")
+    mock_canvas_cls = mocker.patch("markdown_to_canvas.canvas_api.Canvas")
     course = MagicMock()
     mock_canvas_cls.return_value.get_course.return_value = course
     return course
@@ -376,8 +376,8 @@ def mock_course(mocker) -> MagicMock:
 
 def test_due_dates_override_assignment(course_root: Path) -> None:
     """Centralized due_dates should override assignment frontmatter dates in _sync_content_file."""
-    from github_to_canvas.sync import _sync_content_file, SyncContext
-    from github_to_canvas import manifest as manifest_lib
+    from markdown_to_canvas.sync import _sync_content_file, SyncContext
+    from markdown_to_canvas import manifest as manifest_lib
 
     # Write centralized due_dates
     cs_dir = course_root / "course_settings"
@@ -415,8 +415,8 @@ def test_due_dates_override_assignment(course_root: Path) -> None:
 
 def test_due_dates_override_discussion(course_root: Path) -> None:
     """Centralized due_dates should override discussion frontmatter dates."""
-    from github_to_canvas.sync import _sync_content_file, SyncContext
-    from github_to_canvas import manifest as manifest_lib
+    from markdown_to_canvas.sync import _sync_content_file, SyncContext
+    from markdown_to_canvas import manifest as manifest_lib
 
     due_dates = [
         {"name": "Introduce Yourself", "due_at": "2099-06-15T23:59:00", "unlock_at": "", "lock_at": "2099-06-30T23:59:00"},
@@ -447,8 +447,8 @@ def test_due_dates_override_discussion(course_root: Path) -> None:
 
 def test_none_sentinel_clears_dates_on_canvas(course_root: Path) -> None:
     """NONE sentinel should send empty string to Canvas to clear the date."""
-    from github_to_canvas.sync import _sync_content_file, SyncContext
-    from github_to_canvas import manifest as manifest_lib
+    from markdown_to_canvas.sync import _sync_content_file, SyncContext
+    from markdown_to_canvas import manifest as manifest_lib
 
     due_dates = [
         {"name": "Week 1 Problem Set", "due_at": "2099-12-31T23:59:00", "unlock_at": "NONE", "lock_at": "NONE"},
@@ -481,8 +481,8 @@ def test_none_sentinel_clears_dates_on_canvas(course_root: Path) -> None:
 
 def test_create_none_then_keep_on_create(course_root: Path) -> None:
     """CREATE_NONE_THEN_KEEP should clear dates on first create (no canvas_id)."""
-    from github_to_canvas.sync import _sync_content_file, SyncContext
-    from github_to_canvas import manifest as manifest_lib
+    from markdown_to_canvas.sync import _sync_content_file, SyncContext
+    from markdown_to_canvas import manifest as manifest_lib
 
     due_dates = [
         {"name": "Week 1 Problem Set", "due_at": "2099-12-31T23:59:00",
@@ -517,8 +517,8 @@ def test_create_none_then_keep_on_create(course_root: Path) -> None:
 
 def test_create_none_then_keep_on_update(course_root: Path) -> None:
     """CREATE_NONE_THEN_KEEP should act as KEEP on update (canvas_id exists)."""
-    from github_to_canvas.sync import _sync_content_file, SyncContext
-    from github_to_canvas import manifest as manifest_lib
+    from markdown_to_canvas.sync import _sync_content_file, SyncContext
+    from markdown_to_canvas import manifest as manifest_lib
 
     due_dates = [
         {"name": "Week 1 Problem Set", "due_at": "2099-12-31T23:59:00",
@@ -536,7 +536,7 @@ def test_create_none_then_keep_on_update(course_root: Path) -> None:
     manifest_path = course_root / ".canvas-manifest.toml"
     manifest = manifest_lib.load(manifest_path)
     # Pre-populate manifest so it's treated as an update
-    from github_to_canvas import manifest as mlib
+    from markdown_to_canvas import manifest as mlib
     mlib.record(manifest, manifest_path, "assignments/week1.md", 98765, "assignment")
 
     md_file = course_root / "assignments" / "week1.md"
@@ -559,8 +559,8 @@ def test_create_none_then_keep_on_update(course_root: Path) -> None:
 def test_bad_request_retries_without_dates(course_root: Path) -> None:
     """When Canvas rejects due dates, retry without them and add a warning."""
     from canvasapi.exceptions import BadRequest
-    from github_to_canvas.sync import _sync_content_file, SyncContext
-    from github_to_canvas import manifest as manifest_lib
+    from markdown_to_canvas.sync import _sync_content_file, SyncContext
+    from markdown_to_canvas import manifest as manifest_lib
 
     due_dates = [
         {"name": "Week 1 Problem Set", "due_at": "2099-12-31T23:59:00", "unlock_at": "NONE", "lock_at": "NONE"},
@@ -605,8 +605,8 @@ def test_bad_request_retries_without_dates(course_root: Path) -> None:
 
 def test_empty_string_warning_in_errors(course_root: Path) -> None:
     """Empty string date values should produce a warning in the errors list."""
-    from github_to_canvas.sync import _sync_content_file, SyncContext
-    from github_to_canvas import manifest as manifest_lib
+    from markdown_to_canvas.sync import _sync_content_file, SyncContext
+    from markdown_to_canvas import manifest as manifest_lib
 
     due_dates = [
         {"name": "Week 1 Problem Set", "due_at": "2099-12-31T23:59:00", "unlock_at": "", "lock_at": ""},
@@ -660,10 +660,10 @@ def test_settings_change_applies_dates_only(
             "last_synced": _FUTURE,
         },
     }
-    mocker.patch("github_to_canvas.manifest.load", return_value=preloaded)
-    mocker.patch("github_to_canvas.manifest.flush")
+    mocker.patch("markdown_to_canvas.manifest.load", return_value=preloaded)
+    mocker.patch("markdown_to_canvas.manifest.flush")
 
-    mock_canvas_cls = mocker.patch("github_to_canvas.canvas_api.Canvas")
+    mock_canvas_cls = mocker.patch("markdown_to_canvas.canvas_api.Canvas")
     course = MagicMock()
     mock_canvas_cls.return_value.get_course.return_value = course
 
@@ -732,10 +732,10 @@ def _setup_cached_dates_run(course_root: Path, mocker, preloaded: dict) -> Magic
     are up-to-date and only the dates pass has work to consider."""
     import os
 
-    mocker.patch("github_to_canvas.manifest.load", return_value=preloaded)
-    mocker.patch("github_to_canvas.manifest.flush")
+    mocker.patch("markdown_to_canvas.manifest.load", return_value=preloaded)
+    mocker.patch("markdown_to_canvas.manifest.flush")
 
-    mock_canvas_cls = mocker.patch("github_to_canvas.canvas_api.Canvas")
+    mock_canvas_cls = mocker.patch("markdown_to_canvas.canvas_api.Canvas")
     course = MagicMock()
     mock_canvas_cls.return_value.get_course.return_value = course
 
@@ -1054,8 +1054,8 @@ def test_date_rejection_not_cached_retries_next_run(course_root: Path, mocker, c
 def test_full_sync_records_resolved_dates(course_root: Path) -> None:
     """The full-sync upload path caches the symbolic resolution alongside the entry
     (empty value and CREATE_NONE_THEN_KEEP both cache as KEEP)."""
-    from github_to_canvas.sync import _sync_content_file, SyncContext
-    from github_to_canvas import manifest as manifest_lib
+    from markdown_to_canvas.sync import _sync_content_file, SyncContext
+    from markdown_to_canvas import manifest as manifest_lib
 
     due_dates = [
         {
@@ -1095,7 +1095,7 @@ def test_coverage_skips_published_if_excluded_item(tmp_path: Path, capsys) -> No
     """An assignment excluded from this offering by `published_if` (flag off)
     should not trigger the "no due_dates entry" warning, but an otherwise
     identical assignment without `published_if` still should."""
-    from github_to_canvas.sync import _check_due_dates_coverage
+    from markdown_to_canvas.sync import _check_due_dates_coverage
 
     repo = tmp_path / "course"
     (repo / "assignments").mkdir(parents=True)
@@ -1117,7 +1117,7 @@ def test_coverage_skips_published_if_excluded_item(tmp_path: Path, capsys) -> No
 def test_coverage_reports_published_if_item_when_flag_is_on(tmp_path: Path, capsys) -> None:
     """The same file, with the flag on (so the item IS offered this run),
     should get the normal "no due_dates entry" warning."""
-    from github_to_canvas.sync import _check_due_dates_coverage
+    from markdown_to_canvas.sync import _check_due_dates_coverage
 
     repo = tmp_path / "course"
     (repo / "assignments").mkdir(parents=True)
@@ -1134,7 +1134,7 @@ def test_coverage_reports_published_if_item_when_flag_is_on(tmp_path: Path, caps
 def test_coverage_without_flags_treats_published_if_normally(tmp_path: Path, capsys) -> None:
     """When flags is None (caller didn't thread them through), published_if
     items are not specially excluded — same as before this feature existed."""
-    from github_to_canvas.sync import _check_due_dates_coverage
+    from markdown_to_canvas.sync import _check_due_dates_coverage
 
     repo = tmp_path / "course"
     (repo / "assignments").mkdir(parents=True)
@@ -1189,7 +1189,7 @@ def test_import_comments_out_dates_in_assignment(due_dates_imported_dir: Path) -
 def test_list_titles_output(tmp_path: Path) -> None:
     """list-titles should show assignments, discussions, and quizzes."""
     from click.testing import CliRunner
-    from github_to_canvas.cli import main
+    from markdown_to_canvas.cli import main
 
     # Copy fixtures
     root = tmp_path / "course"
@@ -1207,7 +1207,7 @@ def test_list_titles_output(tmp_path: Path) -> None:
 def test_list_titles_sorted_by_date(tmp_path: Path) -> None:
     """Items with due dates come first, sorted by date."""
     from click.testing import CliRunner
-    from github_to_canvas.cli import main
+    from markdown_to_canvas.cli import main
 
     root = tmp_path / "course"
     shutil.copytree(FIXTURES, root, ignore=shutil.ignore_patterns(".canvas-manifest.toml"))
@@ -1222,7 +1222,7 @@ def test_list_titles_sorted_by_date(tmp_path: Path) -> None:
 def test_list_titles_with_centralized_dates(tmp_path: Path) -> None:
     """list-titles should prefer centralized due_dates over frontmatter."""
     from click.testing import CliRunner
-    from github_to_canvas.cli import main
+    from markdown_to_canvas.cli import main
 
     root = tmp_path / "course"
     shutil.copytree(FIXTURES, root, ignore=shutil.ignore_patterns(".canvas-manifest.toml"))
@@ -1243,7 +1243,7 @@ def test_list_titles_with_centralized_dates(tmp_path: Path) -> None:
 def test_list_titles_empty_repo(tmp_path: Path) -> None:
     """list-titles on an empty repo should print a message."""
     from click.testing import CliRunner
-    from github_to_canvas.cli import main
+    from markdown_to_canvas.cli import main
 
     root = tmp_path / "empty_course"
     root.mkdir()

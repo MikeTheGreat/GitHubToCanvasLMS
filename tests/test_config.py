@@ -5,8 +5,8 @@ from pathlib import Path
 
 import pytest
 
-from github_to_canvas.cli import _resolve_repo
-from github_to_canvas.config import load
+from markdown_to_canvas.cli import _resolve_repo
+from markdown_to_canvas.config import load
 
 
 def _write_toml(path: Path, content: str) -> Path:

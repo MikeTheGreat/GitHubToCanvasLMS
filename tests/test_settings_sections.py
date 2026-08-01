@@ -14,9 +14,9 @@ from unittest.mock import MagicMock
 
 import tomli_w
 
-from github_to_canvas.config import Config
-from github_to_canvas.mv import run_mv
-from github_to_canvas.sync import compute_settings_section_hashes, run_sync
+from markdown_to_canvas.config import Config
+from markdown_to_canvas.mv import run_mv
+from markdown_to_canvas.sync import compute_settings_section_hashes, run_sync
 
 
 # ---------------------------------------------------------------------------
@@ -116,7 +116,7 @@ def _mock_assignment(canvas_id: int) -> MagicMock:
 
 
 def _mock_canvas_course(mocker) -> MagicMock:
-    mock_canvas_cls = mocker.patch("github_to_canvas.canvas_api.Canvas")
+    mock_canvas_cls = mocker.patch("markdown_to_canvas.canvas_api.Canvas")
     course = MagicMock()
     mock_canvas_cls.return_value.get_course.return_value = course
     course.create_assignment.return_value = _mock_assignment(101)
@@ -167,7 +167,7 @@ def test_title_edit_reruns_metadata_only(tmp_path, mocker) -> None:
     """Editing the course title re-sends metadata but not dates or other sections."""
     root = _make_repo(tmp_path)
     course = _mock_canvas_course(mocker)
-    upload_image = mocker.patch("github_to_canvas.canvas_api.upload_course_image")
+    upload_image = mocker.patch("markdown_to_canvas.canvas_api.upload_course_image")
 
     run_sync(_cfg(), root)
     course.reset_mock()
@@ -224,7 +224,7 @@ def test_dashboard_image_file_edit_reuploads_image_only(tmp_path, mocker) -> Non
         True,
         {"id": 77777, "url": "https://school.instructure.com/files/77777/download"},
     )
-    upload_image = mocker.patch("github_to_canvas.canvas_api.upload_course_image")
+    upload_image = mocker.patch("markdown_to_canvas.canvas_api.upload_course_image")
 
     run_sync(_cfg(), root)
     upload_image.assert_called_once()
@@ -255,7 +255,7 @@ def test_failed_section_recorded_as_error_and_retried_alone(tmp_path, mocker, ca
     root = _make_repo(tmp_path, settings)
     course = _mock_canvas_course(mocker)
     update_late = mocker.patch(
-        "github_to_canvas.canvas_api.update_late_policy",
+        "markdown_to_canvas.canvas_api.update_late_policy",
         side_effect=Exception("boom"),
     )
 

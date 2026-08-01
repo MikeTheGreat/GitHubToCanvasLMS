@@ -32,12 +32,12 @@ The three most important subcommands are **update**, **import**, **mv** and **pu
 - ARCHTECTURE.md is for notes, mostly for yourself, about the internals of the tool work
 - TODO.md is a list of possible future features.  After changing the code "updating the docs" should include checking to see if anything in TODO.md should be removed or updated.
 
-## User often uses a shell alias of 'gg' which expands to github-to-canvas
+## User often uses a shell alias of 'gg' which expands to markdown-to-canvas
 
 
-# GitHubToCanvasLMS
+# MarkdownToCanvasLMS
 
-A tool for managing Canvas LMS course content through Markdown files stored in a GitHub repository. The workflow converts Markdown (and supporting assets) into HTML fragments and uploads them to a Canvas LMS instance via the Canvas API.
+A tool for managing Canvas LMS course content through Markdown files stored in a Git repository. The workflow converts Markdown (and supporting assets) into HTML fragments and uploads them to a Canvas LMS instance via the Canvas API.
 
 - **[ARCHITECTURE.md](ARCHITECTURE.md)** — full system behaviour, file formats, CLI options, sync algorithm, import subcommand, configuration reference
 - **[TESTING.md](TESTING.md)** — testing strategy, layers, fixtures, and what to assert on
@@ -45,7 +45,7 @@ A tool for managing Canvas LMS course content through Markdown files stored in a
 
 ## Key Design Decisions
 
-- **Source of truth**: GitHub repo containing `.md` files and supporting assets (images, etc.)
+- **Source of truth**: Git repo containing `.md` files and supporting assets (images, etc.)
 - **Conversion**: Pandoc for Markdown → HTML conversion (produces clean HTML fragments suitable for Canvas)
 - **Delivery**: Command-line tool, packaged as a `uv` tool for easy installation and running via `uvx`
 - **Canvas content types**: Pages, Assignments, Discussion Forums, Quizzes (Classic), Modules

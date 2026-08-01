@@ -1,14 +1,14 @@
-# GitHubToCanvasLMS — Internal Documentation
+# MarkdownToCanvasLMS — Internal Documentation
 
 ## Project Intent
 
-A tool for managing Canvas LMS course content through Markdown files stored in a GitHub repository. The workflow converts Markdown (and supporting assets) into HTML fragments and uploads them to a Canvas LMS instance via the Canvas API.
+A tool for managing Canvas LMS course content through Markdown files stored in a Git repository. The workflow converts Markdown (and supporting assets) into HTML fragments and uploads them to a Canvas LMS instance via the Canvas API.
 
 ## Workflow
 
 ```text
 // Setup:
-GitHub repo (Markdown + assets)
+Git repo (Markdown + assets)
 git clone (local)
 
 // This tool:
@@ -169,7 +169,7 @@ Syncing module: modules/week-1.md
 ## `update` Subcommand
 
 ```text
-Usage: github-to-canvas update [OPTIONS] [REPO]
+Usage: markdown-to-canvas update [OPTIONS] [REPO]
 ```
 
 `REPO` is a positional path to the course content repo; there is no `--repo` flag. It is
@@ -291,7 +291,7 @@ dry-run — tab ids/labels can only be checked against a live course.
 ## `prune` Subcommand
 
 ```text
-Usage: github-to-canvas prune [OPTIONS] REPO
+Usage: markdown-to-canvas prune [OPTIONS] REPO
 
   --delete         Delete the orphaned items from Canvas.
   --unpublish      Unpublish (set published=False) the orphaned items on Canvas.
@@ -364,13 +364,13 @@ changed on Canvas), so they can be cleaned up manually if needed.
 Converts an exported Canvas course (`.imscc` file) into a local Markdown repo ready for use with this tool.
 
 ```text
-github-to-canvas import <imscc_path> <output_dir>
+markdown-to-canvas import <imscc_path> <output_dir>
 ```
 
 - `<imscc_path>`: `.imscc` zip file **or** a pre-extracted directory (auto-detected)
 - `<output_dir>`: where the course repo is written (fails if non-empty)
 
-**Implementation:** `src/github_to_canvas/imscc_import.py`
+**Implementation:** `src/markdown_to_canvas/imscc_import.py`
 
 ### IMSCC resource classification
 
@@ -527,7 +527,7 @@ familiar, without exposing any student data. This is a read-only export — it
 never touches Canvas, the API, or `.canvas-manifest.toml`.
 
 ```text
-github-to-canvas publish [COURSE_DIR] [--output-dir site] [--deploy] [--emit-workflow]
+markdown-to-canvas publish [COURSE_DIR] [--output-dir site] [--deploy] [--emit-workflow]
 ```
 
 - `COURSE_DIR`: the course content repo. If omitted, resolved by walking up from the current
@@ -536,10 +536,10 @@ github-to-canvas publish [COURSE_DIR] [--output-dir site] [--deploy] [--emit-wor
 - `--deploy`: run `mkdocs gh-deploy` (push to the repo's `gh-pages` branch) instead of a local build
 - `--emit-workflow`: also write a starter `.github/workflows/publish.yml` into the course repo
 
-**Implementation:** `src/github_to_canvas/publish.py`
+**Implementation:** `src/markdown_to_canvas/publish.py`
 
 **Optional dependency:** MkDocs and Material are an opt-in extra so the rest of
-the tool installs without them. Install with `uv tool install github-to-canvas[publish]`
+the tool installs without them. Install with `uv tool install markdown-to-canvas[publish]`
 (or `pip install mkdocs mkdocs-material`). If `mkdocs` is not on `PATH`, the
 subcommand exits via `die()` with an install hint. Pandoc is **not** needed for
 the publish flow — page/assignment/discussion bodies are staged as Markdown and
@@ -596,7 +596,7 @@ Moves or renames a file or directory within the course repo, updating all
 internal references so nothing breaks on the next sync.
 
 ```text
-github-to-canvas mv [--noop/-n] [--verbose/-v] SRC DEST
+markdown-to-canvas mv [--noop/-n] [--verbose/-v] SRC DEST
 ```
 
 `resolve_dest()` runs first, before validation and before any path map is

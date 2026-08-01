@@ -4,7 +4,7 @@ from __future__ import annotations
 from pathlib import Path
 
 
-from github_to_canvas.imscc_import import parse_imsmanifest
+from markdown_to_canvas.imscc_import import parse_imsmanifest
 
 FIXTURE_DIR = Path(__file__).parent / "fixtures" / "imscc"
 
@@ -112,22 +112,22 @@ def test_syllabus_local_path() -> None:
 
 
 def test_slugify_basic() -> None:
-    from github_to_canvas.imscc_import import _slugify
+    from markdown_to_canvas.imscc_import import _slugify
     assert _slugify("Week 06 Forum") == "week-06-forum"
 
 
 def test_slugify_special_chars() -> None:
-    from github_to_canvas.imscc_import import _slugify
+    from markdown_to_canvas.imscc_import import _slugify
     assert _slugify("Assignment 1: Foo Bar!") == "assignment-1-foo-bar"
 
 
 def test_slugify_multiple_spaces() -> None:
-    from github_to_canvas.imscc_import import _slugify
+    from markdown_to_canvas.imscc_import import _slugify
     assert _slugify("Hello   World") == "hello-world"
 
 
 def test_slugify_ampersand_stripped() -> None:
-    from github_to_canvas.imscc_import import _slugify
+    from markdown_to_canvas.imscc_import import _slugify
     result = _slugify("Week 1 & 2")
     assert "&" not in result
     assert "week" in result

@@ -84,7 +84,7 @@ from pathlib import Path
 # ---------------------------------------------------------------------------
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
-from github_to_canvas.imscc_import import (  # noqa: E402
+from markdown_to_canvas.imscc_import import (  # noqa: E402
     TempEntry,
     _extract_html_body,
     open_imscc,

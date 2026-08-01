@@ -4,7 +4,7 @@ from __future__ import annotations
 from unittest.mock import MagicMock
 
 
-from github_to_canvas.orphans import ResourceKey, extract_canvas_refs, find_orphans
+from markdown_to_canvas.orphans import ResourceKey, extract_canvas_refs, find_orphans
 
 
 # ---------------------------------------------------------------------------

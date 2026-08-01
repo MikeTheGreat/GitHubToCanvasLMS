@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 import tomli_w
 
-from github_to_canvas.mv import (
+from markdown_to_canvas.mv import (
     build_path_map,
     has_trailing_slash,
     compute_course_settings_updates,

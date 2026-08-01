@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from github_to_canvas.imscc_import import (
+from markdown_to_canvas.imscc_import import (
     TempEntry,
     _build_frontmatter,
     _convert_tab_configuration,
@@ -878,14 +878,14 @@ def test_qti_missing_file_returns_empty() -> None:
 
 
 def test_weblink_target_in_metadata() -> None:
-    from github_to_canvas.imscc_import import parse_imsmanifest
+    from markdown_to_canvas.imscc_import import parse_imsmanifest
     manifest = parse_imsmanifest(FIXTURE_DIR)
     entry = manifest["g_exturl_1"]
     assert entry.metadata.get("target") == "_blank"
 
 
 def test_weblink_window_features_in_metadata() -> None:
-    from github_to_canvas.imscc_import import parse_imsmanifest
+    from markdown_to_canvas.imscc_import import parse_imsmanifest
     manifest = parse_imsmanifest(FIXTURE_DIR)
     entry = manifest["g_exturl_1"]
     assert entry.metadata.get("window_features") == "width=800,height=600"
@@ -893,7 +893,7 @@ def test_weblink_window_features_in_metadata() -> None:
 
 def test_weblink_without_target_has_no_target_key() -> None:
     """A webLink with no target attribute should not produce a 'target' key."""
-    from github_to_canvas.imscc_import import parse_imsmanifest
+    from markdown_to_canvas.imscc_import import parse_imsmanifest
     manifest = parse_imsmanifest(FIXTURE_DIR)
     # g_exturl_1 has target; confirm the key is missing when not present by
     # checking a weblink fixture with no target (use a tmp manifest if needed)
@@ -978,7 +978,7 @@ def test_qti_pattern_match_has_match_type() -> None:
 
 
 def test_write_multiple_response_correct_is_index_list(tmp_path: Path) -> None:
-    from github_to_canvas.imscc_import import _write_question_file
+    from markdown_to_canvas.imscc_import import _write_question_file
     q = {
         "title": "Select primes",
         "question_type": "multiple_response_question",
@@ -1003,7 +1003,7 @@ def test_write_multiple_response_correct_is_index_list(tmp_path: Path) -> None:
 
 
 def test_write_fill_in_blank_has_answers_frontmatter(tmp_path: Path) -> None:
-    from github_to_canvas.imscc_import import _write_question_file
+    from markdown_to_canvas.imscc_import import _write_question_file
     q = {
         "title": "Speed of light",
         "question_type": "fill_in_blank_question",
@@ -1029,7 +1029,7 @@ def test_write_fill_in_blank_has_answers_frontmatter(tmp_path: Path) -> None:
 
 
 def test_write_pattern_match_has_match_type_frontmatter(tmp_path: Path) -> None:
-    from github_to_canvas.imscc_import import _write_question_file
+    from markdown_to_canvas.imscc_import import _write_question_file
     q = {
         "title": "Name a language",
         "question_type": "pattern_match_question",
@@ -1108,7 +1108,7 @@ def test_qti_no_feedback_returns_empty_dict() -> None:
 
 
 def test_write_feedback_section_written(tmp_path: Path) -> None:
-    from github_to_canvas.imscc_import import _write_question_file
+    from markdown_to_canvas.imscc_import import _write_question_file
     q = {
         "title": "Test Q",
         "question_type": "multiple_choice_question",
@@ -1144,7 +1144,7 @@ def test_write_feedback_section_written(tmp_path: Path) -> None:
 
 
 def test_write_sample_solution_written(tmp_path: Path) -> None:
-    from github_to_canvas.imscc_import import _write_question_file
+    from markdown_to_canvas.imscc_import import _write_question_file
     q = {
         "title": "Essay Q",
         "question_type": "essay_question",
@@ -1168,7 +1168,7 @@ def test_write_sample_solution_written(tmp_path: Path) -> None:
 
 
 def test_write_no_feedback_section_when_empty(tmp_path: Path) -> None:
-    from github_to_canvas.imscc_import import _write_question_file
+    from markdown_to_canvas.imscc_import import _write_question_file
     q = {
         "title": "Q",
         "question_type": "essay_question",
@@ -1197,20 +1197,20 @@ def test_write_no_feedback_section_when_empty(tmp_path: Path) -> None:
 
 
 def test_question_bank_entry_has_question_bank_category() -> None:
-    from github_to_canvas.imscc_import import parse_imsmanifest
+    from markdown_to_canvas.imscc_import import parse_imsmanifest
     manifest = parse_imsmanifest(FIXTURE_DIR)
     assert "g_bank_1" in manifest
     assert manifest["g_bank_1"].category == "question_bank"
 
 
 def test_question_bank_entry_local_path() -> None:
-    from github_to_canvas.imscc_import import parse_imsmanifest
+    from markdown_to_canvas.imscc_import import parse_imsmanifest
     manifest = parse_imsmanifest(FIXTURE_DIR)
     assert manifest["g_bank_1"].local_path == "question_banks/fixture-question-bank/fixture-question-bank.toml"
 
 
 def test_question_bank_entry_title() -> None:
-    from github_to_canvas.imscc_import import parse_imsmanifest
+    from markdown_to_canvas.imscc_import import parse_imsmanifest
     manifest = parse_imsmanifest(FIXTURE_DIR)
     assert manifest["g_bank_1"].title == "Fixture Question Bank"
 
