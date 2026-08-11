@@ -83,6 +83,11 @@ class SyncContext:
     pinned_skips: list[str] = field(default_factory=list)
     assignment_group_ids: dict[str, int] = field(default_factory=dict)
     rubric_ids: dict[str, int] = field(default_factory=dict)
+    # Titles that rubrics.toml lists but Canvas no longer had, so this run
+    # re-created them under a NEW canvas id. Assignments referencing them are
+    # still pointing at the old (soft-deleted) id and must be re-associated —
+    # see _repair_rubric_associations.
+    recreated_rubrics: set[str] = field(default_factory=set)
     synced_keys: set[str] = field(default_factory=set)
     unpublishable_items: list[tuple[str, str]] = field(default_factory=list)
     # (module_title, item_title, item_local_key) for content whose own
@@ -445,6 +450,61 @@ def _apply_due_dates_only(ctx: SyncContext) -> None:
         # KEEP) — the cache must advance or the entry re-triggers forever.
         existing["resolved_dates"] = resolved
         manifest_lib.flush(ctx.manifest_path, manifest)
+
+
+def _repair_rubric_associations(ctx: SyncContext) -> None:
+    """Re-point assignments at rubrics this run had to re-create.
+
+    Canvas soft-deletes a rubric as soon as its last association is destroyed,
+    but leaves that rubric attached to whatever assignments referenced it, and
+    re-creating the title mints a NEW canvas id instead of restoring the old
+    rubric. So every assignment referencing a re-created title is still bound
+    to a deleted rubric and has to be re-associated.
+
+    This cannot ride on the normal upload path: an unchanged .md file returns
+    from needs_sync before its frontmatter is ever parsed, so _apply_rubric
+    never runs for it. Files already synced this run are skipped — they were
+    associated with the new id on the way through.
+    """
+    if not ctx.recreated_rubrics:
+        return
+    print("Repairing rubric associations...")
+    for local_key, md_path, ctype in iter_gradeable_content(
+        ctx.repo_path, ctx.matcher
+    ):
+        # Only assignments carry rubrics (see _upload_assignment).
+        if ctype != "assignment" or local_key in ctx.synced_keys:
+            continue
+        existing = ctx.manifest.get(local_key)
+        if not existing or "canvas_id" not in existing:
+            continue
+        try:
+            fm, _ = parse_frontmatter(md_path.read_text())
+        except Exception:
+            continue
+        rubric_ref = fm.get("rubric")
+        # Numeric references name a canvas id directly and are left alone: if
+        # that id is the deleted rubric there is nothing to resolve it to.
+        if not isinstance(rubric_ref, str) or rubric_ref not in ctx.recreated_rubrics:
+            continue
+        rubric_canvas_id = ctx.rubric_ids.get(rubric_ref)
+        if rubric_canvas_id is None:
+            continue
+        if _skip_if_pinned(ctx, local_key):
+            continue
+        try:
+            ctx.api.associate_rubric_with_assignment(
+                ctx.course,
+                rubric_canvas_id,
+                existing["canvas_id"],
+                fm.get("use_for_grading", True),
+            )
+            print(f"  Re-associated rubric '{rubric_ref}': {local_key}")
+        except Exception as exc:
+            warn(
+                f"WARNING: {local_key}: rubric re-association failed: {exc}",
+                ctx.errors,
+            )
 
 
 def _check_due_dates_coverage(
@@ -1085,7 +1145,7 @@ def sync_course_settings(
     settings: dict | None = None,
     errors: list[str] | None = None,
     api=capi,
-) -> tuple[dict[str, int], set[str], list[str]]:
+) -> tuple[dict[str, int], set[str], list[str], set[str]]:
     """Sync course_settings.toml: metadata, grading standards, assignment groups, policies, rubrics.
 
     Sections of the settings file are change-detected individually via hashes
@@ -1095,11 +1155,13 @@ def sync_course_settings(
     via the ``rubric_hashes`` sub-table (keyed by title). If ``settings`` is
     provided (pre-loaded), the file is not re-read.
 
-    Returns ({rubric_title: canvas_id}, changed_sections, deferred_ag_rules):
-    changed_sections is the set of section names actually (re)applied this run
-    (run_sync's front-page phase keys off "front_page"), and deferred_ag_rules
-    lists assignment-group names whose drop rules Canvas rejected (too few
-    assignments) and must be re-applied after content.
+    Returns ({rubric_title: canvas_id}, changed_sections, deferred_ag_rules,
+    recreated_rubrics): changed_sections is the set of section names actually
+    (re)applied this run (run_sync's front-page phase keys off "front_page"),
+    deferred_ag_rules lists assignment-group names whose drop rules Canvas
+    rejected (too few assignments) and must be re-applied after content, and
+    recreated_rubrics holds titles that had to be re-created because Canvas no
+    longer listed them (see _repair_rubric_associations).
     """
     settings_path = repo_path / "course_settings" / "course_settings.toml"
     rubrics_path = repo_path / "course_settings" / "rubrics.toml"
@@ -1128,13 +1190,55 @@ def sync_course_settings(
         manifest, rubrics_key, rubrics_path, force_uploads
     )
 
-    if not settings_stale and not rubrics_stale:
+    # A rubric can disappear from Canvas while rubrics.toml is untouched:
+    # Canvas soft-deletes a rubric the moment its last association is
+    # destroyed, and a soft-deleted rubric drops out of the course rubric list
+    # even though assignments still point at it (the Canvas UI's Rubrics page
+    # keeps showing it, which makes this look like a lookup bug rather than a
+    # missing rubric). Detect it here, before any content phase, so the rubric
+    # is re-created and rubric_ids is right for the rest of the run — the
+    # per-rubric hash cache would otherwise skip it forever.
+    live_rubric_ids: dict[str, int] | None = None
+    local_rubrics: list[dict[str, Any]] = []
+    missing_on_canvas: set[str] = set()
+    if rubrics_path.exists():
+        with rubrics_path.open("rb") as fh:
+            local_rubrics = tomllib.load(fh).get("rubrics", [])
+        if local_rubrics:
+            try:
+                live_rubric_ids = api.get_rubric_ids(course)
+            except Exception:
+                live_rubric_ids = None
+            if live_rubric_ids is not None:
+                # Only a title this repo has synced before can have gone
+                # missing; one Canvas has never seen is simply new (first sync,
+                # or --check-all against its simulated empty course), and the
+                # hash cache already treats it as stale.
+                synced_before = (manifest.get(rubrics_key) or {}).get(
+                    "rubric_hashes"
+                ) or {}
+                missing_on_canvas = {
+                    title
+                    for title in (r.get("title", "") for r in local_rubrics)
+                    if title and title in synced_before and title not in live_rubric_ids
+                }
+                for title in sorted(missing_on_canvas):
+                    print(
+                        f"  NOTICE: rubric '{title}' is in rubrics.toml but no "
+                        f"longer on Canvas (deleted there); re-creating it"
+                    )
+
+    if not settings_stale and not rubrics_stale and not missing_on_canvas:
         if verbose and settings_path.exists():
             print(f"Skipping (up-to-date): {settings_key}")
+        if live_rubric_ids is not None:
+            return live_rubric_ids, changed_sections, deferred_ag_rules, set()
         try:
-            return api.get_rubric_ids(course), changed_sections, deferred_ag_rules
+            return (
+                api.get_rubric_ids(course), changed_sections, deferred_ag_rules, set()
+            )
         except Exception:
-            return {}, changed_sections, deferred_ag_rules
+            return {}, changed_sections, deferred_ag_rules, set()
 
     if settings_stale:
         assert settings is not None  # settings_path exists when settings_stale
@@ -1314,10 +1418,9 @@ def sync_course_settings(
     # rubric_hashes sub-table, so when the file's mtime is stale only rubrics
     # whose content actually changed are re-sent.
     rubric_ids: dict[str, int] = {}
-    if rubrics_stale:
-        with rubrics_path.open("rb") as fh:
-            rubrics_data = tomllib.load(fh)
-        rubrics = rubrics_data.get("rubrics", [])
+    recreated_rubrics: set[str] = set()
+    if rubrics_stale or missing_on_canvas:
+        rubrics = local_rubrics
         entry = manifest.get(rubrics_key) or {}
         recorded_rubric_hashes = entry.get("rubric_hashes")
         current_rubric_hashes = {
@@ -1326,10 +1429,14 @@ def sync_course_settings(
         if force_uploads or recorded_rubric_hashes is None:
             stale_rubrics = list(rubrics)
         else:
+            # A title missing from Canvas is stale no matter what the cached
+            # hash says — that cache is what would otherwise pin the broken
+            # state in place run after run.
             stale_rubrics = [
                 r
                 for r in rubrics
-                if recorded_rubric_hashes.get(r.get("title", ""))
+                if r.get("title", "") in missing_on_canvas
+                or recorded_rubric_hashes.get(r.get("title", ""))
                 != current_rubric_hashes[r.get("title", "")]
             ]
         if stale_rubrics:
@@ -1361,12 +1468,11 @@ def sync_course_settings(
                 for t in updated:
                     print(f"  Updated rubric: {t}")
                 for t in created:
-                    print(f"  Created (or restored) rubric: {t}")
-                if created:
-                    print(
-                        "  WARNING: Re-run with --force-uploads to re-create rubric "
-                        "associations on assignments that reference these rubrics."
-                    )
+                    print(f"  Created rubric: {t}")
+                # Canvas mints a new id rather than restoring the deleted
+                # rubric, so assignments still referencing the old id get
+                # re-pointed after the content phase.
+                recreated_rubrics = set(created) & missing_on_canvas
                 for t, err in failed:
                     print(f"  WARNING: rubric '{t}' sync failed: {err}")
                     rubrics_failed = True
@@ -1379,12 +1485,15 @@ def sync_course_settings(
             mark_synced=not rubrics_failed,
         )
     if not rubric_ids:
-        try:
-            rubric_ids = api.get_rubric_ids(course)
-        except Exception:
-            pass
+        if live_rubric_ids is not None:
+            rubric_ids = live_rubric_ids
+        else:
+            try:
+                rubric_ids = api.get_rubric_ids(course)
+            except Exception:
+                pass
 
-    return rubric_ids, changed_sections, deferred_ag_rules
+    return rubric_ids, changed_sections, deferred_ag_rules, recreated_rubrics
 
 
 def _phase_assets(ctx: SyncContext) -> None:
@@ -1617,9 +1726,11 @@ def run_sync(
     pinned = load_pinned_resources(repo_path, _settings_dict)
 
     # 0. Course settings (metadata, grading standards, assignment groups, policies, rubrics)
-    rubric_ids, changed_sections, deferred_ag_rules = sync_course_settings(
-        course, repo_path, manifest, manifest_path, force_uploads,
-        verbose=verbose, settings=_settings_dict, errors=errors, api=api,
+    rubric_ids, changed_sections, deferred_ag_rules, recreated_rubrics = (
+        sync_course_settings(
+            course, repo_path, manifest, manifest_path, force_uploads,
+            verbose=verbose, settings=_settings_dict, errors=errors, api=api,
+        )
     )
 
     assignment_group_ids = api.get_assignment_group_ids(course)
@@ -1645,6 +1756,7 @@ def run_sync(
         pinned=pinned,
         assignment_group_ids=assignment_group_ids,
         rubric_ids=rubric_ids,
+        recreated_rubrics=recreated_rubrics,
         synced_keys=synced_content_keys,
         unpublishable_items=unpublishable_items,
         ignored_fields=ignored_fields,
@@ -1662,6 +1774,12 @@ def run_sync(
     if _phase_content(ctx):
         _print_errors_summary(errors)
         return True
+
+    # 2.2. Rubrics re-created in phase 0 have new canvas ids; assignments whose
+    # files were not stale never reached _apply_rubric and still point at the
+    # deleted rubric. Runs after content so newly created assignments already
+    # have a canvas_id in the manifest.
+    _repair_rubric_associations(ctx)
 
     # 2.5. Quizzes
     _phase_quizzes(ctx)
@@ -2961,12 +3079,16 @@ def run_targeted_sync(
         if _settings_state["ran"]:
             return
         _settings_state["ran"] = True
-        new_rubric_ids, _, deferred = sync_course_settings(
+        new_rubric_ids, _, deferred, recreated = sync_course_settings(
             course, repo_path, manifest, manifest_path, force_uploads,
             verbose=verbose, errors=errors,
         )
         _settings_state["deferred_ag_rules"] = deferred
         ctx.rubric_ids.update(new_rubric_ids)
+        # Repair is repo-wide even in a targeted run: a re-created rubric
+        # leaves every assignment referencing it bound to the deleted one, and
+        # those files are usually outside the target set.
+        ctx.recreated_rubrics.update(recreated)
 
     def _process(local_key: str) -> None:
         file_path = repo_path / local_key
@@ -3078,6 +3200,9 @@ def run_targeted_sync(
             _warn_missing(target)
             continue
         _process(local_key)
+
+    # Mirrors run_sync step 2.2.
+    _repair_rubric_associations(ctx)
 
     # Assignment-group drop rules deferred from the course-settings sync
     # (mirrors run_sync step 2.65: the groups may have gained their

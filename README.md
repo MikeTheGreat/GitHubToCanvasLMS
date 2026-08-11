@@ -891,16 +891,32 @@ See the [Week 1 Assignment](../assignments/week1.md) and the
 Optional. Defines reusable grading rubrics for the course. Read during the same
 course-settings sync as `course_settings.toml`. Rubrics are matched **by title** —
 a rubric whose title already exists in Canvas is **updated in place** (reported as
-`Updated rubric: …`); missing rubrics are created (`Created (or restored) rubric: …`).
+`Updated rubric: …`); missing rubrics are created (`Created rubric: …`).
 
 Change detection is per rubric: when `rubrics.toml` changes, only the rubrics whose
 content actually changed are re-sent (each rubric's content hash is cached in
-`.canvas-manifest.toml`); use `--force-uploads` to re-send all of them. "Created
-(or restored)" means Canvas didn't list that title at sync time — either the rubric
-is genuinely new, or it was deleted on Canvas (deleting a rubric's last assignment
-association also deletes the rubric), in which case Canvas restores the old rubric
-rather than creating a duplicate. Note that a rubric deleted on Canvas but unchanged
-locally is only re-created when its content changes or with `--force-uploads`.
+`.canvas-manifest.toml`); use `--force-uploads` to re-send all of them.
+
+**If a rubric is deleted on Canvas, the tool repairs it automatically.** Canvas
+deletes a rubric as soon as its last association is removed, and a deleted rubric
+disappears from the API's rubric list *even though the course's Rubrics page still
+shows it* — so this looks like the tool failing to find a rubric that is plainly
+there. Every run compares `rubrics.toml` against the rubrics Canvas actually lists;
+a rubric that has gone missing is reported and re-created:
+
+```text
+  NOTICE: rubric '01 Coding Exercise Rubric' is in rubrics.toml but no longer on Canvas (deleted there); re-creating it
+Syncing rubrics...
+  Created rubric: 01 Coding Exercise Rubric
+Repairing rubric associations...
+  Re-associated rubric '01 Coding Exercise Rubric': assignments/01-b-unit-worksheets.md
+```
+
+The re-created rubric gets a **new** Canvas id (Canvas does not restore the deleted
+one), so every assignment whose frontmatter names that rubric is re-associated with
+it — including assignments whose own `.md` files were up to date and therefore
+skipped. Assignments referencing a rubric by numeric id instead of title are left
+alone; there is no title to re-resolve, so fix those by hand.
 
 ```toml
 # course_settings/rubrics.toml — array-of-tables, one [[rubrics]] block per rubric.

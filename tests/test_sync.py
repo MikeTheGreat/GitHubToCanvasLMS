@@ -3857,8 +3857,8 @@ def test_rubric_hashing_skips_unchanged_rubrics(
     entry = manifest["course_settings/rubrics.toml"]
     assert set(entry["rubric_hashes"]) == {"Rubric A", "Rubric B"}
     out = capsys.readouterr().out
-    assert "Created (or restored) rubric: Rubric A" in out
-    assert "Created (or restored) rubric: Rubric B" in out
+    assert "Created rubric: Rubric A" in out
+    assert "Created rubric: Rubric B" in out
 
     # Second run: only Rubric B's content changes.
     _write_rubrics(7.0)
@@ -4205,6 +4205,152 @@ def test_rubric_use_for_grading_false(mock_course, course_root, mocker) -> None:
 
     call_kwargs = mock_course.create_rubric_association.call_args[1]
     assert call_kwargs["rubric_association"]["use_for_grading"] is False
+
+
+def test_sync_rubrics_creates_course_association_as_bookmark() -> None:
+    """The course-level association MUST use purpose "bookmark".
+
+    Canvas forks a rubric on edit (leaving an orphan "X (1)" copy and the real
+    rubric unchanged) once it has more than one *grading* association, and a
+    course-level "grading" association counts toward that — so "grading" here
+    would make every rubric attached to even one assignment fork on each sync.
+    """
+    from markdown_to_canvas.canvas_api import sync_rubrics
+
+    course = MagicMock()
+    course.id = 555
+    course.get_rubrics.return_value = []
+    course.create_rubric.return_value = {"rubric": _mock_rubric(41, "Rubric A")}
+
+    sync_rubrics(course, [{"title": "Rubric A", "criteria": []}])
+
+    assoc = course.create_rubric.call_args[1]["rubric_association"]
+    assert assoc["purpose"] == "bookmark"
+    assert assoc["association_type"] == "Course"
+    assert assoc["association_id"] == 555
+
+
+def _write_rubric_repair_repo(root: Path) -> None:
+    """Minimal repo: one rubric in rubrics.toml, one assignment using it.
+
+    Deliberately not the shared fixture tree — these tests call run_sync twice
+    and its module-item mocks are one-shot iterators.
+    """
+    cs_dir = root / "course_settings"
+    cs_dir.mkdir(parents=True, exist_ok=True)
+    (cs_dir / "rubrics.toml").write_text(
+        '[[rubrics]]\n'
+        'title = "Essay Rubric"\n'
+        '[[rubrics.criteria]]\n'
+        'description = "Correctness"\n'
+        'points = 10.0\n'
+    )
+    (root / "assignments").mkdir(parents=True, exist_ok=True)
+    (root / "assignments" / "week1.md").write_text(
+        '---\ntitle: "Week 1"\nrubric: "Essay Rubric"\npublished: true\n---\n\n## Work\n'
+    )
+
+
+def test_deleted_rubric_is_recreated_and_reassociated(
+    mock_course, tmp_path, mocker, capsys
+) -> None:
+    """A rubric deleted on Canvas is re-created and its assignments re-pointed.
+
+    Canvas soft-deletes a rubric when its last association is destroyed, which
+    drops it from the rubric list while assignments keep pointing at it. The
+    cached hash in rubric_hashes would otherwise skip it forever, and the
+    assignment's own file is unchanged so it never reaches _apply_rubric.
+    """
+    manifest: dict = {}
+    mocker.patch("markdown_to_canvas.manifest.load", return_value=manifest)
+    mocker.patch("markdown_to_canvas.manifest.flush")
+    root = tmp_path / "course"
+    _write_rubric_repair_repo(root)
+    mock_course.create_assignment.return_value = _mock_assignment(98765)
+
+    rubric = _mock_rubric(42, "Essay Rubric")
+    mock_course.get_rubrics.return_value = []
+    mock_course.create_rubric.return_value = {"rubric": rubric}
+
+    run_sync(_config(), root)
+    capsys.readouterr()
+
+    # Second run: nothing on disk changed, but Canvas no longer lists the
+    # rubric (soft-deleted there). create_rubric now mints a NEW id — Canvas
+    # does not restore the deleted one.
+    recreated = _mock_rubric(77, "Essay Rubric")
+    mock_course.create_rubric.return_value = {"rubric": recreated}
+    mock_course.create_rubric.reset_mock()
+    mock_course.create_rubric_association.reset_mock()
+    mock_course.create_assignment.reset_mock()
+
+    run_sync(_config(), root)
+
+    out = capsys.readouterr().out
+    assert "no longer on Canvas" in out
+    mock_course.create_rubric.assert_called_once()
+    # The repair must not depend on the assignment being re-uploaded — its
+    # file is unchanged, so it never reaches _apply_rubric.
+    mock_course.create_assignment.assert_not_called()
+    mock_course.create_rubric_association.assert_called_once()
+    assoc = mock_course.create_rubric_association.call_args[1]["rubric_association"]
+    assert assoc["rubric_id"] == 77
+    assert assoc["association_type"] == "Assignment"
+    assert "Re-associated rubric 'Essay Rubric'" in out
+
+
+def test_present_rubric_is_not_recreated(
+    mock_course, tmp_path, mocker, capsys
+) -> None:
+    """The presence check is quiet when Canvas still lists the rubric."""
+    manifest: dict = {}
+    mocker.patch("markdown_to_canvas.manifest.load", return_value=manifest)
+    mocker.patch("markdown_to_canvas.manifest.flush")
+    root = tmp_path / "course"
+    _write_rubric_repair_repo(root)
+    mock_course.create_assignment.return_value = _mock_assignment(98765)
+
+    rubric = _mock_rubric(42, "Essay Rubric")
+    mock_course.get_rubrics.return_value = []
+    mock_course.create_rubric.return_value = {"rubric": rubric}
+
+    run_sync(_config(), root)
+    capsys.readouterr()
+
+    mock_course.get_rubrics.return_value = [rubric]
+    mock_course.create_rubric.reset_mock()
+    mock_course.create_rubric_association.reset_mock()
+
+    run_sync(_config(), root)
+
+    out = capsys.readouterr().out
+    assert "no longer on Canvas" not in out
+    assert "Repairing rubric associations" not in out
+    mock_course.create_rubric.assert_not_called()
+
+
+def test_first_sync_does_not_report_rubrics_as_deleted(
+    mock_course, tmp_path, mocker, capsys
+) -> None:
+    """A rubric Canvas has never seen is new, not deleted.
+
+    Without this guard every rubric on a first sync (and every rubric under
+    --check-all, whose simulated course starts empty) would be announced as
+    having been deleted on Canvas.
+    """
+    mocker.patch("markdown_to_canvas.manifest.load", return_value={})
+    mocker.patch("markdown_to_canvas.manifest.flush")
+    root = tmp_path / "course"
+    _write_rubric_repair_repo(root)
+    mock_course.create_assignment.return_value = _mock_assignment(98765)
+    mock_course.get_rubrics.return_value = []
+    mock_course.create_rubric.return_value = {"rubric": _mock_rubric(42, "Essay Rubric")}
+
+    run_sync(_config(), root)
+
+    out = capsys.readouterr().out
+    assert "no longer on Canvas" not in out
+    assert "Created rubric: Essay Rubric" in out
 
 
 def test_rubric_removal_when_rubric_key_absent(mock_course, course_root, mocker) -> None:

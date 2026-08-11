@@ -1075,10 +1075,14 @@ def sync_rubrics(
     in place this call; failed is (title, error) pairs for rubrics whose API
     call failed — a failure doesn't abort the remaining rubrics.
 
-    "Created" means Canvas didn't list the title at sync time. That's true
-    for a genuinely new rubric, but also for one that was soft-deleted on
-    Canvas (e.g. its last association was removed) — the create call then
-    restores the old rubric rather than making a duplicate.
+    "Created" means Canvas didn't list the title at sync time. That's true for
+    a genuinely new rubric, but also for one that was soft-deleted on Canvas
+    (Canvas soft-deletes a rubric the moment its last association is
+    destroyed). A soft-deleted rubric is NOT restored by creating the same
+    title again — Canvas makes a brand-new rubric and leaves the old one
+    deleted but still attached to whatever assignments referenced it, so
+    callers must re-associate those assignments with the new id. See
+    sync._repair_rubric_associations.
     """
     existing = {r.title: r.id for r in course.get_rubrics()}
     if not rubrics:
@@ -1109,7 +1113,15 @@ def sync_rubrics(
                     rubric_association={
                         "association_type": "Course",
                         "association_id": course.id,
-                        "purpose": "grading",
+                        # MUST be "bookmark", not "grading". Canvas forks a
+                        # rubric on edit instead of updating it in place once
+                        # more than one *grading* association exists, and a
+                        # course-level "grading" association counts toward that
+                        # total — so a rubric on even one assignment would fork
+                        # on every sync, leaving an orphan copy titled "X (1)"
+                        # while the real rubric kept its old criteria.
+                        # Verified against Canvas 2026-08.
+                        "purpose": "bookmark",
                     },
                 )
                 if "rubric" in result:

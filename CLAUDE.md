@@ -42,6 +42,7 @@ A tool for managing Canvas LMS course content through Markdown files stored in a
 - **[ARCHITECTURE.md](ARCHITECTURE.md)** — full system behaviour, file formats, CLI options, sync algorithm, import subcommand, configuration reference
 - **[TESTING.md](TESTING.md)** — testing strategy, layers, fixtures, and what to assert on
 - **[TODO.md](TODO.md)** — planned and possible future features
+- **[RUBRIC_ISSUES.md](RUBRIC_ISSUES.md)** — measured Canvas rubric behaviour (soft-deletion, copy-on-edit forking, association rules) and the open rubric issues. Read this before changing anything rubric-related; it exists so the live-Canvas experiments don't have to be repeated
 
 ## Key Design Decisions
 

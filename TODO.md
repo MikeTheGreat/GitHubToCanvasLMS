@@ -39,16 +39,20 @@ need to read the centralized `due_dates` table from
 `course_settings/course_settings.toml` and apply the same override logic that
 `update` uses (centralized dates take precedence over per-file frontmatter).
 
-## `read_only` flag not respected when Canvas restores a soft-deleted rubric
+## `read_only` and `reusable` flags are ignored by Canvas on rubric create
 
-When a rubric is deleted from Canvas and re-created by the sync tool, Canvas
-appears to restore the soft-deleted rubric (matched by title) with its original
-`read_only` value. Neither the `create_rubric` POST nor a follow-up PUT
-successfully overrides `read_only` in this scenario. The PUT works fine for
-rubrics that were never deleted — only the delete-and-recreate path is affected.
+Verified 2026-08 against a live course: `create_rubric` with `read_only = true`
+and `reusable = true` returns a rubric with **both** set to `false`, and the
+follow-up PUT does not override them either. This is not (as previously
+recorded here) specific to re-creating a deleted rubric — a first-time create is
+affected the same way, so the earlier "restore matched by title" theory was
+wrong; Canvas never restores a soft-deleted rubric, it makes a new one.
 
-Possible workaround: create the rubric with a slightly different title to avoid
-the soft-delete match, then rename it via PUT. Untested.
+Canvas appears to derive `read_only` itself from the rubric's association count
+(a rubric attached to many assignments reads back `read_only: true`, a
+freshly-created one `false`), which would make the flag not settable via the API
+at all. Worth confirming before spending more effort on it, since these two
+fields are accepted by `rubrics.toml` and silently do nothing.
 
 ## Group sets and group assignments
 Currently we don't manage this, but it would be nice
@@ -142,8 +146,8 @@ README. Confirm this is the intended mapping or add separate handling.
 ## Re-sync is not idempotent for question banks and rubrics
 
 Unlike pages/assignments/discussions/quizzes (which look up the existing Canvas item
-by manifest `canvas_id` and update it in place), question banks and rubrics have no
-update path:
+by manifest `canvas_id` and update it in place), question banks have no update path
+at all, and the rubric update path is defeated by Canvas for shared rubrics:
 
 ### Question banks create a duplicate on every re-sync
 
@@ -198,13 +202,33 @@ a re-sync.
 See the matching `KNOWN LIMITATION` note in `canvas_api.sync_question_bank` for the
 same findings at the call site.
 
-### Rubrics are never updated once created
+### Editing a rubric used by 2+ assignments silently does nothing
 
-`canvas_api.sync_rubrics` matches rubrics **by title** and skips any whose title
-already exists in Canvas. Editing a rubric's criteria/ratings locally and
-re-syncing has no effect — the existing Canvas rubric is left untouched. To change
-a rubric you must currently delete it in Canvas first (or rename it). Consider an
-update-in-place path matched by manifest id rather than title.
+See **[RUBRIC_ISSUES.md](RUBRIC_ISSUES.md)** for the full measured Canvas behaviour
+behind this and the other open rubric items.
+
+Canvas refuses to edit a rubric in place once it has more than one *grading*
+association: `PUT courses/:id/rubrics/:rubric_id` instead creates a **new** rubric
+titled `X (1)`, associated with nothing, and leaves the original rubric's criteria
+unchanged. The assignments keep showing the old rubric. `sync_rubrics` still
+reports `Updated rubric: …`, so the edit looks like it worked.
+
+Verified 2026-08 against a live course, including that passing
+`rubric_association_id` on the PUT does not avoid the fork. Using
+`purpose: "bookmark"` for the course-level association (already done) fixes the
+one-assignment case, which is what produced long runs of orphan `X (1) … X (11)`
+rubrics; 2+ assignments still fork.
+
+Fix would be to detect the fork (the POST/PUT response carries a different rubric
+id than the one requested), then re-point every association from the old rubric to
+the new one and delete the old — `_repair_rubric_associations` in `sync.py` already
+does the re-pointing half for re-created rubrics. Until then, `Updated rubric:`
+should probably warn when the returned id differs from the one sent.
+
+Note orphan `X (n)` rubrics cannot be deleted through the API as-is: with no
+association, both `GET` and `DELETE courses/:id/rubrics/:id` fail (404 / 500).
+Associating one with any assignment first makes the DELETE work — worth a small
+cleanup subcommand if these keep accumulating.
 
 ## Question bank staleness doesn't check individual question file mtimes
 

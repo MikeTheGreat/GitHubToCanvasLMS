@@ -159,6 +159,14 @@ def install_completion(shell: str | None) -> None:
     comp = comp_cls(cli=main, ctx_args={}, prog_name=prog_name, complete_var=complete_var)
     script = comp.source()
 
+    if shell == "bash":
+        # Click's bash template invokes the completion subprocess as "$1", which bash
+        # sets to whatever word the user actually typed (e.g. a "gg" alias), not the
+        # real executable — so it fails with "gg: No such file or directory" when
+        # completion is registered against an alias. Hardcode the real prog_name so
+        # completion works no matter what alias/function `complete -F` is bound to.
+        script = script.replace(f"{complete_var}=bash_complete $1)", f"{complete_var}=bash_complete {prog_name})")
+
     dest = _completion_path(shell, prog_name)
     dest.parent.mkdir(parents=True, exist_ok=True)
     dest.write_text(script)
