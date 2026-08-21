@@ -1350,8 +1350,9 @@ Top-level `## headings` always appear at indent level 0. Plain-text list items s
 
 ```toml
 # course_settings/module_order.toml
-# Lists module filenames in the order they should appear in Canvas (position 1 = top).
-# Filenames are relative to the modules/ directory.
+# Lists modules in the order they should appear in Canvas (position 1 = top).
+# An entry ending in .md is a file in the modules/ directory; any other entry
+# is the name of a module that exists only on Canvas.
 # Modules not listed here are placed after all listed ones by Canvas.
 order = [
     "week-1.md",
@@ -1360,7 +1361,43 @@ order = [
 ]
 ```
 
-When this file is modified, the tool repositions the listed modules on Canvas without re-syncing their content. If a listed module isn't found locally or hasn't been synced to Canvas yet, a warning is printed. This file is also generated automatically by the `import` subcommand, preserving the module order from the original Canvas export.
+When this file is modified, the tool repositions the listed modules on Canvas without re-syncing their content. If a listed module isn't found locally or hasn't been synced to Canvas yet, a warning is printed and the run reports failure. This file is also generated automatically by the `import` subcommand, preserving the module order from the original Canvas export.
+
+#### Ordering modules that exist only on Canvas
+
+Some modules in your course are not yours to manage — a college-wide orientation module dropped into every shell, for instance. You can still control where they sit relative to your own modules by listing them **by their Canvas name**:
+
+```toml
+order = [
+    "Getting Started at Cascadia",   # created on Canvas, no local file
+    "week-1.md",
+    "week-2.md",
+]
+```
+
+How an entry is resolved:
+
+- Ends in `.md` → a file in `modules/`. Missing on disk, or never synced to Canvas, is a warning and a failed run.
+- Anything else → the name of a module on Canvas. The name is matched ignoring capitalization and surrounding whitespace.
+
+The tool never creates, edits, deletes, or unpublishes a module it knows only by name — it only sets its position.
+
+Two cases are errors (warning printed, run reports failure, that one entry is left where it is):
+
+- **No Canvas module has that name.** Also what you get from a typo in a filename that lost its `.md`.
+- **Two or more Canvas modules share that name.** The tool will not guess which one you meant; rename one on Canvas.
+
+An empty string in `order` is rejected outright, since it names nothing.
+
+Once resolved, the module's Canvas ID is cached in `.canvas-manifest.toml` so later runs skip the lookup:
+
+```toml
+["canvas_modules/Getting Started at Cascadia"]
+canvas_id = 4213
+canvas_type = "external_module"
+```
+
+If the college later deletes or renames that module, the cached ID stops working; the tool notices, looks the name up again, and refreshes the cache. These cache entries have no local file by design, and `prune` ignores them — it will never offer to delete the college's module.
 
 ### Quiz (`quizzes/`)
 

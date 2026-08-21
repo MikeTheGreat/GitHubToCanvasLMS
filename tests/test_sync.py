@@ -12,6 +12,8 @@ from canvasapi.exceptions import ResourceDoesNotExist
 
 from markdown_to_canvas.config import Config
 from markdown_to_canvas.sync import (
+    _load_module_order,
+    _local_module_positions,
     check_title_collisions,
     compute_settings_section_hashes,
     find_pinned_match,
@@ -3207,6 +3209,246 @@ def test_targeted_sync_passes_position_from_order_file(
 
     call_kwargs = mock_course.create_module.call_args[1]["module"]
     assert call_kwargs["position"] == 2
+
+
+# ---------------------------------------------------------------------------
+# module_order.toml: entries naming a module that exists only on Canvas
+# ---------------------------------------------------------------------------
+
+
+def _external_order_repo(root: Path, order: str) -> Path:
+    """Repo with one synced module file and a module_order.toml that is stale."""
+    _make_minimal_module_repo(root, ["week-1.md"])
+    order_path = root / "course_settings" / "module_order.toml"
+    order_path.parent.mkdir()
+    order_path.write_text(order)
+    _make_old(root / "modules" / "week-1.md")
+    return order_path
+
+
+def _external_preloaded(extra: dict | None = None) -> dict:
+    preloaded = {
+        "modules/week-1.md": {
+            "canvas_id": 101, "canvas_type": "module",
+            "canvas_item_ids": {},
+            "last_synced": _FUTURE_SYNCED,
+        },
+    }
+    if extra:
+        preloaded.update(extra)
+    return preloaded
+
+
+def _canvas_module(canvas_id: int, name: str) -> MagicMock:
+    m = _mock_module(canvas_id)
+    m.name = name
+    return m
+
+
+def test_module_order_resolves_canvas_only_module_by_name(
+    mock_course, mocker, tmp_path, capsys
+) -> None:
+    """A non-.md entry is looked up by name on Canvas and repositioned."""
+    root = tmp_path / "course"
+    _external_order_repo(
+        root, 'order = ["Getting Started at Cascadia", "week-1.md"]\n'
+    )
+    mocker.patch("markdown_to_canvas.manifest.load", return_value=_external_preloaded())
+    flush = mocker.patch("markdown_to_canvas.manifest.flush")
+    mock_course.get_modules.return_value = [
+        _canvas_module(4213, "Getting Started at Cascadia"),
+        _canvas_module(101, "week-1.md"),
+    ]
+    college = _mock_module(4213)
+    mock_course.get_module.side_effect = lambda cid: (
+        college if cid == 4213 else _mock_module(cid)
+    )
+
+    errors = run_sync(_config(), root)
+
+    assert errors is False
+    college.edit.assert_called_once_with(module={"position": 1})
+    # The resolved id is cached in the manifest for the next run.
+    written = flush.call_args[0][1]
+    assert written["canvas_modules/Getting Started at Cascadia"]["canvas_id"] == 4213
+    assert (
+        written["canvas_modules/Getting Started at Cascadia"]["canvas_type"]
+        == "external_module"
+    )
+
+
+def test_module_order_uses_cached_canvas_module_id(
+    mock_course, mocker, tmp_path
+) -> None:
+    """A cached id is used directly — no get_modules() lookup."""
+    root = tmp_path / "course"
+    _external_order_repo(
+        root, 'order = ["Getting Started at Cascadia", "week-1.md"]\n'
+    )
+    mocker.patch(
+        "markdown_to_canvas.manifest.load",
+        return_value=_external_preloaded({
+            "canvas_modules/Getting Started at Cascadia": {
+                "canvas_id": 4213, "canvas_type": "external_module",
+                "last_synced": _FUTURE_SYNCED,
+            },
+        }),
+    )
+    mocker.patch("markdown_to_canvas.manifest.flush")
+    college = _mock_module(4213)
+    mock_course.get_module.side_effect = lambda cid: (
+        college if cid == 4213 else _mock_module(cid)
+    )
+
+    assert run_sync(_config(), root) is False
+    mock_course.get_modules.assert_not_called()
+    college.edit.assert_called_once_with(module={"position": 1})
+
+
+def test_module_order_stale_cached_id_falls_back_to_name_lookup(
+    mock_course, mocker, tmp_path, capsys
+) -> None:
+    """When the cached id no longer works, the name is looked up again."""
+    root = tmp_path / "course"
+    _external_order_repo(
+        root, 'order = ["Getting Started at Cascadia", "week-1.md"]\n'
+    )
+    mocker.patch(
+        "markdown_to_canvas.manifest.load",
+        return_value=_external_preloaded({
+            "canvas_modules/Getting Started at Cascadia": {
+                "canvas_id": 999, "canvas_type": "external_module",
+                "last_synced": _FUTURE_SYNCED,
+            },
+        }),
+    )
+    flush = mocker.patch("markdown_to_canvas.manifest.flush")
+    mock_course.get_modules.return_value = [
+        _canvas_module(4213, "Getting Started at Cascadia"),
+    ]
+    college = _mock_module(4213)
+
+    def _get_module(cid):
+        if cid == 999:
+            raise RuntimeError("does not exist")
+        return college if cid == 4213 else _mock_module(cid)
+
+    mock_course.get_module.side_effect = _get_module
+
+    assert run_sync(_config(), root) is False
+    college.edit.assert_called_once_with(module={"position": 1})
+    assert "no longer works" in capsys.readouterr().out
+    written = flush.call_args[0][1]
+    assert written["canvas_modules/Getting Started at Cascadia"]["canvas_id"] == 4213
+
+
+def test_module_order_canvas_name_match_is_case_insensitive(
+    mock_course, mocker, tmp_path
+) -> None:
+    """Capitalization and padding differences still match."""
+    root = tmp_path / "course"
+    _external_order_repo(
+        root, 'order = ["  getting started AT cascadia ", "week-1.md"]\n'
+    )
+    mocker.patch("markdown_to_canvas.manifest.load", return_value=_external_preloaded())
+    mocker.patch("markdown_to_canvas.manifest.flush")
+    mock_course.get_modules.return_value = [
+        _canvas_module(4213, "Getting Started at Cascadia"),
+    ]
+    college = _mock_module(4213)
+    mock_course.get_module.side_effect = lambda cid: (
+        college if cid == 4213 else _mock_module(cid)
+    )
+
+    assert run_sync(_config(), root) is False
+    college.edit.assert_called_once_with(module={"position": 1})
+
+
+def test_module_order_error_when_canvas_name_not_found(
+    mock_course, mocker, tmp_path, capsys
+) -> None:
+    """An unmatched name is a warning and makes the run report failure."""
+    root = tmp_path / "course"
+    _external_order_repo(root, 'order = ["No Such Module", "week-1.md"]\n')
+    mocker.patch("markdown_to_canvas.manifest.load", return_value=_external_preloaded())
+    mocker.patch("markdown_to_canvas.manifest.flush")
+    mock_course.get_modules.return_value = [_canvas_module(101, "week-1.md")]
+
+    assert run_sync(_config(), root) is True
+    out = capsys.readouterr().out
+    assert "no module with that name was found on Canvas" in out
+
+
+def test_module_order_error_when_canvas_name_is_ambiguous(
+    mock_course, mocker, tmp_path, capsys
+) -> None:
+    """Two Canvas modules sharing the listed name is an error, not a guess."""
+    root = tmp_path / "course"
+    _external_order_repo(
+        root, 'order = ["Getting Started at Cascadia", "week-1.md"]\n'
+    )
+    mocker.patch("markdown_to_canvas.manifest.load", return_value=_external_preloaded())
+    mocker.patch("markdown_to_canvas.manifest.flush")
+    mock_course.get_modules.return_value = [
+        _canvas_module(4213, "Getting Started at Cascadia"),
+        _canvas_module(4214, "getting started at cascadia"),
+    ]
+
+    assert run_sync(_config(), root) is True
+    assert "2 modules on Canvas have that name" in capsys.readouterr().out
+
+
+def test_module_order_empty_entry_is_config_error(tmp_path) -> None:
+    """An empty entry is rejected outright rather than silently reserving a slot."""
+    root = tmp_path / "course"
+    _external_order_repo(root, 'order = ["", "week-1.md"]\n')
+
+    with pytest.raises(ValueError, match="empty entry"):
+        _load_module_order(root)
+
+
+def test_module_order_non_string_entry_is_config_error(tmp_path) -> None:
+    root = tmp_path / "course"
+    _external_order_repo(root, "order = [3, \"week-1.md\"]\n")
+
+    with pytest.raises(ValueError, match="is not a string"):
+        _load_module_order(root)
+
+
+def test_module_order_local_positions_skip_canvas_only_entries(tmp_path) -> None:
+    """Local module files keep their absolute position in the mixed list."""
+    root = tmp_path / "course"
+    _external_order_repo(
+        root,
+        'order = ["Getting Started at Cascadia", "week-1.md", "week-2.md"]\n',
+    )
+
+    entries = _load_module_order(root)
+    assert entries == [
+        ("Getting Started at Cascadia", False),
+        ("week-1.md", True),
+        ("week-2.md", True),
+    ]
+    assert _local_module_positions(entries) == {"week-1.md": 2, "week-2.md": 3}
+
+
+def test_prune_ignores_canvas_only_module_entries(mock_course, mocker, tmp_path, capsys) -> None:
+    """The cached Canvas-only module entry has no local file but is not an orphan."""
+    root = tmp_path / "course"
+    _make_minimal_module_repo(root, ["week-1.md"])
+    mocker.patch(
+        "markdown_to_canvas.manifest.load",
+        return_value={
+            "canvas_modules/Getting Started at Cascadia": {
+                "canvas_id": 4213, "canvas_type": "external_module",
+                "last_synced": _FUTURE_SYNCED,
+            },
+        },
+    )
+    mocker.patch("markdown_to_canvas.manifest.flush")
+
+    assert run_prune(_config(), root, mode="manifest") is False
+    assert "No orphaned manifest entries found" in capsys.readouterr().out
 
 
 # ---------------------------------------------------------------------------

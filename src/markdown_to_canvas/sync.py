@@ -1616,7 +1616,8 @@ def _phase_modules(ctx: SyncContext, force_uploads: bool) -> None:
     synced_keys = ctx.synced_keys
     _order_key = "course_settings/module_order.toml"
     _order_path = repo_path / _order_key
-    position_map = _load_module_order(repo_path)
+    order_entries = _load_module_order(repo_path)
+    position_map = _local_module_positions(order_entries)
     order_changed = _order_path.exists() and manifest_lib.needs_sync(
         manifest, _order_key, _order_path, force_uploads
     )
@@ -1654,7 +1655,10 @@ def _phase_modules(ctx: SyncContext, force_uploads: bool) -> None:
             if had_module_warnings:
                 errors.append(f"module {md_file.name}: some items could not be added")
     if order_changed:
-        _reorder_modules(course, position_map, repo_path, manifest, errors, api=ctx.api)
+        _reorder_modules(
+            course, order_entries, repo_path, manifest, errors,
+            api=ctx.api, manifest_path=manifest_path,
+        )
         manifest_lib.record(manifest, manifest_path, _order_key, 0, "module_order")
 
 
@@ -1884,10 +1888,14 @@ def run_prune(config: Config, repo_path: Path, mode: str) -> bool:
     manifest_path = repo_path / ".canvas-manifest.toml"
     manifest = manifest_lib.load(manifest_path)
 
+    # Canvas-only modules (module_order.toml entries cached under
+    # EXTERNAL_MODULE_PREFIX) have no local file by definition, so they are
+    # never orphans — prune must not offer to delete the college's module.
     orphans = [
         (key, entry)
         for key, entry in manifest.items()
         if not (repo_path / key).exists()
+        and entry.get("canvas_type") != EXTERNAL_MODULE_TYPE
     ]
     if not orphans:
         print("No orphaned manifest entries found; nothing to prune.")
@@ -2467,44 +2475,171 @@ def _sync_content_file(ctx: SyncContext, md_file: Path) -> None:
         _upload_announcement(ctx, existing, frontmatter, html, title, published, local_key, flags_used)
 
 
-def _load_module_order(repo_path: Path) -> dict[str, int]:
-    """Return a filename→1-based-position map from course_settings/module_order.toml."""
+# Manifest key prefix and canvas_type for a Canvas module that has no local
+# file — one the college (or anyone else) created directly in Canvas, listed in
+# module_order.toml by its Canvas name so the tool can position it relative to
+# the modules it does manage.
+EXTERNAL_MODULE_PREFIX = "canvas_modules/"
+EXTERNAL_MODULE_TYPE = "external_module"
+
+
+def external_module_key(name: str) -> str:
+    """Manifest key caching the Canvas id of an unmanaged module."""
+    return f"{EXTERNAL_MODULE_PREFIX}{name}"
+
+
+def _load_module_order(repo_path: Path) -> list[tuple[str, bool]]:
+    """Return the module_order.toml entries as (value, is_local_file) pairs.
+
+    Position is the 1-based index in the returned list. An entry ending in
+    ``.md`` names a file in ``modules/``; anything else is the name of a module
+    that lives only on Canvas (see EXTERNAL_MODULE_PREFIX). An empty or
+    non-string entry is a whole-run config error: raises ValueError, which the
+    CLI reports via die().
+    """
     order_path = repo_path / "course_settings" / "module_order.toml"
     if not order_path.exists():
-        return {}
+        return []
     with order_path.open("rb") as fh:
         data = tomllib.load(fh)
-    return {name: i for i, name in enumerate(data.get("order", []), start=1)}
+    entries: list[tuple[str, bool]] = []
+    for raw in data.get("order", []):
+        if not isinstance(raw, str):
+            raise ValueError(
+                f"module_order.toml: order entry {raw!r} is not a string — "
+                "each entry must be a module filename ending in .md or the "
+                "name of a module that exists only on Canvas"
+            )
+        value = raw.strip()
+        if not value:
+            raise ValueError(
+                "module_order.toml: order contains an empty entry — name the "
+                "module instead (a module filename ending in .md, or the "
+                "Canvas name of a module that exists only on Canvas)"
+            )
+        entries.append((value, value.endswith(".md")))
+    return entries
+
+
+def _local_module_positions(entries: list[tuple[str, bool]]) -> dict[str, int]:
+    """filename→1-based position, for the local-file entries only."""
+    return {
+        value: i
+        for i, (value, is_local) in enumerate(entries, start=1)
+        if is_local
+    }
+
+
+def _resolve_external_module_id(
+    course,
+    name: str,
+    manifest: dict,
+    manifest_path: Path | None,
+    name_index: dict[str, list[int]] | None,
+    api=capi,
+) -> tuple[int | None, dict[str, list[int]] | None, str | None]:
+    """Canvas id of the module named ``name``, looked up by name and cached.
+
+    ``name_index`` is the (lazily fetched) casefolded-name→ids map for the
+    course, passed in and returned so one reorder pass costs at most one
+    get_modules() call. Returns (canvas_id, name_index, error_message); on
+    failure canvas_id is None and error_message says why.
+    """
+    key = external_module_key(name)
+    if name_index is None:
+        name_index = api.get_module_ids_by_name(course)
+    ids = name_index.get(name.strip().casefold(), [])
+    if not ids:
+        return (
+            None,
+            name_index,
+            f"module_order.toml lists '{name}' but no module with that name "
+            "was found on Canvas (and it is not a module file — filenames "
+            "must end in .md)",
+        )
+    if len(ids) > 1:
+        return (
+            None,
+            name_index,
+            f"module_order.toml lists '{name}' but {len(ids)} modules on "
+            "Canvas have that name — rename one of them, or give the module "
+            "a local file in modules/",
+        )
+    manifest_lib.record(manifest, manifest_path, key, ids[0], EXTERNAL_MODULE_TYPE)
+    return ids[0], name_index, None
 
 
 def _reorder_modules(
     course,
-    position_map: dict[str, int],
+    entries: list[tuple[str, bool]],
     repo_path: Path,
     manifest: dict,
     errors: list[str] | None,
     api=capi,
+    manifest_path: Path | None = None,
 ) -> None:
-    """Set module positions on Canvas without re-syncing content."""
+    """Set module positions on Canvas without re-syncing content.
+
+    Entries naming a local file resolve through the manifest as usual; entries
+    naming a Canvas-only module resolve by name (cached in the manifest under
+    EXTERNAL_MODULE_PREFIX, so the name lookup is skipped on later runs).
+    """
     modules_dir = repo_path / "modules"
-    for filename, position in position_map.items():
-        local_key = f"modules/{filename}"
-        local_path = modules_dir / filename
-        if not local_path.exists():
-            msg = f"module_order.toml lists '{filename}' but it was not found locally"
+    name_index: dict[str, list[int]] | None = None
+    for position, (value, is_local) in enumerate(entries, start=1):
+        if is_local:
+            local_key = f"modules/{value}"
+            local_path = modules_dir / value
+            if not local_path.exists():
+                msg = f"module_order.toml lists '{value}' but it was not found locally"
+                print(f"  WARNING: {msg}")
+                if errors is not None:
+                    errors.append(msg)
+                continue
+            entry = manifest.get(local_key)
+            if entry is None or "canvas_id" not in entry:
+                msg = f"module_order.toml lists '{value}' but it has not been synced to Canvas yet"
+                print(f"  WARNING: {msg}")
+                if errors is not None:
+                    errors.append(msg)
+                continue
+            print(f"Reordering module: {local_key} → position {position}")
+            api.reposition_module(course, entry["canvas_id"], position)
+            continue
+
+        # Canvas-only module: try the cached id first, and fall back to a name
+        # lookup if the reposition fails (the module was deleted or its id
+        # changed since the id was cached).
+        cached = manifest.get(external_module_key(value)) or {}
+        canvas_id = cached.get("canvas_id")
+        error: str | None = None
+        if canvas_id is not None:
+            print(f"Reordering Canvas-only module: '{value}' → position {position}")
+            try:
+                api.reposition_module(course, canvas_id, position)
+                continue
+            except Exception:
+                print(
+                    f"  cached Canvas id {canvas_id} for '{value}' no longer "
+                    "works — looking the module up by name again"
+                )
+                canvas_id = None
+        canvas_id, name_index, error = _resolve_external_module_id(
+            course, value, manifest, manifest_path, name_index, api=api
+        )
+        if canvas_id is None:
+            print(f"  WARNING: {error}")
+            if errors is not None:
+                errors.append(error or f"could not resolve module '{value}'")
+            continue
+        print(f"Reordering Canvas-only module: '{value}' → position {position}")
+        try:
+            api.reposition_module(course, canvas_id, position)
+        except Exception as exc:
+            msg = f"failed to reposition Canvas module '{value}': {exc}"
             print(f"  WARNING: {msg}")
             if errors is not None:
                 errors.append(msg)
-            continue
-        entry = manifest.get(local_key)
-        if entry is None or "canvas_id" not in entry:
-            msg = f"module_order.toml lists '{filename}' but it has not been synced to Canvas yet"
-            print(f"  WARNING: {msg}")
-            if errors is not None:
-                errors.append(msg)
-            continue
-        print(f"Reordering module: {local_key} → position {position}")
-        api.reposition_module(course, entry["canvas_id"], position)
 
 
 def _sync_module(
@@ -3042,7 +3177,8 @@ def run_targeted_sync(
     ignored_fields: list[tuple[str, str]] = []
     assignment_group_ids = capi.get_assignment_group_ids(course)
     rubric_ids = capi.get_rubric_ids(course)
-    _targeted_position_map = _load_module_order(repo_path)
+    _targeted_order_entries = _load_module_order(repo_path)
+    _targeted_position_map = _local_module_positions(_targeted_order_entries)
     course_flags = load_course_flags(repo_path)
     due_dates = filter_due_dates_by_flags(load_due_dates(repo_path), course_flags)
     pinned = load_pinned_resources(repo_path)
@@ -3103,7 +3239,8 @@ def run_targeted_sync(
                     manifest, local_key, file_path, force_uploads
                 ):
                     _reorder_modules(
-                        course, _targeted_position_map, repo_path, manifest, errors
+                        course, _targeted_order_entries, repo_path, manifest,
+                        errors, manifest_path=manifest_path,
                     )
                     manifest_lib.record(
                         manifest, manifest_path, local_key, 0, "module_order"

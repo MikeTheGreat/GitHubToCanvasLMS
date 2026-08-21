@@ -358,9 +358,56 @@ run — that entry keeps its manifest key so it can be retried.
 | `file` | ✅ deleted | ⏭️ skipped (Canvas files use a hidden/locked state, not a `published` boolean) |
 | `question_bank` | ⏭️ skipped (no reliable delete via `canvasapi`) | ⏭️ skipped (no unpublish concept) |
 | `syllabus`, `course_settings`, `module_order` | ⏭️ skipped (bookkeeping / course fields, no standalone object) | ⏭️ skipped |
+| `external_module` | n/a — never treated as an orphan (see below) | n/a |
 
 Skipped orphans print a warning and **retain** their manifest entry (nothing is
 changed on Canvas), so they can be cleaned up manually if needed.
+
+`external_module` entries (keys under `canvas_modules/`) are filtered out
+*before* the orphan scan rather than skipped inside it: they cache the Canvas id
+of a module that has no local file by definition, so the "no file on disk"
+heuristic would flag every one of them on every prune run.
+
+### Canvas-only modules in `module_order.toml`
+
+`_load_module_order` classifies each `order` entry by whether it ends in `.md`:
+a filename resolves through `modules/` and the manifest as before, anything else
+is the name of a module that lives only on Canvas. Empty and non-string entries
+raise `ValueError` (a whole-run config error, reported via `die()`), which is
+what retires the older trick of using `""` to reserve position 1 for a module
+the tool could not name.
+
+Positions are the 1-based index into the full list, so Canvas-only entries
+occupy real slots; `_local_module_positions` projects out just the file entries
+for the per-module `position` passed during a normal content sync.
+
+Name resolution (`_resolve_external_module_id`) matches on
+`name.strip().casefold()` against `capi.get_module_ids_by_name(course)`, so a
+capitalization change on the Canvas side does not break the file. Canvas allows
+duplicate module names, hence the name→**list** of ids; an ambiguous name is an
+error rather than a guess. The resolved id is cached as
+
+```toml
+["canvas_modules/Getting Started at Cascadia"]
+canvas_id = 4213
+canvas_type = "external_module"
+```
+
+so the happy path costs no `get_modules()` call at all. A cached id that fails
+to reposition (module deleted or re-created by whoever owns it) falls back to a
+fresh name lookup, which refreshes the cache. The one `get_modules()` call a
+reorder pass may need is threaded through the loop as `name_index` so several
+unresolved names still cost one request.
+
+Under `--check-all` the simulated course is empty, so `DryRunCanvas`'s
+`get_module_ids_by_name` returns an index in which *every* name resolves —
+otherwise a check would report the real course's Canvas-only modules as
+missing.
+
+As with local modules, Canvas-only modules are repositioned only when
+`module_order.toml` itself is stale (or targeted, or `--force-uploads`).
+Canvas's insert-and-shift positioning keeps a correctly placed module in place
+while other modules are re-synced around it.
 
 ## `import` Subcommand
 

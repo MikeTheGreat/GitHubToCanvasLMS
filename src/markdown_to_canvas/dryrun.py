@@ -26,6 +26,24 @@ def _fake_html_url(canvas_type: str, canvas_id: int) -> str:
     return f"(check-all: {canvas_type} not uploaded, fake id {canvas_id})"
 
 
+class _AnyModuleName(dict):
+    """Name index in which every name resolves to exactly one fake module id.
+
+    module_order.toml may list modules that exist only on Canvas; the simulated
+    course is empty, so looking them up for real would report every one of them
+    as missing even though the actual course has them.
+    """
+
+    def __init__(self, new_id) -> None:
+        super().__init__()
+        self._new_id = new_id
+
+    def get(self, name, default=None):  # noqa: D102 - dict.get override
+        if name not in self:
+            self[name] = [self._new_id()]
+        return self[name]
+
+
 def _page_slug(title: str) -> str:
     """Approximate Canvas's title→URL slugification (lowercase, dashes)."""
     slug = re.sub(r"[^a-z0-9]+", "-", title.lower()).strip("-")
@@ -219,6 +237,12 @@ class DryRunCanvas:
 
     def create_or_update_module(self, course, canvas_id, title, **kwargs):
         return SimpleNamespace(id=canvas_id or self._new_id())
+
+    def get_module_ids_by_name(self, course) -> dict[str, list[int]]:
+        """Every name resolves, so check-all does not report a Canvas-only
+        module listed in module_order.toml as missing — the simulated course is
+        empty, but the real one is where those modules actually live."""
+        return _AnyModuleName(self._new_id)
 
     def reposition_module(self, course, canvas_id: int, position: int) -> None:
         pass

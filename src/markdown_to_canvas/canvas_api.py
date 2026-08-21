@@ -900,6 +900,23 @@ def create_or_update_module(course, canvas_id: int | None, title: str, **kwargs)
     return course.create_module(module={"name": title, **kwargs})
 
 
+def get_module_ids_by_name(course) -> dict[str, list[int]]:
+    """Map every module in the course by casefolded name to its Canvas id(s).
+
+    Names are stripped and casefolded so a capitalization or padding change on
+    the Canvas side does not break a module_order.toml entry. Canvas permits
+    duplicate module names, so each name maps to a list; callers decide what an
+    ambiguous name means.
+    """
+    by_name: dict[str, list[int]] = {}
+    for module in course.get_modules():
+        name = (getattr(module, "name", "") or "").strip().casefold()
+        if not name:
+            continue
+        by_name.setdefault(name, []).append(module.id)
+    return by_name
+
+
 def reposition_module(course, canvas_id: int, position: int):
     """Set only the position of an existing module without re-syncing its content."""
     module = course.get_module(canvas_id)

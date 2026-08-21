@@ -352,3 +352,21 @@ def test_cli_check_all_exit_code_on_problems(course_root, no_canvas, monkeypatch
 
     assert result.exit_code == 1
     assert "Check complete; please fix the problems listed above" in result.output
+
+
+def test_check_all_accepts_canvas_only_module_order_entry(
+    course_root, no_canvas, capsys
+) -> None:
+    """A module_order.toml entry naming a Canvas-only module is not reported
+    missing: the simulated course is empty, but the real one has that module."""
+    order_path = course_root / "course_settings" / "module_order.toml"
+    order_path.parent.mkdir(parents=True, exist_ok=True)
+    order_path.write_text(
+        'order = ["Getting Started at Cascadia", "week-1.md"]\n'
+    )
+
+    had_errors = run_sync(_config(), course_root, check_all=True)
+
+    assert had_errors is False
+    out = capsys.readouterr().out
+    assert "was found on Canvas" not in out
