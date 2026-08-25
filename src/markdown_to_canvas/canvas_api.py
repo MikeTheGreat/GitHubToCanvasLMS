@@ -109,7 +109,7 @@ def sync_grading_standards(course, standards: list[dict[str, Any]]) -> int | Non
                 kwargs["points_based"] = std["points_based"]
             if std.get("scaling_factor") is not None:
                 kwargs["scaling_factor"] = std["scaling_factor"]
-            gs = course.create_grading_standard(**kwargs)
+            gs = course.add_grading_standards(**kwargs)
             gs_id = gs.id
         if first_id is None:
             first_id = gs_id
