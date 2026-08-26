@@ -295,6 +295,49 @@ def test_syllabus_asset_uploaded_on_real_first_sync(course_root, tmp_path) -> No
     assert ctx.manifest["assets/syllabus/handout.docx"]["canvas_id"] == 9911
 
 
+def test_syllabus_asset_stub_creation_records_last_synced(course_root, tmp_path) -> None:
+    """A brand-new asset only reachable via a syllabus link must come out of
+    sync_syllabus with last_synced set, so the immediately-following assets
+    phase recognizes it as already synced instead of re-checking it against
+    Canvas and wrongly reporting "Canvas is newer" for a file this same run
+    just uploaded."""
+    from markdown_to_canvas.sync import SyncContext, sync_syllabus, _phase_assets
+
+    cs_dir = course_root / "course_settings"
+    cs_dir.mkdir(exist_ok=True)
+    handout = course_root / "assets" / "syllabus" / "handout.docx"
+    handout.parent.mkdir(parents=True, exist_ok=True)
+    handout.write_bytes(b"docx bytes")
+    (cs_dir / "syllabus.md").write_text(
+        "Read the [handout](../assets/syllabus/handout.docx).\n"
+    )
+
+    course = MagicMock()
+    course.upload.return_value = (True, {"id": 9911, "url": "/files/9911/download"})
+
+    ctx = SyncContext(
+        course=course,
+        repo_path=course_root,
+        snippets_dir=course_root / "snippets",
+        manifest={},
+        manifest_path=tmp_path / "manifest.toml",
+        course_id=COURSE_ID,
+        newer_on_canvas=[],
+    )
+    sync_syllabus(ctx)
+
+    assert "last_synced" in ctx.manifest["assets/syllabus/handout.docx"]
+
+    _phase_assets(ctx)
+
+    # handout.docx was uploaded once already (by sync_syllabus's stub_creator);
+    # the assets phase must only add assets/images/fig.png (an unrelated
+    # fixture file), not re-upload handout.docx.
+    uploaded_paths = [c.args[0] for c in course.upload.call_args_list]
+    assert uploaded_paths.count(str(handout)) == 1
+    assert ctx.newer_on_canvas == []
+
+
 # ---------------------------------------------------------------------------
 # CLI surface
 # ---------------------------------------------------------------------------

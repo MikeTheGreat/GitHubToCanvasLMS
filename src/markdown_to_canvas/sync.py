@@ -722,7 +722,8 @@ def _make_stub_creator(course, manifest, manifest_path, note: str, repo_root: Pa
     content and quiz call sites)."""
 
     def stub_creator(ref_local_path: str, ref_canvas_type: str) -> dict[str, Any]:
-        if ref_canvas_type == "file":
+        is_file = ref_canvas_type == "file"
+        if is_file:
             # Files are uploaded outright rather than stubbed: unlike a page or
             # assignment, a file's content is fully known here, so there is
             # nothing to fill in later and no stub type for it in the Canvas API.
@@ -750,7 +751,13 @@ def _make_stub_creator(course, manifest, manifest_path, note: str, repo_root: Pa
             ref_canvas_type,
             extra=extra or None,
         )
-        return entry
+        # Files are fully synced by this upload, so the recorded last_synced must
+        # survive (the caller stores our return value back into the manifest,
+        # clobbering what record() just wrote) — the later asset walk depends on
+        # it to avoid re-checking Canvas. A stub, by contrast, still needs its
+        # real content uploaded later, so its returned entry must stay without
+        # last_synced or the content phase would wrongly treat the stub as done.
+        return manifest[ref_local_path] if is_file else entry
 
     return stub_creator
 
