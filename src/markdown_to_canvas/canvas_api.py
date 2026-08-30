@@ -91,6 +91,25 @@ def update_course_metadata(course, settings: dict[str, Any], grading_standard_id
         course.update(course=params)
 
 
+def _grading_scheme_entries(data_raw: list[Any]) -> list[dict[str, Any]]:
+    """Convert TOML grading-standard rows into Canvas ``grading_scheme_entry`` dicts.
+
+    Canvas is asymmetric here: reading a grading standard (and the ``data`` blob in an
+    IMSCC export, which is what ``import`` writes into course_settings.toml) gives
+    fractions in 0..1, but the *create* endpoint documents ``value`` as the lower bound
+    on a 0..100 scale ("e.g. 93") and divides by 100 on the way in. Uploading 0.95
+    verbatim therefore means "0.95%", so every student lands in the top band.
+
+    So the .toml keeps fractions and we scale here. Values are only scaled when they
+    all look like fractions (max <= 1.0); a hand-written file already using 0..100 is
+    passed through unchanged.
+    """
+    rows = [row for row in data_raw if len(row) == 2]
+    values = [row[1] for row in rows]
+    scale = 100.0 if values and max(values) <= 1.0 else 1.0
+    return [{"name": row[0], "value": row[1] * scale} for row in rows]
+
+
 def sync_grading_standards(course, standards: list[dict[str, Any]]) -> int | None:
     """Create missing grading standards. Returns the ID of the first standard created/found."""
     if not standards:
@@ -102,8 +121,7 @@ def sync_grading_standards(course, standards: list[dict[str, Any]]) -> int | Non
         if title in existing:
             gs_id = existing[title]
         else:
-            data_raw = std.get("data", [])
-            scheme = [{"name": row[0], "value": row[1]} for row in data_raw if len(row) == 2]
+            scheme = _grading_scheme_entries(std.get("data", []))
             kwargs: dict[str, Any] = {"title": title, "grading_scheme_entry": scheme}
             if std.get("points_based") is not None:
                 kwargs["points_based"] = std["points_based"]

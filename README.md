@@ -708,7 +708,10 @@ hybrid          = false
 
 # ── Grading standards (letter-grade schemes) ─────────────────────────────
 # Array-of-tables. `data` is a list of [label, minimum-fraction] rows, highest
-# first. The first standard created here becomes the course grading_standard_id.
+# first — fractions in 0..1, matching what `import` writes and what Canvas
+# returns when you read a scheme back (0.90 means 90%). The tool rescales them
+# to the 0..100 form Canvas's create endpoint wants. The first standard created
+# here becomes the course grading_standard_id.
 [[grading_standards]]
 title = "Standard Scale"
 data = [
