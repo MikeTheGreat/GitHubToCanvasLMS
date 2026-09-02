@@ -239,6 +239,57 @@ question file mtimes into its comparison). Snippet changes referenced by questio
 files *are* caught (see ARCHITECTURE.md's "Snippet dependency staleness"); this gap
 is specifically about edits to the question file's own content.
 
+## Grading-standard drift on Canvas is not detected when the repo is up to date
+
+`sync_grading_standards()` verifies a title-matched standard against
+`[[grading_standards]]`'s `data` before reusing it, and on any difference
+changes nothing, reports every difference, and repeats the error on every
+`update` until the .toml and Canvas agree (see ARCHITECTURE.md's
+`[[grading_standards]]` bullet). That guarantee is *"a mismatch, once detected,
+never goes quiet"* — **not** *"drift on Canvas is always detected."*
+
+The gap: the check only runs when the `grading_standards` section is stale,
+which means (a) `course_settings.toml`'s mtime is newer than `last_synced`,
+(b) `--force-uploads`, or (c) a previous run found a mismatch and left the
+entry unsynced. On a fully up-to-date repo, `settings_stale` is False at
+`sync_course_settings()`'s mtime gate and the whole settings block returns
+early, so none of the grading code is reached. So this sequence slips through:
+
+> sync succeeds → schemes agree → section marked synced → someone edits the
+> scheme **in Canvas** (or swaps the account-level scheme the course reuses) →
+> the next `update` sees an unchanged .toml, skips the settings block, and
+> never notices that the course now grades differently from what the repo says.
+
+**Suggested fix**, mirroring the rubric soft-delete pre-check that already
+solves the same class of problem (`live_rubric_ids` / `missing_on_canvas` in
+`sync_course_settings()`, which deliberately runs *before* the staleness gate
+because the hash cache would otherwise pin the broken state in place):
+
+- Before the `if not settings_stale and not rubrics_stale ...` early return,
+  when `settings.get("grading_standards")` is non-empty, call
+  `capi._visible_grading_standards(course)` and re-run `_scheme_differences()`
+  for each declared standard that matches a live one by title.
+- On any difference, force `"grading_standards"` into `stale_sections` (or
+  report directly and append to `section_failures`) so the existing
+  mismatch path prints the error and leaves the entry unsynced.
+- Guard it so it is skipped when the course has no `[[grading_standards]]`, and
+  make a failed lookup non-fatal — the account walk already tolerates accounts
+  the token cannot read.
+
+**Cost:** one or two extra API calls on *every* `update`, including no-op runs
+(`GET courses/:id/grading_standards` plus one `GET accounts/:id/grading_standards`
+per account in the chain). That is the tradeoff — the current design does zero
+grading-standard calls when nothing changed.
+
+**Why it might still be worth it:** the failure mode is a silent change to every
+student's letter grade. A real instance of exactly this was found on
+2026-09-02 — a course was pointed at a course-local clone whose cutoffs were
+100× too small (a 4.0 started at 0.98%), left behind by the bug fixed in
+b70ca28, and nothing surfaced it until the standards were audited by hand.
+
+Deferred by the user on 2026-09-02 after being offered; recorded here so the
+limitation is written down rather than rediscovered.
+
 ## Quiz BFS traversal (`-t` with quizzes)
 
 `_get_file_refs()` returns an empty set for `quizzes/` files, so `-t` on a module that includes a quiz will not follow links embedded in quiz description or question HTML. The quiz itself is synced (including link rewriting), but BFS won't pre-upload unreferenced assets or pages that only appear inside quiz content.

@@ -281,11 +281,10 @@ def sync_grading_standards(course, standards: list[dict[str, Any]]) -> GradingSt
                 )
                 continue
             gs_id = match["id"]
-            if match.get("context_type") == "Account":
-                print(
-                    f"  NOTICE: using {_describe_standard(match)} for {title!r} "
-                    f"— matches course_settings.toml"
-                )
+            print(
+                f"  NOTICE: using {_describe_standard(match)} for {title!r} "
+                f"— matches course_settings.toml"
+            )
         else:
             scheme = _grading_scheme_entries(std.get("data", []))
             kwargs: dict[str, Any] = {"title": title, "grading_scheme_entry": scheme}
@@ -295,6 +294,13 @@ def sync_grading_standards(course, standards: list[dict[str, Any]]) -> GradingSt
                 kwargs["scaling_factor"] = std["scaling_factor"]
             gs = course.add_grading_standards(**kwargs)
             gs_id = gs.id
+            # Report the new id: a course-owned standard exists only in Canvas
+            # (nothing in the repo records it), so this line is the instructor's
+            # only pointer to the object that was just created on their behalf.
+            print(
+                f"  NOTICE: created course-level grading standard {title!r} "
+                f"(id {gs_id}) in this course"
+            )
         if first_id is None:
             first_id = gs_id
     # Any mismatch leaves the course's standard untouched, not just the

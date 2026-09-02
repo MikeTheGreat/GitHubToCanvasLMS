@@ -186,13 +186,16 @@ def test_account_level_standard_is_reused_not_cloned(capsys):
     assert "account-level standard 569017" in capsys.readouterr().out
 
 
-def test_no_match_anywhere_creates_the_standard():
+def test_no_match_anywhere_creates_the_standard(capsys):
     course = _FakeCourse(_routes())
     result = sync_grading_standards(course, [{"title": "Novel", "data": ELP}])
     assert result.standard_id == 999
     assert len(course.created) == 1
     # Fractions are scaled on the way out; see the top of this file.
     assert course.created[0]["grading_scheme_entry"][0]["value"] == 95.0
+    # The new id is reported: a course-owned standard is recorded nowhere in
+    # the repo, so this line is the only pointer the instructor gets to it.
+    assert "id 999" in capsys.readouterr().out
 
 
 def test_course_owned_standard_wins_over_same_titled_account_one():

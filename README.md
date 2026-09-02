@@ -612,9 +612,11 @@ self_enrollment         = false
 
 # ── Grades ───────────────────────────────────────────────────────────────
 grading_standard_enabled = true   # use a letter-grade scheme
-# grading_standard_id is set automatically from [[grading_standards]] below.
-# Only set it by hand to point at a scheme that already exists in Canvas:
-# grading_standard_id    = 12345
+# grading_standard_id is NOT read from this file — it is resolved from
+# [[grading_standards]] below, by title, against the course and its Canvas
+# account chain. `import` no longer writes it (the exported value is the source
+# course's id, meaningless elsewhere), and any value left in an older repo is
+# ignored rather than uploaded.
 hide_final_grade         = false  # hide running total from students
 hide_distribution_graphs = false  # hide grade-distribution graphs
 # Weight the final grade by assignment group ("percent") or grade on raw
@@ -710,8 +712,14 @@ hybrid          = false
 # Array-of-tables. `data` is a list of [label, minimum-fraction] rows, highest
 # first — fractions in 0..1, matching what `import` writes and what Canvas
 # returns when you read a scheme back (0.90 means 90%). The tool rescales them
-# to the 0..100 form Canvas's create endpoint wants. The first standard created
-# here becomes the course grading_standard_id.
+# to the 0..100 form Canvas's create endpoint wants. The first standard listed
+# here becomes the course's grading standard.
+#
+# Entries are matched BY TITLE against the standards the course can already
+# use — its own, plus every Canvas account above it — so a scheme your college
+# publishes is reused, not cloned into the course. A match is verified against
+# `data` first: if any band differs, nothing is changed and the mismatch is
+# reported on every update until the .toml and Canvas agree.
 [[grading_standards]]
 title = "Standard Scale"
 data = [
