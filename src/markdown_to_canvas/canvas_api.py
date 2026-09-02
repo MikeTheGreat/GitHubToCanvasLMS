@@ -4,7 +4,7 @@ from __future__ import annotations
 import hashlib
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 from canvasapi import Canvas
 from canvasapi.exceptions import BadRequest, ResourceDoesNotExist
@@ -35,7 +35,6 @@ _COURSE_METADATA_KEYS = {
     "public_syllabus": "public_syllabus",
     "public_syllabus_to_auth": "public_syllabus_to_auth",
     "grading_standard_enabled": "grading_standard_enabled",
-    "grading_standard_id": "grading_standard_id",
     "hide_final_grade": "hide_final_grade",
     "hide_distribution_graphs": "hide_distribution_graphs",
     "allow_student_wiki_edits": "allow_student_wiki_edits",
@@ -56,6 +55,13 @@ _COURSE_METADATA_KEYS = {
 }
 
 _COURSE_METADATA_SKIP = {
+    # grading_standard_id in the .toml is the *source* course's id, which is
+    # meaningless (or worse, silently wrong) in the target course. The real id
+    # reaches course.update() via update_course_metadata's grading_standard_id
+    # parameter, resolved by sync_grading_standards against the live course.
+    # Older repos still carry the imported value; skipping it here stops them
+    # from flip-flopping the course's standard on metadata-only runs.
+    "grading_standard_id",
     "storage_quota", "root_account_uuid", "image_identifier_ref",
     "last_modified", "copyright_restrictions", "copyright_description",
     "conditional_release", "content_library", "homeroom_course",
@@ -110,16 +116,176 @@ def _grading_scheme_entries(data_raw: list[Any]) -> list[dict[str, Any]]:
     return [{"name": row[0], "value": row[1] * scale} for row in rows]
 
 
-def sync_grading_standards(course, standards: list[dict[str, Any]]) -> int | None:
-    """Create missing grading standards. Returns the ID of the first standard created/found."""
+def _as_fractions(rows: list[tuple[str, float]]) -> list[tuple[str, float]]:
+    """Normalize (name, value) rows to 0..1 fractions.
+
+    The .toml may hold either scale (import writes fractions; a hand-written
+    file may use 0..100), and Canvas reports both as ``value`` (fraction) and
+    ``calculated_value`` (percent). Comparing requires one scale.
+    """
+    values = [v for _, v in rows]
+    scale = 100.0 if values and max(values) > 1.0 else 1.0
+    return [(name, round(value / scale, 6)) for name, value in rows]
+
+
+def _toml_scheme(std: dict[str, Any]) -> list[tuple[str, float]]:
+    rows = [(r[0], float(r[1])) for r in std.get("data", []) if len(r) == 2]
+    return _as_fractions(rows)
+
+
+def _canvas_scheme(gs: dict[str, Any]) -> list[tuple[str, float]]:
+    rows = [
+        (e.get("name", ""), float(e.get("value", 0)))
+        for e in gs.get("grading_scheme", [])
+    ]
+    return _as_fractions(rows)
+
+
+def _describe_standard(gs: dict[str, Any]) -> str:
+    """Human-readable provenance, e.g. "account-level standard 569017 (account 102875)"."""
+    ctx = gs.get("context_type", "?")
+    kind = "account-level" if ctx == "Account" else "course-level"
+    return f"{kind} standard {gs.get('id')} ({ctx.lower()} {gs.get('context_id')})"
+
+
+def _scheme_differences(std: dict[str, Any], gs: dict[str, Any]) -> list[str]:
+    """Every way the .toml standard differs from the live Canvas one.
+
+    Empty list means they agree. Only fields the .toml actually specifies are
+    compared, so an unset points_based/scaling_factor is not a difference.
+    """
+    diffs: list[str] = []
+    want = _toml_scheme(std)
+    have = _canvas_scheme(gs)
+    if len(want) != len(have):
+        diffs.append(
+            f"row count: course_settings.toml has {len(want)}, Canvas has {len(have)}"
+        )
+    for i, (w, h) in enumerate(zip(want, have), start=1):
+        w_name, w_val = w
+        h_name, h_val = h
+        if w_name != h_name:
+            diffs.append(f"row {i} name: .toml {w_name!r} vs Canvas {h_name!r}")
+        if abs(w_val - h_val) > 1e-6:
+            diffs.append(
+                f"row {i} {w_name!r} value: .toml {w_val * 100:g}% "
+                f"vs Canvas {h_val * 100:g}%"
+            )
+    # Rows past the shorter list are unmatched entirely.
+    for i, (name, val) in enumerate(want[len(have):], start=len(have) + 1):
+        diffs.append(f"row {i} {name!r} ({val * 100:g}%) is in .toml but not on Canvas")
+    for i, (name, val) in enumerate(have[len(want):], start=len(want) + 1):
+        diffs.append(f"row {i} {name!r} ({val * 100:g}%) is on Canvas but not in .toml")
+    for key in ("points_based", "scaling_factor"):
+        if std.get(key) is not None and gs.get(key) is not None and std[key] != gs[key]:
+            diffs.append(f"{key}: .toml {std[key]!r} vs Canvas {gs[key]!r}")
+    return diffs
+
+
+def _account_chain_ids(course) -> list[int]:
+    """Account ids from the course's own account up to the root, nearest first."""
+    ids: list[int] = []
+    acct_id = getattr(course, "account_id", None)
+    seen: set[int] = set()
+    while acct_id and acct_id not in seen:
+        seen.add(acct_id)
+        ids.append(acct_id)
+        try:
+            resp = course._requester.request("GET", f"accounts/{acct_id}")
+            acct_id = resp.json().get("parent_account_id")
+        except Exception:
+            break
+    return ids
+
+
+def _visible_grading_standards(course) -> list[dict[str, Any]]:
+    """Standards usable by this course: course-owned first, then up the account chain.
+
+    Canvas's ``GET /courses/:id/grading_standards`` returns ONLY course-owned
+    standards — an account-level scheme the course actually uses is absent, and
+    fetching it by id through the course context 404s (verified against Canvas
+    2026-09). Without the account walk the tool never sees the institution's
+    schemes and clones one into every course instead of reusing it.
+
+    Accounts the token can't read are skipped rather than fatal: a teacher
+    without account-read permission still gets the course-owned results.
+    """
+    found: list[dict[str, Any]] = []
+    try:
+        resp = course._requester.request(
+            "GET", f"courses/{course.id}/grading_standards", per_page=100
+        )
+        found.extend(resp.json())
+    except Exception:
+        pass
+    for acct_id in _account_chain_ids(course):
+        try:
+            resp = course._requester.request(
+                "GET", f"accounts/{acct_id}/grading_standards", per_page=100
+            )
+            found.extend(resp.json())
+        except Exception:
+            continue
+    return found
+
+
+class GradingStandardSync(NamedTuple):
+    """Result of a grading-standards pass.
+
+    ``standard_id`` is what the course should be pointed at (None = leave the
+    course's current standard alone). ``mismatches`` is non-empty when a live
+    standard's scheme disagrees with course_settings.toml; the caller must not
+    mark the section synced in that case, so the error repeats every run.
+    """
+
+    standard_id: int | None
+    mismatches: list[str]
+
+
+def sync_grading_standards(course, standards: list[dict[str, Any]]) -> GradingStandardSync:
+    """Reuse an existing grading standard where one matches by title, else create it.
+
+    Matching is by title against every standard visible to the course (its own
+    plus the account chain). A title match is *verified* against the .toml's
+    scheme before use: grades are too important to silently bind a course to a
+    standard that grades differently from what the repo documents. On any
+    difference nothing is changed and the difference is reported.
+    """
     if not standards:
-        return None
-    existing = {gs.title: gs.id for gs in course.get_grading_standards()}
+        return GradingStandardSync(None, [])
+    visible = _visible_grading_standards(course)
+    # Course-owned wins over account-level on a title tie, and _visible_...
+    # already returns course-owned first, so keep the first of each title.
+    by_title: dict[str, dict[str, Any]] = {}
+    for gs in visible:
+        by_title.setdefault(gs.get("title", ""), gs)
+
     first_id: int | None = None
+    mismatches: list[str] = []
     for std in standards:
         title = std.get("title", "")
-        if title in existing:
-            gs_id = existing[title]
+        match = by_title.get(title)
+        if match is not None:
+            diffs = _scheme_differences(std, match)
+            if diffs:
+                detail = "\n".join(f"      - {d}" for d in diffs)
+                mismatches.append(
+                    f"ERROR: grading standard {title!r} differs between "
+                    f"course_settings.toml and Canvas.\n"
+                    f"    Canvas: {_describe_standard(match)}\n"
+                    f"    Differences:\n{detail}\n"
+                    f"    The course's grading standard was NOT changed. Edit "
+                    f"course_settings.toml or the\n"
+                    f"    standard in Canvas so they agree; this error repeats on "
+                    f"every update until they do."
+                )
+                continue
+            gs_id = match["id"]
+            if match.get("context_type") == "Account":
+                print(
+                    f"  NOTICE: using {_describe_standard(match)} for {title!r} "
+                    f"— matches course_settings.toml"
+                )
         else:
             scheme = _grading_scheme_entries(std.get("data", []))
             kwargs: dict[str, Any] = {"title": title, "grading_scheme_entry": scheme}
@@ -131,7 +297,12 @@ def sync_grading_standards(course, standards: list[dict[str, Any]]) -> int | Non
             gs_id = gs.id
         if first_id is None:
             first_id = gs_id
-    return first_id
+    # Any mismatch leaves the course's standard untouched, not just the
+    # offending one: pointing the course at a *different* standard than the one
+    # under dispute would be a silent grade change of its own.
+    if mismatches:
+        return GradingStandardSync(None, mismatches)
+    return GradingStandardSync(first_id, [])
 
 
 def _extract_drop_rules(group: dict[str, Any]) -> dict[str, Any]:

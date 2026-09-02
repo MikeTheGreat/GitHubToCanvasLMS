@@ -19,7 +19,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
-from .canvas_api import _CANVAS_ITEM_TYPE
+from .canvas_api import _CANVAS_ITEM_TYPE, GradingStandardSync
 
 
 def _fake_html_url(canvas_type: str, canvas_id: int) -> str:
@@ -89,8 +89,9 @@ class DryRunCanvas:
 
     # -- course settings -----------------------------------------------------
 
-    def sync_grading_standards(self, course, standards) -> int | None:
-        return self._new_id() if standards else None
+    def sync_grading_standards(self, course, standards):
+        # No live course to compare schemes against, so never a mismatch here.
+        return GradingStandardSync(self._new_id() if standards else None, [])
 
     def update_course_metadata(self, course, settings, grading_standard_id=None) -> None:
         pass

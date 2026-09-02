@@ -1997,6 +1997,19 @@ def _coerce_xml_value(text: str) -> Any:
     return text
 
 
+# Fields dropped rather than round-tripped, because the imported value is an
+# artifact of the *source* course that would be wrong (or dangerous) in the
+# target one.
+_COURSE_SETTINGS_DROP = {
+    # A Canvas grading-standard id, valid only where it was exported from.
+    # `update` resolves the real id by matching [[grading_standards]] titles
+    # against the target course and its account chain, so this key had no
+    # legitimate use — and when present it would override that resolution on a
+    # metadata-only run, silently swapping the course's grading scheme.
+    "grading_standard_id",
+}
+
+
 def _parse_course_settings_full(xml_path: Path) -> dict[str, Any]:
     """Extract all fields from course_settings.xml."""
     if not xml_path.exists():
@@ -2008,6 +2021,8 @@ def _parse_course_settings_full(xml_path: Path) -> dict[str, Any]:
         result: dict[str, Any] = {}
         for child in root:
             tag = _strip_ns(child.tag)
+            if tag in _COURSE_SETTINGS_DROP:
+                continue
 
             if tag == "default_post_policy":
                 sub: dict[str, Any] = {}

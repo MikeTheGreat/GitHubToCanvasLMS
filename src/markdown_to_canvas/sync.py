@@ -1303,8 +1303,21 @@ def sync_course_settings(
         # §1c: grading standards (needed before §1a so we can set grading_standard_id)
         gs_id = None
         if "grading_standards" in stale_sections:
-            gs_id = api.sync_grading_standards(course, grading_standards)
-            _section_done("grading_standards")
+            gs_result = api.sync_grading_standards(course, grading_standards)
+            gs_id = gs_result.standard_id
+            if gs_result.mismatches:
+                # Deliberately NOT marked done, and pushed onto section_failures
+                # so the manifest entry is written without last_synced. Both are
+                # needed for the error to persist: the missing hash re-runs this
+                # section, and the missing last_synced is what makes needs_sync()
+                # look at the file again at all when its mtime hasn't changed.
+                # Grades matter too much to report a scheme conflict once and
+                # then fall silent.
+                for message in gs_result.mismatches:
+                    warn(message, errors)
+                section_failures.append("grading_standards")
+            else:
+                _section_done("grading_standards")
 
         # §1a: core course metadata. When only metadata changed, gs_id is None
         # and update_course_metadata leaves the course's grading standard alone.
