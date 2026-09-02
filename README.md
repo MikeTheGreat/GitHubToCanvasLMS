@@ -588,6 +588,51 @@ course metadata, re-upload the dashboard image, or touch the other sections.
 (Conversely, editing the `dashboard_image` file itself — without touching the
 TOML — *does* re-upload it.)
 
+> **Commented-out settings after an `import`.** A Canvas cartridge carries more
+> course settings than this tool uploads. `import` records all of them, but
+> writes anything it will not send to Canvas as **comments**, in two labelled
+> groups near the top of the file:
+>
+> ```toml
+> # Website title used by `publish`. Not uploaded to Canvas; it exists
+> # because `title` below is commented out.
+> title_for_publish_to_website = "Intermediate Programming"
+>
+> # --- Optional overrides; uncomment to replace what your school set ---
+> # title = "IT-CS142 OL1 6563 - SU26 - Intermediate Programming"
+> # course_code = "IT-CS142 OL1 6563"
+>
+> # --- Import-only settings, kept for round-trip fidelity ---
+> # Read-only in Canvas; these cannot be changed.
+> # last_modified = "2025-08-01"
+> # root_account_uuid = "BhFU8G3kLiIaPccavNtu4PL9qD7pMpewi1WBKZvh"
+> #
+> # Not uploaded by markdown-to-canvas; editing these has no effect.
+> # storage_quota = 524288000
+> # show_total_grade_as_points = false
+> ```
+>
+> The two groups behave differently:
+>
+> - **Optional overrides** (`title`, `course_code`) *are* uploaded if you
+>   uncomment them. Schools normally populate these per section, and their
+>   values carry the section number and term, so `import` leaves them commented
+>   so a sync cannot overwrite that. Uncomment only if you want this tool to own
+>   the field.
+> - **Import-only settings** do nothing when uncommented — they are ignored on
+>   upload. Some of them are settings Canvas would probably accept; they are
+>   unimplemented rather than impossible. See `TODO.md`.
+>
+> `title_for_publish_to_website` sits above both groups and is **live but
+> Canvas-free**: `publish` uses it for the website's title, and nothing ever
+> uploads it, so editing it cannot affect the course. `import` seeds it with the
+> cartridge's course name. `publish` resolves its title as `title` →
+> `title_for_publish_to_website` → `name` → `course_code` → the repo folder
+> name, so uncommenting `title` overrides it.
+>
+> Re-running `import` over an existing repo rewrites the file, so edits to these
+> commented lines are not preserved.
+
 ```toml
 # course_settings/course_settings.toml — TOML syntax. Every key is optional.
 
@@ -998,7 +1043,11 @@ points = 0
 > The `import` command also writes metadata to each rubric and criterion
 > (`identifier`, `points_possible`, `criterion_id`, rating `id`, etc.). Those
 > extra fields are preserved in the file but **ignored on upload** — you do not
-> need them when creating rubrics by hand. The `import` command always sets
+> need them when creating rubrics by hand, and `import` writes them **commented
+> out** so you can see at a glance which fields are live. (Rating `id`s are the
+> one exception: they sit inside inline `ratings = [...]` tables and so cannot
+> be commented out individually. They are still ignored on upload.) The
+> `import` command always sets
 > `read_only = false` and `reusable = true`, regardless of the values in the
 > IMSCC export, so that imported rubrics are editable and shared.
 
@@ -1028,10 +1077,15 @@ Bring a pencil and your student ID.
 ```
 
 **`course_settings/files_meta.toml`** — per-file and per-folder visibility metadata
-(locking, hiding, display names):
+(locking, hiding, display names). `import` writes a banner at the top of this
+file saying that nothing in it is uploaded:
 
 ```toml
-# course_settings/files_meta.toml — import-only; not yet uploaded.
+# course_settings/files_meta.toml — import-only.
+#
+# Every setting in this file is recorded for round-trip fidelity with the
+# original cartridge. markdown-to-canvas does not upload any of it, so
+# editing this file has no effect on Canvas.
 
 [[folders]]
 path = "course files/handouts"

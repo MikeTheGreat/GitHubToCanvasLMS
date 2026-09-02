@@ -2310,6 +2310,52 @@ def _parse_events(xml_path: Path) -> list[dict[str, Any]]:
     return events
 
 
+# Rubric fields `import` writes for fidelity but `update` never uploads.
+# sync_rubrics() sends only title/criteria/reusable/read_only, and each
+# criterion carries only description/points/long_description (plus ratings).
+# Rubrics are matched by title, so the identifiers are safe to comment out.
+_RUBRIC_IMPORT_ONLY_KEYS = (
+    # rubric level
+    "identifier", "public", "points_possible", "hide_score_total",
+    "free_form_criterion_comments", "rating_order",
+    # criterion level
+    "criterion_id",
+)
+# Rating-level `id` is import-only as well, but tomli_w emits ratings as inline
+# tables, so it cannot be commented out without deleting the whole rating. It is
+# called out in _RUBRICS_TOML_HEADER instead.
+
+_RUBRICS_TOML_HEADER = (
+    "# Commented-out keys below are import-only: kept for round-trip fidelity\n"
+    "# with the original cartridge, but never uploaded to Canvas. Rubrics are\n"
+    "# matched to Canvas by title, not by identifier.\n"
+    "#\n"
+    "# The `id` inside each inline `ratings` entry is import-only too, but it\n"
+    "# sits in an inline table and so cannot be commented out on its own.\n\n"
+)
+
+_FILES_META_TOML_HEADER = (
+    "# course_settings/files_meta.toml — import-only.\n"
+    "#\n"
+    "# Every setting in this file is recorded for round-trip fidelity with the\n"
+    "# original cartridge. markdown-to-canvas does not upload any of it, so\n"
+    "# editing this file has no effect on Canvas.\n\n"
+)
+
+
+def _comment_out_keys(toml_text: str, keys: tuple[str, ...]) -> str:
+    """Prefix `# ` to every assignment line whose key is in `keys`.
+
+    Safe line-by-line because tomli_w always emits single-line values (strings
+    are escaped, never multi-line), so no value can masquerade as a key line.
+    """
+    prefixes = tuple(f"{k} = " for k in keys)
+    return "".join(
+        f"# {line}\n" if line.startswith(prefixes) else f"{line}\n"
+        for line in toml_text.split("\n")[:-1]
+    )
+
+
 def _write_rubrics_toml(rubrics: list[dict[str, Any]], output_dir: Path) -> None:
     """Write course_settings/rubrics.toml from a list of rubric dicts."""
     for r in rubrics:
@@ -2317,8 +2363,11 @@ def _write_rubrics_toml(rubrics: list[dict[str, Any]], output_dir: Path) -> None
         r["reusable"] = True
     cs_dir = output_dir / "course_settings"
     cs_dir.mkdir(parents=True, exist_ok=True)
+    body = _comment_out_keys(
+        tomli_w.dumps({"rubrics": rubrics}), _RUBRIC_IMPORT_ONLY_KEYS
+    )
     (cs_dir / "rubrics.toml").write_text(
-        tomli_w.dumps({"rubrics": rubrics}), encoding="utf-8"
+        _RUBRICS_TOML_HEADER + body, encoding="utf-8"
     )
     print("Writing: course_settings/rubrics.toml")
 
@@ -2328,7 +2377,7 @@ def _write_files_meta_toml(files_meta: dict[str, Any], output_dir: Path) -> None
     cs_dir = output_dir / "course_settings"
     cs_dir.mkdir(parents=True, exist_ok=True)
     (cs_dir / "files_meta.toml").write_text(
-        tomli_w.dumps(files_meta), encoding="utf-8"
+        _FILES_META_TOML_HEADER + tomli_w.dumps(files_meta), encoding="utf-8"
     )
     print("Writing: course_settings/files_meta.toml")
 
@@ -2442,6 +2491,69 @@ def format_due_dates_toml(due_dates: list[dict[str, Any]]) -> str:
     return "\n".join(lines) + "\n"
 
 
+# ---------------------------------------------------------------------------
+# Import-only settings
+# ---------------------------------------------------------------------------
+# `import` copies course_settings.xml through wholesale, but `update` uploads
+# only an allowlist (canvas_api._COURSE_METADATA_KEYS).  The keys below are
+# written to course_settings.toml commented out, so the file itself shows which
+# settings are live and which exist purely for round-trip fidelity.
+
+# Settings `update` *would* upload, but that `import` leaves commented out
+# because the institution normally populates them per section and its values are
+# the useful ones. Uncommenting makes markdown-to-canvas own the field instead.
+_COMMENTED_BY_DEFAULT = (
+    "title",
+    "course_code",
+)
+
+# Because `title` ships commented out, `publish` would otherwise fall back to
+# the repo directory name for the website's title. `import` therefore also
+# writes the cartridge's title under this key, live. It is a markdown-to-canvas
+# key, not a Canvas one: nothing uploads it, so editing it cannot affect the
+# course. See publish.load_site_name().
+_PUBLISH_TITLE_KEY = "title_for_publish_to_website"
+
+# Canvas will not accept these: derived cartridge metadata or read-only fields.
+_IMPORT_ONLY_READ_ONLY = (
+    "last_modified",
+    "root_account_uuid",
+)
+
+# markdown-to-canvas simply does not upload these (yet).  Several are plausible
+# course.update() / course.update_settings() parameters that nobody has wired
+# up — see TODO.md.  Uncommenting one has no effect today.
+_IMPORT_ONLY_NOT_UPLOADED = (
+    "copyright_restrictions",
+    "copyright_description",
+    "storage_quota",
+    "conditional_release",
+    "content_library",
+    "homeroom_course",
+    "horizon_course",
+    "career_learning_library_only",
+    "default_wiki_editing_roles",
+    "allow_student_organized_groups",
+    "show_total_grade_as_points",
+    "filter_speed_grader_by_student_group",
+    "indexed",
+)
+
+
+def _commented_toml(data: dict[str, Any]) -> str:
+    """Serialize `data` as TOML with every line commented out.
+
+    Uses tomli_w so escaping and value formatting stay correct, then prefixes
+    each line with `# `.  Only flat scalar keys should be passed in.
+    """
+    if not data:
+        return ""
+    dumped = tomli_w.dumps(data)
+    return "".join(
+        f"# {line}\n" if line else "\n" for line in dumped.split("\n")[:-1]
+    )
+
+
 def _write_course_settings_toml(
     course_settings: dict[str, Any],
     manifest_meta: dict[str, str],
@@ -2470,18 +2582,56 @@ def _write_course_settings_toml(
         if key not in data and key not in skip:
             data[key] = val
 
-    # Inline nested sections
-    if late_policy:
-        data["late_policy"] = late_policy
-    if "default_post_policy" in course_settings:
-        data["default_post_policy"] = course_settings["default_post_policy"]
+    # Split the commented-out keys out of the live ones, so the file itself
+    # shows what `update` will and will not upload.
+    overridable = {k: data.pop(k) for k in _COMMENTED_BY_DEFAULT if k in data}
+    publish_title = overridable.get("title")
+    read_only = {k: data.pop(k) for k in _IMPORT_ONLY_READ_ONLY if k in data}
+    not_uploaded = {k: data.pop(k) for k in _IMPORT_ONLY_NOT_UPLOADED if k in data}
 
-    # Write flat/inline keys first (must come before any [[section]] headers)
+    # Flat live keys first (must come before any [section] / [[section]] header)
     content = tomli_w.dumps(data)
 
-    # due_dates uses hand-formatted inline tables — must appear before [[...]] headers
+    # A live flat key, so it must still land before any section header.
+    if publish_title:
+        content += (
+            "\n# Website title used by `publish`. Not uploaded to Canvas; it exists\n"
+            "# because `title` below is commented out.\n"
+        )
+        content += tomli_w.dumps({_PUBLISH_TITLE_KEY: publish_title})
+
+    # Commented keys go with the other flat keys: a user who uncomments one must
+    # not end up with a key nested under a later section.
+    if overridable:
+        content += (
+            "\n# --- Optional overrides; uncomment to replace what your school set ---\n"
+        )
+        content += _commented_toml(overridable)
+
+    if read_only or not_uploaded:
+        content += "\n# --- Import-only settings, kept for round-trip fidelity ---\n"
+        if read_only:
+            content += "# Read-only in Canvas; these cannot be changed.\n"
+            content += _commented_toml(read_only)
+        if read_only and not_uploaded:
+            content += "#\n"
+        if not_uploaded:
+            content += "# Not uploaded by markdown-to-canvas; editing these has no effect.\n"
+            content += _commented_toml(not_uploaded)
+
+    # due_dates uses hand-formatted inline tables — a top-level key, so it must
+    # come before any table header (including [late_policy] below).
     if due_dates:
         content += "\n" + format_due_dates_toml(due_dates)
+
+    # Inline nested sections (tomli_w emits these as [section] tables)
+    nested: dict[str, Any] = {}
+    if late_policy:
+        nested["late_policy"] = late_policy
+    if "default_post_policy" in course_settings:
+        nested["default_post_policy"] = course_settings["default_post_policy"]
+    if nested:
+        content += "\n" + tomli_w.dumps(nested)
 
     # Array-of-tables sections last (tomli_w emits [[...]] for list-of-dicts)
     aot: dict[str, Any] = {}

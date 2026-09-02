@@ -535,12 +535,39 @@ A TOML file written inside the `course_settings/` folder capturing all course-le
 
 | Output file | Source | Content |
 | --- | --- | --- |
-| `course_settings/rubrics.toml` | `rubrics.xml` | `[[rubrics]]` — identifier, title, boolean flags, points_possible, rating_order; nested `[[rubrics.criteria]]` with description, long_description, points; nested `[[rubrics.criteria.ratings]]` with id, description, long_description, points |
-| `course_settings/files_meta.toml` | `files_meta.xml` | `[[folders]]` — path, hidden; `[[files]]` — identifier, locked, hidden, display_name, unlock_at |
+| `course_settings/rubrics.toml` | `rubrics.xml` | `[[rubrics]]` — identifier, title, boolean flags, points_possible, rating_order; nested `[[rubrics.criteria]]` with description, long_description, points; nested `[[rubrics.criteria.ratings]]` with id, description, long_description, points. Fields `sync_rubrics()` never uploads are written commented out — see [Import-only settings are written commented out](#import-only-settings-are-written-commented-out) |
+| `course_settings/files_meta.toml` | `files_meta.xml` | `[[folders]]` — path, hidden; `[[files]]` — identifier, locked, hidden, display_name, unlock_at. Entirely import-only; written with a banner saying so |
 
 Boolean fields (`true`/`false`) are stored as TOML booleans. Numeric fields are stored as int or float. Empty elements are omitted. The nested `default_post_policy` element is stored as a TOML inline table.
 
 `_parse_course_settings_full()` is otherwise a straight pass-through of every element in `course_settings.xml`, with one exception: keys in `_COURSE_SETTINGS_DROP` are discarded rather than round-tripped, because the exported value is an artifact of the *source* course. Currently that is just `grading_standard_id` — a Canvas id valid only where it was exported from. `update` resolves the real id by matching `[[grading_standards]]` titles against the target course and its account chain, so the imported value had no legitimate use; worse, being on the `course.update()` allowlist, it would override that resolution on any metadata-only run and silently swap the course's grading scheme. It is now also in `_COURSE_METADATA_SKIP`, so repos imported before this change stop uploading the stale value.
+
+### Import-only settings are written commented out
+
+Import is a generic pass-through; upload is an allowlist (`_COURSE_METADATA_KEYS` minus `_COURSE_METADATA_SKIP`, plus the sections `sync_course_settings()` handles by hand). Anything imported but outside the allowlist used to be written as an ordinary-looking key that `update` silently dropped, with nothing in the file to distinguish it from a live setting. Those keys are now written **commented out**.
+
+Three module-level tables in `imscc_import.py` drive this:
+
+| Constant | Applies to | Comment header emitted |
+| --- | --- | --- |
+| `_COMMENTED_BY_DEFAULT` | `title`, `course_code` | "Optional overrides; uncomment to replace what your school set" |
+| `_IMPORT_ONLY_READ_ONLY` | `last_modified`, `root_account_uuid` | "Read-only in Canvas; these cannot be changed." (a bare `#` line separates it from the next group) |
+| `_IMPORT_ONLY_NOT_UPLOADED` | `copyright_*`, `storage_quota`, the five Canvas feature flags, and the five keys in neither key set (`default_wiki_editing_roles`, `allow_student_organized_groups`, `show_total_grade_as_points`, `filter_speed_grader_by_student_group`, `indexed`) | "Not uploaded by markdown-to-canvas; editing these has no effect." |
+| `_RUBRIC_IMPORT_ONLY_KEYS` | rubric `identifier`, `public`, `points_possible`, `hide_score_total`, `free_form_criterion_comments`, `rating_order`; criterion `criterion_id` | file-level header in `rubrics.toml` |
+
+`_COMMENTED_BY_DEFAULT` is the odd one out: those two keys *are* on the upload allowlist and take effect the moment a user uncomments them. They are commented because institutions populate them per section (the value carries section number and term), so a sync that re-sent the cartridge's stale value would clobber something useful.
+
+Commenting `title` out would have degraded `publish`, which used it for the website title and would otherwise have fallen back to the repo directory name. So `_write_course_settings_toml()` also emits `_PUBLISH_TITLE_KEY` (`title_for_publish_to_website`), **uncommented**, holding the same value. It is a markdown-to-canvas key rather than a Canvas one — it is on no upload path, so editing it cannot reach the course — and it is emitted as a flat key before any section header, like everything else at that level. `publish.load_site_name()` now resolves `title` → `title_for_publish_to_website` → `name` → `course_code` → repo directory name; `name`/`course_code` stay in the chain for hand-written repos that predate this.
+
+The import-only wording is deliberately split. Only the `_IMPORT_ONLY_READ_ONLY` pair is verified un-settable; the feature flags and `storage_quota` are skipped because nobody implemented them, not because Canvas is known to refuse them — hence the weaker "not uploaded by this tool" phrasing for everything else. Do not upgrade that claim without testing against a live course.
+
+Two keys look droppable and are not: `group_weighting_scheme` is absent from `_COURSE_METADATA_KEYS` but `update_course_metadata()` translates it into `apply_assignment_group_weights`, and `dashboard_image` is in `_COURSE_METADATA_SKIP` only because `upload_course_image()` handles it separately. Both stay live. `_COURSE_SETTINGS_DROP` is a different mechanism again — "do not write this key at all" rather than "write it commented".
+
+**Mechanics.** `tomli_w.dumps()` cannot emit comments, so `_commented_toml()` serializes the import-only keys through `tomli_w` separately (keeping its escaping correct) and prefixes each line with `# `. `rubrics.toml` instead post-processes the dumped text line by line via `_comment_out_keys()`, which is safe because `tomli_w` never emits multi-line values. Rating-level `id` is import-only too but sits inside an inline `ratings = [...]` table, so it cannot be commented out on its own; the `rubrics.toml` header says so instead. `files_meta.toml` is 100% import-only and gets a banner rather than a fully commented body.
+
+**Ordering.** The commented block is emitted with the other flat keys, *before* any `[section]` header — a commented line cannot itself break parsing, but a user who uncomments a key below a header would silently nest it. Fixing this ordering also fixed a live bug: `due_dates` (a top-level key, hand-formatted by `format_due_dates_toml()`) was appended after `tomli_w.dumps(data)`, which emits `[late_policy]` and `[default_post_policy]` tables at the end — so any course with a late policy produced a file where `due_dates` parsed as `late_policy.due_dates`. `_write_course_settings_toml()` now emits flat keys → commented block → `due_dates` → `[late_policy]`/`[default_post_policy]` → arrays-of-tables.
+
+**Side effect on existing repos.** `compute_settings_section_hashes()` hashes `metadata` as "every top-level key not claimed by another section". Commenting keys out removes them from the parsed dict, so the first `update` after a re-import re-sends the metadata section once. Harmless.
 
 `canvas.toml` is written with `base_url` pre-filled from `context.xml`'s `canvas_domain` (instead of a placeholder). If `context.xml` is absent, the placeholder is used.
 

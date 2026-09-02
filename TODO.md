@@ -54,6 +54,35 @@ freshly-created one `false`), which would make the flag not settable via the API
 at all. Worth confirming before spending more effort on it, since these two
 fields are accepted by `rubrics.toml` and silently do nothing.
 
+## Implement the dropped course settings as real settings
+
+`import` writes these five keys into `course_settings.toml`, but nothing uploads
+them — they are in neither `_COURSE_METADATA_KEYS` nor `_COURSE_METADATA_SKIP`.
+They are currently written commented out (`_IMPORT_ONLY_NOT_UPLOADED` in
+`imscc_import.py`) so at least the file is honest about it. They should be wired
+up for real:
+
+| Key | Where it belongs |
+| --- | --- |
+| `indexed` | `PUT /courses/:id` — fits the existing `course.update()` path; add to `_COURSE_METADATA_KEYS` |
+| `allow_student_organized_groups` | `PUT /courses/:id/settings` (`course.update_settings()`) |
+| `show_total_grade_as_points` | `PUT /courses/:id/settings` |
+| `filter_speed_grader_by_student_group` | `PUT /courses/:id/settings` |
+| `default_wiki_editing_roles` | Not found in either endpoint; may be legacy/unsettable — verify first |
+
+The endpoint split above is from the Canvas API docs and has **not** been
+verified against a live course. Only `indexed` is a one-line allowlist addition;
+the other three need a new `course.update_settings()` call in
+`update_course_metadata()` (or alongside it), with its own set of keys. Once a
+key is genuinely uploaded, remove it from `_IMPORT_ONLY_NOT_UPLOADED` so it stops
+being written as a comment.
+
+Same question applies to the rest of `_IMPORT_ONLY_NOT_UPLOADED`
+(`storage_quota` and the feature flags `conditional_release`, `content_library`,
+`homeroom_course`, `horizon_course`, `career_learning_library_only`): they are
+skipped because nobody implemented them, not because Canvas is known to refuse
+them.
+
 ## Group sets and group assignments
 Currently we don't manage this, but it would be nice
 

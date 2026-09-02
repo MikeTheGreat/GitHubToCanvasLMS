@@ -422,15 +422,53 @@ def test_course_settings_toml_at_root(imported_dir: Path) -> None:
     assert (imported_dir / "course_settings" / "course_settings.toml").exists()
 
 
-def test_course_settings_toml_has_title(imported_dir: Path) -> None:
+def test_course_settings_toml_comments_out_title_and_course_code(
+    imported_dir: Path,
+) -> None:
+    """title/course_code are written commented out so the school's values stand."""
+    import tomllib
     text = (imported_dir / "course_settings" / "course_settings.toml").read_text()
-    assert "Test Course" in text
+    assert '# title = "Test Course: Introduction to Testing"' in text
+    assert '# course_code = "TEST101"' in text
+    data = tomllib.loads(text)
+    assert "title" not in data
+    assert "course_code" not in data
+
+
+def test_course_settings_toml_writes_publish_title_uncommented(
+    imported_dir: Path,
+) -> None:
+    """title is commented out, so publish gets a live copy under its own key."""
+    import tomllib
+    text = (imported_dir / "course_settings" / "course_settings.toml").read_text()
+    data = tomllib.loads(text)
+    assert data["title_for_publish_to_website"] == "Test Course: Introduction to Testing"
+    assert "title" not in data
+    # must precede every section header, like the other flat keys
+    lines = text.split("\n")
+    key_line = next(
+        i for i, line in enumerate(lines)
+        if line.startswith("title_for_publish_to_website = ")
+    )
+    first_header = min(
+        (i for i, line in enumerate(lines) if line.startswith("[")), default=len(lines)
+    )
+    assert key_line < first_header
+
+
+def test_publish_reads_the_imported_publish_title(imported_dir: Path) -> None:
+    """End-to-end: an imported repo publishes under the cartridge's course name."""
+    from markdown_to_canvas import publish
+    assert publish.load_site_name(imported_dir) == "Test Course: Introduction to Testing"
 
 
 def test_course_settings_toml_has_all_basic_fields(imported_dir: Path) -> None:
     import tomllib
-    data = tomllib.loads((imported_dir / "course_settings" / "course_settings.toml").read_text())
-    assert data["course_code"] == "TEST101"
+    text = (imported_dir / "course_settings" / "course_settings.toml").read_text()
+    data = tomllib.loads(text)
+    # title/course_code are commented out by default: the school sets them
+    assert '# course_code = "TEST101"' in text
+    assert "course_code" not in data
     assert data["default_view"] == "modules"
     assert data["is_public"] is False
     assert data["license"] == "private"
@@ -456,10 +494,46 @@ def test_course_settings_toml_has_group_weighting_scheme(imported_dir: Path) -> 
     assert data["group_weighting_scheme"] == "percent"
 
 
-def test_course_settings_toml_has_last_modified(imported_dir: Path) -> None:
+def test_course_settings_toml_comments_out_last_modified(imported_dir: Path) -> None:
+    """last_modified is import-only: written for fidelity, but commented out."""
+    import tomllib
+    text = (imported_dir / "course_settings" / "course_settings.toml").read_text()
+    assert '# last_modified = "2025-08-01"' in text
+    assert "last_modified" not in tomllib.loads(text)
+    # a bare "#" separates the read-only group from the not-uploaded group
+    assert (
+        '# last_modified = "2025-08-01"\n#\n'
+        "# Not uploaded by markdown-to-canvas" in text
+    )
+
+
+def test_course_settings_toml_comments_precede_section_headers(
+    imported_dir: Path,
+) -> None:
+    """A user who uncomments a key must not land inside a later [section]."""
+    text = (imported_dir / "course_settings" / "course_settings.toml").read_text()
+    lines = text.split("\n")
+    last_comment = max(
+        i for i, line in enumerate(lines) if line.startswith("# ") and " = " in line
+    )
+    first_header = min(
+        (i for i, line in enumerate(lines) if line.startswith("[")), default=len(lines)
+    )
+    assert last_comment < first_header
+
+
+def test_course_settings_toml_due_dates_are_top_level(imported_dir: Path) -> None:
+    """due_dates is a top-level key, so it must precede every [section] header.
+
+    It used to be appended after tomli_w's output, which meant it parsed as
+    late_policy.due_dates whenever the course had a late policy.
+    """
     import tomllib
     data = tomllib.loads((imported_dir / "course_settings" / "course_settings.toml").read_text())
-    assert data.get("last_modified") == "2025-08-01"
+    assert "due_dates" in data
+    assert "due_dates" not in data.get("late_policy", {})
+    assert "due_dates" not in data.get("default_post_policy", {})
+    assert data["due_dates"][0]["name"] == "My Test Assignment"
 
 
 def test_course_settings_toml_has_grading_standard(imported_dir: Path) -> None:
@@ -598,7 +672,39 @@ def test_rubrics_toml_overrides_read_only_and_reusable(imported_dir: Path) -> No
         assert rubric["reusable"] is True, f"{rubric['title']} should have reusable=true"
 
 
+def test_rubrics_toml_comments_out_import_only_fields(imported_dir: Path) -> None:
+    """Fields sync_rubrics() never uploads are written commented out."""
+    import tomllib
+    text = (imported_dir / "course_settings" / "rubrics.toml").read_text()
+    data = tomllib.loads(text)
+    for key in (
+        "identifier", "public", "points_possible", "hide_score_total",
+        "free_form_criterion_comments", "rating_order",
+    ):
+        assert f"# {key} = " in text, f"{key} should be present but commented"
+        assert key not in data["rubrics"][0]
+    assert "# criterion_id = " in text
+    assert "criterion_id" not in data["rubrics"][0]["criteria"][0]
+
+
+def test_rubrics_toml_keeps_uploaded_fields_live(imported_dir: Path) -> None:
+    """Commenting must not touch the fields update actually sends."""
+    import tomllib
+    data = tomllib.loads((imported_dir / "course_settings" / "rubrics.toml").read_text())
+    rubric = data["rubrics"][0]
+    assert rubric["title"] == "Test Rubric"
+    assert rubric["read_only"] is False
+    assert rubric["reusable"] is True
+    crit = rubric["criteria"][0]
+    assert crit["description"] and crit["points"] and crit["ratings"]
+
+
 # --- Files meta ---
+
+def test_files_meta_toml_has_import_only_banner(imported_dir: Path) -> None:
+    text = (imported_dir / "course_settings" / "files_meta.toml").read_text()
+    assert text.startswith("# course_settings/files_meta.toml \u2014 import-only.")
+
 
 def test_files_meta_toml_created(imported_dir: Path) -> None:
     assert (imported_dir / "course_settings" / "files_meta.toml").exists()
@@ -734,8 +840,10 @@ def test_question_bank_not_in_quizzes(imported_dir: Path) -> None:
 def test_question_bank_not_in_course_settings(imported_dir: Path) -> None:
     """Standalone question bank should not overwrite course_settings.toml."""
     import tomllib
-    data = tomllib.loads((imported_dir / "course_settings" / "course_settings.toml").read_text())
-    assert "Test Course" in data["title"]  # file is intact, not corrupted by question bank
+    text = (imported_dir / "course_settings" / "course_settings.toml").read_text()
+    tomllib.loads(text)  # file is intact, not corrupted by question bank
+    assert "Test Course" in text
+    assert "modules" in text
 
 
 # ---------------------------------------------------------------------------

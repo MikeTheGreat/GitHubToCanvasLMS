@@ -36,6 +36,28 @@ def test_load_site_name_reads_course_settings(tmp_path):
     assert publish.load_site_name(tmp_path) == "Intro to CS"
 
 
+def test_load_site_name_uses_publish_title_when_title_commented_out(tmp_path):
+    """An imported repo ships `title` commented out; the publish-only key stands in."""
+    cs_dir = tmp_path / "course_settings"
+    cs_dir.mkdir()
+    (cs_dir / "course_settings.toml").write_text(
+        'title_for_publish_to_website = "Intro to CS"\n'
+        '# title = "IT-CS142 OL1 6563 - SU26"\n'
+    )
+    assert publish.load_site_name(tmp_path) == "Intro to CS"
+
+
+def test_load_site_name_prefers_title_over_publish_title(tmp_path):
+    """Uncommenting `title` makes it win over the publish-only fallback."""
+    cs_dir = tmp_path / "course_settings"
+    cs_dir.mkdir()
+    (cs_dir / "course_settings.toml").write_text(
+        'title = "Uncommented Title"\n'
+        'title_for_publish_to_website = "Stale Import Title"\n'
+    )
+    assert publish.load_site_name(tmp_path) == "Uncommented Title"
+
+
 # ---------------------------------------------------------------------------
 # Content discovery
 # ---------------------------------------------------------------------------

@@ -143,12 +143,19 @@ for access to this content.
 # ---------------------------------------------------------------------------
 
 def load_site_name(repo: Path) -> str:
-    """Course name from course_settings.toml, falling back to the repo dir name."""
+    """Course name from course_settings.toml, falling back to the repo dir name.
+
+    `import` writes `title` commented out (the school's own course name is
+    usually the better one, so a sync must not overwrite it) and records the
+    same value under `title_for_publish_to_website`, which nothing uploads.
+    So `title` wins when the user has set it, and the publish-only key is the
+    fallback; `name`/`course_code` are still honoured for hand-written repos.
+    """
     settings_path = repo / "course_settings" / "course_settings.toml"
     if settings_path.exists():
         with settings_path.open("rb") as fh:
             settings = tomllib.load(fh)
-        for key in ("title", "name", "course_code"):
+        for key in ("title", "title_for_publish_to_website", "name", "course_code"):
             value = settings.get(key)
             if value:
                 return str(value)
