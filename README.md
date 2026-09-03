@@ -2,68 +2,102 @@
 
 Sync a Markdown course repository to [Canvas LMS](https://www.instructure.com/canvas).
 
-Write your course content as Markdown files in a Git repository. Run this tool to convert them to HTML and publish them to Canvas — pages, assignments, discussion topics, and modules.
+Write your course content as Markdown files in a local folder. Run this tool to convert them to HTML and publish them to Canvas — pages, assignments, discussion topics, and modules.
 
+## Project Vision
 
-## Important Gotch'yas:
-- If you change a Module Markdown file then all the links in that module will be invalidated.  
-- If you want to move or rename a file please use the `mv` subcommand - it'l adjust links, the manifest cache, etc, for you.
+Way back when I used to publish all my course materials using a website.  It was great!  I could use a WYSIWIG HTML editor as "Word, but for the web" and then I could use an FTP client to upload everything I'd done.  The FTP client overwrote stuff on the webserver only if the local file was newer so I could just tell it to "upload everything" and know that a couple minutes later all my changes would be there.  
 
+Contrast that with the Canvas LMS web UI, which still doesn't have a search feature here in late 2026, but does feature a 3-10 second load time for every page you want to look at (and another 3-10 seconds to open the "Edit this page" page) assuming you even remember where you need to make changes.
 
+Having the "real" copy of my course as a folder of local files was great.  Want to make a quick change to your class, during class, on the fly?  Change it, tell FileZilla to upload it, and it'll be done inside of 2 minutes.  Want to fix a typo somewhere that you just noticed?  Fix it, forget it, and rest easy knowing that the next time you upload everything that "teh" will become "the".  Want to search everything in your course?  No problem - the entire course is right here.  Want to make changes to a bunch of assignments ("Here's my brand-shiny-new AI policy:...")?  It's quick and easy!  So is "find and replace"! It was super easy, barely an inconvenience!
+
+This tool, markdown-to-canvas, attempts to replicate that experience.
+
+### Goals and Benefits
+
+* **Your local files are the source of truth for your course**  
+  * Stuff in Canvas gets overwritten by your local files, but only if your changes are newer
+  * You can add stuff to Canvas that's not in your local files and this tool ignores it.  E.g., you can post an Announcement directly in Canvas and this tool won't touch it.
+  * Your local files serve as a backup for the next time [Canvas goes down](https://www.npr.org/2025/10/20/nx-s1-5580312/aws-outage) or [Canvas gets hacked.](https://en.wikipedia.org/wiki/2026_Canvas_data_breach).
+
+- **You can store your entire course here**
+  * Assignments, Pages, Modules, Quizzes, the syllabus, that thumbnail that gets displayed on the course dashboard, your grading schema, due dates, everything
+
+* **You can track your courses using a source control system**
+* **There's a single "update" command the uploads everything that's changed**
+  * I can edit a whole bunch of different files for a given unit of instruction, run the update command, and not have to worry that I remembered to upload everything I changed.
+* **Markdown is "good enough"**
+  * There's enough structure to make documents readable (headings, lists, links) but it's limited enough that you won't get derailed trying to do something fiddly with HTML + CSS.
+  * Because it's pretty simple, the resulting HTML is surprisingly accessible.
+* **You can diff courses against each other**
+* **The tool is a CLI not a GUI**
+  * It's easy for computer geeks to use and could be incorporated into larger scripts or whatnot
+
+**Note**: except for this "Project Vision" section pretty much the entire rest of this file is AI written.  It's meant to be a guide for using the tool (how to install, command line arguments, file formats, etc)
+
+## Important Gotch'yas
+
+* If you change a Module Markdown file then all the links in that module will be invalidated.  
+
+* If you want to move or rename a file please use the `mv` subcommand - it'l adjust links, the manifest cache, etc, for you.
 
 ## Contents
 
-- [markdown-to-canvas](#markdown-to-canvas)
-  - [Important Gotch'yas:](#important-gotchyas)
-  - [Contents](#contents)
-  - [How it works](#how-it-works)
-  - [Installation](#installation)
-    - [Requirements](#requirements)
-    - [Recommended: install as a `uv` tool](#recommended-install-as-a-uv-tool)
-    - [Run without installing (one-off)](#run-without-installing-one-off)
-    - [Install for development](#install-for-development)
-    - [Installing Pandoc](#installing-pandoc)
-  - [Configuration](#configuration)
-    - [`canvas.toml`](#canvastoml)
-    - [API token](#api-token)
-  - [Usage](#usage)
-  - [Canvas overwrite protection](#canvas-overwrite-protection)
-    - [Full sync (default)](#full-sync-default)
-    - [Typical full-sync workflow](#typical-full-sync-workflow)
-  - [Checking a course before deploying (`--check-all`)](#checking-a-course-before-deploying---check-all)
-  - [Selective sync](#selective-sync)
-    - [`-t` — recursive (BFS)](#-t--recursive-bfs)
-    - [`-s` — single target (no traversal)](#-s--single-target-no-traversal)
-    - [Combining `-t` and `-s`](#combining--t-and--s)
-  - [Removing content (`prune`)](#removing-content-prune)
-  - [Moving and renaming files (`mv`)](#moving-and-renaming-files-mv)
-  - [Content file format](#content-file-format)
-    - [`course_settings.toml`](#course_settingstoml)
-      - [Centralized due dates](#centralized-due-dates)
-      - [Pinned resources (`pinned_resources`)](#pinned-resources-pinned_resources)
-    - [Syllabus (`course_settings/syllabus.md`)](#syllabus-course_settingssyllabusmd)
-    - [Rubrics (`course_settings/rubrics.toml`)](#rubrics-course_settingsrubricstoml)
-    - [Other `course_settings/` files (import-only)](#other-course_settings-files-import-only)
-    - [Page (`pages/`)](#page-pages)
-    - [Assignment (`assignments/`)](#assignment-assignments)
-    - [Discussion (`discussions/`)](#discussion-discussions)
-    - [Announcement (`announcements/`)](#announcement-announcements)
-    - [Module (`modules/`)](#module-modules)
-    - [Quiz (`quizzes/`)](#quiz-quizzes)
-    - [Question banks (`question_banks/`)](#question-banks-question_banks)
-    - [Snippets](#snippets)
-      - [Inline snippets and the `CANVAS_COURSE_REFERENCE` snippet](#inline-snippets-and-the-canvas_course_reference-snippet)
-      - [Shared frontmatter via `PASTE_SNIPPET_INTO_FRONTMATTER`](#shared-frontmatter-via-paste_snippet_into_frontmatter)
-    - [Course flags — conditional content (`#if` / `#elif` / `#else` / `#endif`)](#course-flags--conditional-content-if--elif--else--endif)
-      - [`published_if`: gating a whole item by flag](#published_if-gating-a-whole-item-by-flag)
-      - [`only_if`: excluding a `due_dates` entry by flag](#only_if-excluding-a-due_dates-entry-by-flag)
-  - [Manifest file](#manifest-file)
-    - [Deleting a file in Canvas](#deleting-a-file-in-canvas)
-  - [IMSCC import](#imscc-import)
-    - [Verifying the import](#verifying-the-import)
-  - [Listing content titles (`list-titles`)](#listing-content-titles-list-titles)
-  - [Resolving external-tool labels (`create-tool-aliases`)](#resolving-external-tool-labels-create-tool-aliases)
-    - [Workflow](#workflow)
+* [markdown-to-canvas](#markdown-to-canvas)
+  * [Project Vision](#project-vision)
+    * [Goals and Benefits](#goals-and-benefits)
+  * [Important Gotch'yas](#important-gotchyas)
+  * [Contents](#contents)
+  * [How it works](#how-it-works)
+  * [Installation](#installation)
+    * [Requirements](#requirements)
+    * [Recommended: install as a `uv` tool](#recommended-install-as-a-uv-tool)
+    * [Run without installing (one-off)](#run-without-installing-one-off)
+    * [Install for development](#install-for-development)
+    * [Installing Pandoc](#installing-pandoc)
+  * [Configuration](#configuration)
+    * [`canvas.toml`](#canvastoml)
+    * [API token](#api-token)
+  * [Usage](#usage)
+  * [Canvas overwrite protection](#canvas-overwrite-protection)
+    * [Full sync (default)](#full-sync-default)
+    * [Typical full-sync workflow](#typical-full-sync-workflow)
+  * [Checking a course before deploying (`--check-all`)](#checking-a-course-before-deploying---check-all)
+  * [Selective sync](#selective-sync)
+    * [`-t` — recursive (BFS)](#-t--recursive-bfs)
+    * [`-s` — single target (no traversal)](#-s--single-target-no-traversal)
+    * [Combining `-t` and `-s`](#combining--t-and--s)
+  * [Removing content (`prune`)](#removing-content-prune)
+  * [Moving and renaming files (`mv`)](#moving-and-renaming-files-mv)
+  * [Content file format](#content-file-format)
+    * [`course_settings.toml`](#course_settingstoml)
+      * [Centralized due dates](#centralized-due-dates)
+      * [Pinned resources (`pinned_resources`)](#pinned-resources-pinned_resources)
+    * [Syllabus (`course_settings/syllabus.md`)](#syllabus-course_settingssyllabusmd)
+    * [Rubrics (`course_settings/rubrics.toml`)](#rubrics-course_settingsrubricstoml)
+    * [Other `course_settings/` files (import-only)](#other-course_settings-files-import-only)
+    * [Page (`pages/`)](#page-pages)
+    * [Assignment (`assignments/`)](#assignment-assignments)
+    * [Discussion (`discussions/`)](#discussion-discussions)
+    * [Announcement (`announcements/`)](#announcement-announcements)
+    * [Module (`modules/`)](#module-modules)
+      * [Ordering modules that exist only on Canvas](#ordering-modules-that-exist-only-on-canvas)
+    * [Quiz (`quizzes/`)](#quiz-quizzes)
+    * [Question banks (`question_banks/`)](#question-banks-question_banks)
+    * [Snippets](#snippets)
+      * [Inline snippets and the `CANVAS_COURSE_REFERENCE` snippet](#inline-snippets-and-the-canvas_course_reference-snippet)
+      * [Shared frontmatter via `PASTE_SNIPPET_INTO_FRONTMATTER`](#shared-frontmatter-via-paste_snippet_into_frontmatter)
+    * [Course flags — conditional content (`#if` / `#elif` / `#else` / `#endif`)](#course-flags--conditional-content-if--elif--else--endif)
+      * [`published_if`: gating a whole item by flag](#published_if-gating-a-whole-item-by-flag)
+      * [`only_if`: excluding a `due_dates` entry by flag](#only_if-excluding-a-due_dates-entry-by-flag)
+  * [Manifest file](#manifest-file)
+    * [Deleting a file in Canvas](#deleting-a-file-in-canvas)
+  * [IMSCC import](#imscc-import)
+    * [Verifying the import](#verifying-the-import)
+  * [Listing content titles (`list-titles`)](#listing-content-titles-list-titles)
+  * [Resolving external-tool labels (`create-tool-aliases`)](#resolving-external-tool-labels-create-tool-aliases)
+    * [Workflow](#workflow)
 
 ---
 
@@ -112,10 +146,10 @@ A `.canvas-manifest.toml` file is written to your course repo to track Canvas ID
 
 ### Requirements
 
-- Python 3.11+
-- [uv](https://docs.astral.sh/uv/) (for install/run)
-- Pandoc — either install it system-wide **or** run `markdown-to-canvas setup` after installing the tool (see below)
-- A Canvas LMS account with API access
+* Python 3.11+
+* [uv](https://docs.astral.sh/uv/) (for install/run)
+* Pandoc — either install it system-wide **or** run `markdown-to-canvas setup` after installing the tool (see below)
+* A Canvas LMS account with API access
 
 ### Recommended: install as a `uv` tool
 
@@ -172,8 +206,8 @@ pytest
 
 You have two options:
 
-- **System-wide install** (required for `uvx` one-off runs): install from [pandoc.org](https://pandoc.org/installing.html) or via your package manager (`brew install pandoc`, `apt install pandoc`, etc.).
-- **Tool-local install** (after `uv tool install` only): run the `setup` subcommand to download Pandoc into the tool's own environment:
+* **System-wide install** (required for `uvx` one-off runs): install from [pandoc.org](https://pandoc.org/installing.html) or via your package manager (`brew install pandoc`, `apt install pandoc`, etc.).
+* **Tool-local install** (after `uv tool install` only): run the `setup` subcommand to download Pandoc into the tool's own environment:
 
   ```bash
   markdown-to-canvas setup
@@ -248,6 +282,7 @@ Options:
                                   problems are found.
   --help                          Show this message and exit.
 ```
+
 **Warning**: In order to get changes to the left-hand course navigation column you may need to go
 to Settings ➡ Navigation and then click the 'Save' button.
 
@@ -268,8 +303,8 @@ Review these files and re-upload manually if needed (use --force-overwrite to sk
 
 This lets you review the diverged items before deciding what to do:
 
-- **Keep the Canvas version** — update your local file to match Canvas, then sync again.
-- **Keep the local version** — use `--force-overwrite` to overwrite Canvas regardless:
+* **Keep the Canvas version** — update your local file to match Canvas, then sync again.
+* **Keep the local version** — use `--force-overwrite` to overwrite Canvas regardless:
 
 ```bash
 markdown-to-canvas update . --force-overwrite
@@ -278,7 +313,6 @@ markdown-to-canvas update . --force-overwrite
 `--force-overwrite` skips the Canvas timestamp check entirely. This is also faster (no extra API calls) when you know the local repo is the authoritative source and don't need the protection.
 
 The two flags are independent:
-
 
 |                                   | `--force-uploads` | `--force-overwrite`   |
 | --------------------------------- | ----------------- | --------------------- |
@@ -330,8 +364,8 @@ first sync to a brand-new, completely empty Canvas course** — every file is
 converted, every link resolved, every rubric / assignment-group / due-date
 reference checked — but:
 
-- **Canvas is never contacted** (works offline; no API token needed), and
-- **nothing is written** (no Canvas changes, no `.canvas-manifest.toml`
+* **Canvas is never contacted** (works offline; no API token needed), and
+* **nothing is written** (no Canvas changes, no `.canvas-manifest.toml`
   changes — the existing manifest is ignored so *everything* gets checked,
   not just files changed since the last sync).
 
@@ -385,9 +419,9 @@ markdown-to-canvas update . -t modules/week-1.md --force-uploads
 
 **What counts as a reference:**
 
-- Content files (pages, assignments, discussions): all local `<img src>` and `<a href>` targets in the converted HTML
-- Module files: all items listed in the module body
-- Asset files: no outgoing references (assets are leaf nodes)
+* Content files (pages, assignments, discussions): all local `<img src>` and `<a href>` targets in the converted HTML
+* Module files: all items listed in the module body
+* Asset files: no outgoing references (assets are leaf nodes)
 
 **Module ordering:** modules discovered during BFS are synced last, after all the content they reference has been uploaded and has Canvas IDs — the same guarantee as a full sync.
 
@@ -500,13 +534,13 @@ Writing DEST with a trailing `/` says "this must be an existing directory" —
 
 `mv` updates:
 
-- The file/directory on disk (via `git mv` when inside a git repo and the
+* The file/directory on disk (via `git mv` when inside a git repo and the
   source is git-tracked; falls back to a plain filesystem move otherwise,
   e.g. for files not yet `git add`ed)
-- `.canvas-manifest.toml` — manifest keys and `canvas_item_ids` in module entries
-- All Markdown files — relative links and snippet references
-- `module_order.toml` — if a module file is renamed
-- `course_settings.toml` — `dashboard_image` and `front_page`, if the file they point to is renamed
+* `.canvas-manifest.toml` — manifest keys and `canvas_item_ids` in module entries
+* All Markdown files — relative links and snippet references
+* `module_order.toml` — if a module file is renamed
+* `course_settings.toml` — `dashboard_image` and `front_page`, if the file they point to is renamed
 
 **Examples:**
 
@@ -530,12 +564,12 @@ markdown-to-canvas mv --noop pages/old.md pages/new.md
 
 **Restrictions:**
 
-- Both source and destination must be within the same course repo
-- Cannot move across content-type directories (e.g. `pages/` to `assignments/`)
-- The destination's parent directory must already exist — this prevents accidental
+* Both source and destination must be within the same course repo
+* Cannot move across content-type directories (e.g. `pages/` to `assignments/`)
+* The destination's parent directory must already exist — this prevents accidental
   renames of intermediate path components due to typos. To rename multiple levels,
   rename them one at a time.
-- The repo root is auto-detected by looking for `course_settings/course_settings.toml`
+* The repo root is auto-detected by looking for `course_settings/course_settings.toml`
 
 This command is purely local — it never contacts Canvas. Run `update` afterward
 to push the changes.
@@ -614,12 +648,12 @@ TOML — *does* re-upload it.)
 >
 > The two groups behave differently:
 >
-> - **Optional overrides** (`title`, `course_code`) *are* uploaded if you
+> * **Optional overrides** (`title`, `course_code`) *are* uploaded if you
 >   uncomment them. Schools normally populate these per section, and their
 >   values carry the section number and term, so `import` leaves them commented
 >   so a sync cannot overwrite that. Uncomment only if you want this tool to own
 >   the field.
-> - **Import-only settings** do nothing when uncommented — they are ignored on
+> * **Import-only settings** do nothing when uncommented — they are ignored on
 >   upload. Some of them are settings Canvas would probably accept; they are
 >   unimplemented rather than impossible. See `TODO.md`.
 >
@@ -865,9 +899,9 @@ dates as-is`) so the change is visible.
 
 During `update`, the tool prints warnings for:
 
-- A `due_dates` entry whose `name` doesn't match any content file (typo or
+* A `due_dates` entry whose `name` doesn't match any content file (typo or
   stale entry).
-- An assignment, discussion, or quiz that has **no** corresponding `due_dates`
+* An assignment, discussion, or quiz that has **no** corresponding `due_dates`
   entry (so you know what's not yet tracked centrally).
 
 Use [`list-titles`](#listing-content-titles-list-titles) to see all available
@@ -895,17 +929,17 @@ syllabus.
 
 While a resource is pinned:
 
-- **It is never uploaded.** The pin wins over `--force-uploads` and over
+* **It is never uploaded.** The pin wins over `--force-uploads` and over
   naming the file explicitly with `-t`/`-s`. The *only* way to sync it again
   is to remove it from `pinned_resources`.
-- **You get a soft warning, not an error.** When the resource has local
+* **You get a soft warning, not an error.** When the resource has local
   changes that would otherwise upload, `update` prints
   `WARNING: … pinned (pinned_resources in course_settings.toml); NOT uploaded`,
   lists the skipped resources in an end-of-run summary, and continues; the run
   still succeeds. An up-to-date pinned resource stays silent.
-- **`prune` won't delete or unpublish it**, even if you delete the local file
+* **`prune` won't delete or unpublish it**, even if you delete the local file
   (`prune --manifest`, which never contacts Canvas, is exempt).
-- **`mv` keeps the pin attached**: moving or renaming a pinned resource
+* **`mv` keeps the pin attached**: moving or renaming a pinned resource
   rewrites its `pinned_resources` entry along with the manifest and links.
 
 A `pinned_resources` entry that matches nothing in the repo produces a warning
@@ -1209,25 +1243,25 @@ Submit a PDF of your solutions by the deadline.
 **Assignment group, rubric, group assignments, anonymous/moderated grading, and
 peer reviews** are all settable from the frontmatter above. A few caveats:
 
-- **Assignment group:** `assignment_group_id` accepts either the group name as a
+* **Assignment group:** `assignment_group_id` accepts either the group name as a
   string (e.g. `"Labs"`) or a numeric Canvas ID. When a name is given the tool
   resolves it to the Canvas ID using the groups defined in `course_settings.toml`.
   If the name is not found a warning is printed and the field is skipped. This
   field works the same way on every graded content type — assignments, quizzes
   (see [Quiz](#quiz-quizzes)), and graded discussions (see
   [Discussion](#discussion-discussions)).
-- **Rubric:** `rubric` accepts either a rubric title (string) or numeric Canvas
+* **Rubric:** `rubric` accepts either a rubric title (string) or numeric Canvas
   rubric ID. When a title is given the tool resolves it to the Canvas ID using
   rubrics defined in `course_settings/rubrics.toml`. A rubric association is
   created (or updated) on each assignment sync. `use_for_grading` defaults to
   `true`; set it to `false` for advisory-only (feedback without grade impact)
   rubrics.
-- **Group set:** Canvas identifies a group set (group *category*) by numeric ID,
+* **Group set:** Canvas identifies a group set (group *category*) by numeric ID,
   not by name. This tool does **not** create or manage group sets — create the
   group set in the Canvas UI (or via the API) first, then put its numeric
   `group_category_id` here. (The ID appears in the URL when you view the group
   set in Canvas: `.../groups#tab-<id>`.)
-- **Moderated grading:** Canvas requires `grader_count` (and usually
+* **Moderated grading:** Canvas requires `grader_count` (and usually
   `final_grader_id`) when `moderated_grading` is `true`. `final_grader_id` is a
   Canvas **user** ID.
 
@@ -1269,10 +1303,10 @@ The key difference from other content: **Canvas has no "draft" state for
 announcements** — creating one posts it immediately. So `published` controls
 whether the announcement is sent to Canvas *at all*:
 
-- `published: false` → **not posted.** `update` skips the file (with a warning)
+* `published: false` → **not posted.** `update` skips the file (with a warning)
   and it stays staged in your repo. This lets you keep a set of announcements
   ready and release each one when the time is right (e.g. the midterm reminder).
-- `published: true` → **posted now** (or scheduled, if you set `delayed_post_at`).
+* `published: true` → **posted now** (or scheduled, if you set `delayed_post_at`).
 
 To release a staged announcement, change its `published` to `true` and run
 `update`. Announcements cannot be graded, so grading/due-date fields do not apply.
@@ -1337,11 +1371,11 @@ require_sequential_progress: false     # true = students must complete items in 
 
 The module body uses four kinds of lines:
 
-- A `## heading` becomes a **SubHeader** item at indent level 0.
-- A **plain-text list item** (no link) becomes a **SubHeader** item starting at indent level 1. Indenting with leading spaces increases the level (2 spaces per level).
-- A bullet linking to a local `.md` file becomes a **content item** (Page,
+* A `## heading` becomes a **SubHeader** item at indent level 0.
+* A **plain-text list item** (no link) becomes a **SubHeader** item starting at indent level 1. Indenting with leading spaces increases the level (2 spaces per level).
+* A bullet linking to a local `.md` file becomes a **content item** (Page,
   Assignment, Discussion, or Quiz — inferred from the target's folder).
-- A bullet linking to an absolute `http(s)://` URL becomes an **ExternalUrl** item.
+* A bullet linking to an absolute `http(s)://` URL becomes an **ExternalUrl** item.
 
 ExternalUrl items default to `new_tab: true` (Canvas opens the link in a new window). Add `<!-- target="_self" -->` after the link to embed in an iframe instead.
 
@@ -1442,15 +1476,15 @@ order = [
 
 How an entry is resolved:
 
-- Ends in `.md` → a file in `modules/`. Missing on disk, or never synced to Canvas, is a warning and a failed run.
-- Anything else → the name of a module on Canvas. The name is matched ignoring capitalization and surrounding whitespace.
+* Ends in `.md` → a file in `modules/`. Missing on disk, or never synced to Canvas, is a warning and a failed run.
+* Anything else → the name of a module on Canvas. The name is matched ignoring capitalization and surrounding whitespace.
 
 The tool never creates, edits, deletes, or unpublishes a module it knows only by name — it only sets its position.
 
 Two cases are errors (warning printed, run reports failure, that one entry is left where it is):
 
-- **No Canvas module has that name.** Also what you get from a typo in a filename that lost its `.md`.
-- **Two or more Canvas modules share that name.** The tool will not guess which one you meant; rename one on Canvas.
+* **No Canvas module has that name.** Also what you get from a typo in a filename that lost its `.md`.
+* **Two or more Canvas modules share that name.** The tool will not guess which one you meant; rename one on Canvas.
 
 An empty string in `order` is rejected outright, since it names nothing.
 
@@ -1540,7 +1574,6 @@ when `quiz_type` is `assignment` or `graded_survey`; it has no effect for
 
 **Question files** — each question is a separate `.md` file. Every question type shares these fields:
 
-
 | Field             | Default if omitted | Notes                                |
 | ----------------- | ------------------ | ------------------------------------ |
 | `title`           | filename stem      | Shown as the question name in Canvas |
@@ -1550,7 +1583,6 @@ when `quiz_type` is `assignment` or `graded_survey`; it has no effect for
 **Supported question types and their required fields:**
 
 > **Note:** None of these fields are required for the *sync to succeed* — a question with missing fields will upload without errors. However, the question will be ungradable in Canvas until the fields are provided.
-
 
 | Question type                | Fields needed to be gradable                                                         |
 | ---------------------------- | ------------------------------------------------------------------------------------ |
@@ -1806,11 +1838,11 @@ submission_types: [online_upload]
 
 Each referenced file must be a plain YAML mapping (not Markdown prose) — its keys are merged into the file's own frontmatter before the rest of processing. Rules:
 
-- The link text must be exactly `PASTE_SNIPPET_INTO_FRONTMATTER` (case-sensitive) — this is what makes the reference visually distinct and lets you Ctrl+click it in VS Code to jump straight to the shared defaults file.
-- These lines must be the **first thing in the body** — only blank/whitespace-only lines may precede or separate them. The scan stops at the first line that isn't blank and isn't a `PASTE_SNIPPET_INTO_FRONTMATTER` link; everything from there on is treated as ordinary body content.
-- Multiple references are merged in order, later snippets overriding earlier ones for any keys they share.
-- The file's own frontmatter always wins over snippet values, so a single file can still override one or two fields from a shared default.
-- Nested includes (a frontmatter snippet referencing another snippet) are not supported.
+* The link text must be exactly `PASTE_SNIPPET_INTO_FRONTMATTER` (case-sensitive) — this is what makes the reference visually distinct and lets you Ctrl+click it in VS Code to jump straight to the shared defaults file.
+* These lines must be the **first thing in the body** — only blank/whitespace-only lines may precede or separate them. The scan stops at the first line that isn't blank and isn't a `PASTE_SNIPPET_INTO_FRONTMATTER` link; everything from there on is treated as ordinary body content.
+* Multiple references are merged in order, later snippets overriding earlier ones for any keys they share.
+* The file's own frontmatter always wins over snippet values, so a single file can still override one or two fields from a shared default.
+* Nested includes (a frontmatter snippet referencing another snippet) are not supported.
 
 This is a different tool than the centralized `due_dates` table in `course_settings.toml` (see [Centralized due dates](#course_settingstoml)): `due_dates` is for fields that should mostly be *unique per item* but reviewed in one place; `PASTE_SNIPPET_INTO_FRONTMATTER` is for fields that should be *identical* across many files, edited once and reflected everywhere that includes the snippet (after a re-sync — see the staleness caveat above).
 
@@ -1882,27 +1914,27 @@ If you want the conditional text to be its own paragraph, put blank lines
 
 **Notes and gotchas:**
 
-- In GitHub/VSCode *preview*, **all** branches render — nothing evaluates the
+* In GitHub/VSCode *preview*, **all** branches render — nothing evaluates the
   flags there. The markers themselves are invisible in preview and show as
   grey comments in the editor; the enclosed content stays fully
   highlighted/rendered Markdown.
-- Directives inside fenced code blocks are literal example text; the block as
+* Directives inside fenced code blocks are literal example text; the block as
   a whole is kept or dropped by the surrounding conditional.
-- Other HTML comments (`<!-- #region -->`, `<!-- published:false -->`,
+* Other HTML comments (`<!-- #region -->`, `<!-- published:false -->`,
   ordinary comments) pass through untouched. The misspellings `#ifdef`,
   `#ifndef`, `#elseif`, `#elsif`, and `#fi` are caught with a
   "did you mean" error.
-- Directives must be balanced within each file, and within each snippet file
+* Directives must be balanced within each file, and within each snippet file
   independently (an `#if` opened in a page can't be closed inside an included
   snippet).
-- The flag values each file used are cached in `.canvas-manifest.toml`
+* The flag values each file used are cached in `.canvas-manifest.toml`
   (`flags_used`), so flipping a flag re-syncs **only** the files whose output
   could change — not the whole course. With `-v` the tool prints why:
   `re-syncing: flag 'in_person_class' changed true → false`.
-- A flag defined in `[course_flags]` but used by no content file produces a
+* A flag defined in `[course_flags]` but used by no content file produces a
   warning (never an error). Deleting a flag that files still reference makes
   those files re-sync and fail loudly with the undefined-flag error.
-- A file whose entire body is excluded still exists on Canvas, just with an
+* A file whose entire body is excluded still exists on Canvas, just with an
   empty body — whole-resource exclusion is a possible future feature (see
   TODO.md).
 
@@ -2031,7 +2063,6 @@ python scripts/check_imscc_coverage.py course-export.imscc ./my-course-repo
 ```
 
 Options:
-
 
 | Flag                | Default                                            | Description                                                      |
 | ------------------- | -------------------------------------------------- | ---------------------------------------------------------------- |
